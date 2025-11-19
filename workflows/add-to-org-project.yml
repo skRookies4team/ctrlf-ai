@@ -1,0 +1,45 @@
+name: Add issues and PRs to org project
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  repository-projects: write
+
+jobs:
+  add_to_project:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Add issue or PR to org project
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_FOR_PROJECT }}
+          PROJECT_ID: PVT_kwDODkqDZs4BHdlg
+        run: |
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            CONTENT_ID="${{ github.event.issue.node_id }}"
+          else
+            CONTENT_ID="${{ github.event.pull_request.node_id }}"
+          fi
+
+          cat <<EOF > graphql.json
+          {
+            "query": "mutation AddItemToProject(\$project: ID!, \$content: ID!) { addProjectV2ItemById(input: {projectId: \$project, contentId: \$content}) { item { id } } }",
+            "variables": {
+              "project": "${PROJECT_ID}",
+              "content": "${CONTENT_ID}"
+            }
+          }
+          EOF
+
+          curl -s -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @graphql.json \
+            https://api.github.com/graphql
