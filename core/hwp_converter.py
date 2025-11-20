@@ -150,9 +150,7 @@ def convert_hwp_with_hwp5txt(hwp_path: str) -> str:
 def convert_hwp_with_libreoffice(hwp_path: str) -> str:
     """
     LibreOffice + H2Orestart로 HWP → PDF → 텍스트 변환
-
-    1) soffice --headless --infilter="Hwp2002_File" --convert-to pdf:writer_pdf_Export
-    2) 생성된 PDF를 pdfplumber(or pypdf)로 읽어서 텍스트 추출
+    pdfplumber 실패 시 자동으로 pypdf로 fallback.
     """
     hwp_path = Path(hwp_path).resolve()
 
@@ -162,17 +160,17 @@ def convert_hwp_with_libreoffice(hwp_path: str) -> str:
     cmd = _get_soffice_cmd()
     logger.info(f"[LibreOffice] Converting HWP: {hwp_path.name} (cmd={cmd})")
 
-    # 임시 출력 디렉토리 생성
+    # 임시 출력 디렉토리
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
         try:
-            # 1) HWP → PDF 변환 (수동 테스트에서 성공한 옵션 그대로 사용)
+            # 1) HWP → PDF 변환
             result = subprocess.run(
                 [
                     cmd,
                     "--headless",
-                    '--infilter=Hwp2002_File',
+                    "--infilter=Hwp2002_File",
                     "--convert-to", "pdf:writer_pdf_Export",
                     str(hwp_path),
                     "--outdir", str(tmpdir_path),
@@ -182,22 +180,21 @@ def convert_hwp_with_libreoffice(hwp_path: str) -> str:
                 timeout=120,
             )
 
-            # LibreOffice가 오류를 냈는지 로그 확인용
             if result.returncode != 0:
                 logger.error(f"[LibreOffice] stderr: {result.stderr}")
-            
-            # 2) 변환된 PDF 파일 경로
-            pdf_file = tmpdir_path / f"{hwp_path.stem}.pdf"
 
+            # PDF 확인
+            pdf_file = tmpdir_path / f"{hwp_path.stem}.pdf"
             if not pdf_file.exists():
                 logger.error("[LibreOffice] PDF not created from HWP")
                 raise RuntimeError(f"Conversion failed: {result.stderr}")
 
             logger.info(f"[LibreOffice] PDF created: {pdf_file} (size={pdf_file.stat().st_size} bytes)")
 
-            # 3) PDF에서 텍스트 추출
+            # ---------------------------------------------------------
+            # 2) PDF 텍스트 추출 1차 시도: pdfplumber
+            # ---------------------------------------------------------
             try:
-                # pdfplumber 우선 사용
                 import pdfplumber
 
                 texts: list[str] = []
@@ -207,30 +204,41 @@ def convert_hwp_with_libreoffice(hwp_path: str) -> str:
                         texts.append(t)
 
                 full_text = "\n".join(texts)
-                logger.info(f"[LibreOffice] Extracted {len(full_text)} chars from {hwp_path.name} via PDF")
+                logger.info(f"[LibreOffice] Extracted {len(full_text)} chars via pdfplumber")
                 return full_text
 
-            except ImportError:
-                # pdfplumber 없으면 pypdf로 fallback
+            # pdfplumber 에러 발생 시 → pypdf로 fallback
+            except Exception as e1:
+                logger.warning(f"[LibreOffice] pdfplumber failed: {e1}. Falling back to pypdf.")
+
+            # ---------------------------------------------------------
+            # 3) PDF 텍스트 추출 2차 시도: pypdf
+            # ---------------------------------------------------------
+            try:
                 from pypdf import PdfReader
 
                 reader = PdfReader(str(pdf_file))
-                texts: list[str] = []
+                texts = []
                 for page in reader.pages:
                     t = page.extract_text() or ""
                     texts.append(t)
 
                 full_text = "\n".join(texts)
-                logger.info(f"[LibreOffice/pypdf] Extracted {len(full_text)} chars from {hwp_path.name} via PDF")
+                logger.info(f"[LibreOffice/pypdf] Extracted {len(full_text)} chars via pypdf")
                 return full_text
 
+            except Exception as e2:
+                logger.error(f"[LibreOffice] pypdf also failed: {e2}")
+                raise RuntimeError(f"PDF text extraction failed: {e2}")
+
         except FileNotFoundError:
-            logger.error("soffice (LibreOffice) not found. Install LibreOffice first.")
+            logger.error("LibreOffice (soffice) not found. Install LibreOffice first.")
             raise
 
         except subprocess.TimeoutExpired:
             logger.error(f"LibreOffice timeout (>120s) for {hwp_path.name}")
             raise RuntimeError("LibreOffice conversion timeout")
+
 
 
 # ========================================
