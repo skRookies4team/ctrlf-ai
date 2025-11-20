@@ -1,0 +1,55 @@
+# Git 줄바꿈 설정 (Cross-platform 호환성)
+
+# 자동 줄바꿈 정규화
+* text=auto
+
+# Python 파일: LF 강제
+*.py text eol=lf
+*.pyi text eol=lf
+
+# Shell 스크립트: LF 강제
+*.sh text eol=lf
+*.bash text eol=lf
+
+# 설정 파일: LF 강제
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+.env* text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+.dockerignore text eol=lf
+
+# Docker 파일: LF 강제
+Dockerfile* text eol=lf
+docker-compose*.yml text eol=lf
+
+# 문서 파일: LF 강제
+*.md text eol=lf
+*.txt text eol=lf
+*.rst text eol=lf
+
+# JSON/CSV: LF 강제
+*.json text eol=lf
+*.csv text eol=lf
+
+# 이진 파일: 변환 안함
+*.pdf binary
+*.hwp binary
+*.docx binary
+*.pptx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.pyc binary
+*.pyd binary
+*.so binary
+*.dll binary
+*.exe binary
