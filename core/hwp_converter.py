@@ -4,12 +4,42 @@ HWP 텍스트 변환 어댑터
 여러 HWP 변환 방법을 제공하고 환경에 따라 자동 선택합니다.
 """
 import logging
+import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
+
+# ========================================
+# 내부 유틸리티: soffice 경로 탐색 (Windows 대응)
+# ========================================
+
+def _get_soffice_cmd() -> str:
+    """
+    OS에 따라 LibreOffice CLI(soffice) 실행 파일 경로 결정.
+
+    - Windows:
+        기본 설치 경로(C:\\Program Files\\LibreOffice\\program\\soffice.exe 등)를 우선 탐색
+        없으면 마지막으로 'soffice' (PATH에 등록된 경우) 사용.
+    - Linux/Mac:
+        그냥 'soffice' 사용 (PATH에 있다고 가정).
+    """
+    if os.name == "nt":  # Windows
+        candidates = [
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        ]
+        for c in candidates:
+            if Path(c).exists():
+                return c
+        # 그래도 못 찾으면 PATH에 있는 soffice에 마지막으로 기대
+        return "soffice"
+    else:
+        # Linux / Mac 은 PATH 에서 찾도록 위임
+        return "soffice"
+
 
 # ========================================
 # HWP 변환 방법 체크
@@ -31,12 +61,26 @@ def _check_hwp5txt_available() -> bool:
 def _check_libreoffice_available() -> bool:
     """LibreOffice CLI 도구 사용 가능 여부 확인"""
     try:
+        cmd = _get_soffice_cmd()
+
+        # 1) Windows에서는 exe 파일이 실제로 존재하면 그냥 사용 가능하다고 판단
+        if os.name == "nt":
+            # cmd가 "C:\Program Files\LibreOffice\program\soffice.exe" 같은 절대경로일 수도 있고
+            # 그냥 "soffice"일 수도 있으니, 절대경로인 경우만 파일 체크
+            p = Path(cmd)
+            if p.is_absolute() and p.exists():
+                logger.info(f"[LibreOffice] Detected soffice at {p}")
+                return True
+
+        # 2) 그 외(또는 절대경로가 아닌 경우)에는 --version 호출해서 확인
         result = subprocess.run(
-            ["soffice", "--version"],
+            [cmd, "--version"],
             capture_output=True,
-            timeout=5
+            timeout=10,
+            text=True,
         )
         return result.returncode == 0
+
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
@@ -105,60 +149,80 @@ def convert_hwp_with_hwp5txt(hwp_path: str) -> str:
 
 def convert_hwp_with_libreoffice(hwp_path: str) -> str:
     """
-    LibreOffice CLI로 HWP → 텍스트 변환
+    LibreOffice + H2Orestart로 HWP → PDF → 텍스트 변환
 
-    ✅ Windows/Linux/Mac 모두 지원
-    ⚠️ LibreOffice 설치 필요 (약 300MB)
-
-    설치:
-        - Windows: choco install libreoffice
-        - Ubuntu: sudo apt-get install libreoffice
-        - Mac: brew install libreoffice
-
-    Args:
-        hwp_path: HWP 파일 경로
-
-    Returns:
-        str: 추출된 텍스트
-
-    Raises:
-        FileNotFoundError: soffice 명령어가 없을 때
-        RuntimeError: 변환 실패 시
+    1) soffice --headless --infilter="Hwp2002_File" --convert-to pdf:writer_pdf_Export
+    2) 생성된 PDF를 pdfplumber(or pypdf)로 읽어서 텍스트 추출
     """
     hwp_path = Path(hwp_path).resolve()
 
     if not hwp_path.exists():
         raise FileNotFoundError(f"HWP file not found: {hwp_path}")
 
-    logger.info(f"[LibreOffice] Converting HWP: {hwp_path.name}")
+    cmd = _get_soffice_cmd()
+    logger.info(f"[LibreOffice] Converting HWP: {hwp_path.name} (cmd={cmd})")
 
     # 임시 출력 디렉토리 생성
     with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
         try:
-            # HWP → TXT 변환
+            # 1) HWP → PDF 변환 (수동 테스트에서 성공한 옵션 그대로 사용)
             result = subprocess.run(
                 [
-                    "soffice",  # LibreOffice CLI
-                    "--headless",  # GUI 없이 실행
-                    "--convert-to", "txt:Text",
-                    "--outdir", tmpdir,
-                    str(hwp_path)
+                    cmd,
+                    "--headless",
+                    '--infilter=Hwp2002_File',
+                    "--convert-to", "pdf:writer_pdf_Export",
+                    str(hwp_path),
+                    "--outdir", str(tmpdir_path),
                 ],
                 capture_output=True,
                 text=True,
-                timeout=120  # 120초 타임아웃
+                timeout=120,
             )
 
-            # 변환된 TXT 파일 경로
-            txt_file = Path(tmpdir) / f"{hwp_path.stem}.txt"
+            # LibreOffice가 오류를 냈는지 로그 확인용
+            if result.returncode != 0:
+                logger.error(f"[LibreOffice] stderr: {result.stderr}")
+            
+            # 2) 변환된 PDF 파일 경로
+            pdf_file = tmpdir_path / f"{hwp_path.stem}.pdf"
 
-            if txt_file.exists():
-                text = txt_file.read_text(encoding="utf-8")
-                logger.info(f"[LibreOffice] Extracted {len(text)} chars from {hwp_path.name}")
-                return text
-            else:
-                logger.error(f"LibreOffice conversion failed: {result.stderr}")
+            if not pdf_file.exists():
+                logger.error("[LibreOffice] PDF not created from HWP")
                 raise RuntimeError(f"Conversion failed: {result.stderr}")
+
+            logger.info(f"[LibreOffice] PDF created: {pdf_file} (size={pdf_file.stat().st_size} bytes)")
+
+            # 3) PDF에서 텍스트 추출
+            try:
+                # pdfplumber 우선 사용
+                import pdfplumber
+
+                texts: list[str] = []
+                with pdfplumber.open(str(pdf_file)) as pdf:
+                    for page in pdf.pages:
+                        t = page.extract_text() or ""
+                        texts.append(t)
+
+                full_text = "\n".join(texts)
+                logger.info(f"[LibreOffice] Extracted {len(full_text)} chars from {hwp_path.name} via PDF")
+                return full_text
+
+            except ImportError:
+                # pdfplumber 없으면 pypdf로 fallback
+                from pypdf import PdfReader
+
+                reader = PdfReader(str(pdf_file))
+                texts: list[str] = []
+                for page in reader.pages:
+                    t = page.extract_text() or ""
+                    texts.append(t)
+
+                full_text = "\n".join(texts)
+                logger.info(f"[LibreOffice/pypdf] Extracted {len(full_text)} chars from {hwp_path.name} via PDF")
+                return full_text
 
         except FileNotFoundError:
             logger.error("soffice (LibreOffice) not found. Install LibreOffice first.")
@@ -294,9 +358,9 @@ def convert_hwp_to_text(hwp_path: str, method: Optional[str] = None) -> str:
 # 유틸리티 함수
 # ========================================
 
-def get_available_methods() -> list[str]:
+def get_available_methods() -> List[str]:
     """사용 가능한 HWP 변환 방법 목록 반환"""
-    methods = []
+    methods: List[str] = []
 
     if _check_hwp5txt_available():
         methods.append("hwp5txt")
@@ -305,7 +369,7 @@ def get_available_methods() -> list[str]:
         methods.append("libreoffice")
 
     try:
-        import pyhwp
+        import pyhwp  # noqa: F401
         methods.append("pyhwp")
     except ImportError:
         pass
