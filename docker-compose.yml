@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # FastAPI 백엔드
+  api:
+    build: .
+    container_name: ctrlf-api
+    ports:
+      - "8000:8000"
+    environment:
+      - EMBEDDING_PROVIDER=qwen3
+      - EMBEDDING_DIM=384
+      - ENABLE_OPENAI=${ENABLE_OPENAI:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-3.5-turbo}
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    networks:
+      - ctrlf-network
+    restart: unless-stopped
+
+  # Streamlit UI (선택적)
+  ui:
+    build: .
+    container_name: ctrlf-ui
+    command: streamlit run app/ui/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      - api
+    networks:
+      - ctrlf-network
+    restart: unless-stopped
+
+networks:
+  ctrlf-network:
+    driver: bridge
+
+volumes:
+  data:
+  uploads:

@@ -4,11 +4,15 @@
 통합 히스토리:
 - 기존: pypdf 기반 PDF 전용
 - 업데이트: pdfplumber 기반 PDF + langflow_세희 코드에서 HWP 파서 통합
+- HWP 어댑터: core/hwp_converter.py로 여러 변환 방법 통합
 """
 import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+# HWP 변환 어댑터 import
+from core.hwp_converter import convert_hwp_to_text, get_available_methods
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +28,13 @@ except ImportError:
     PDFPLUMBER_AVAILABLE = False
     logger.warning("pdfplumber not installed. PDF parsing will use fallback method.")
 
-# pyhwp (HWP 파싱) - 세희 파서에서 가져온 패턴
-try:
-    import pyhwp
-    HWP_AVAILABLE = True
-except ImportError:
-    HWP_AVAILABLE = False
-    logger.warning("pyhwp not installed. HWP files will be skipped.")
+# HWP 변환은 hwp_converter.py에서 자동 선택
+# (hwp5txt → LibreOffice → pyhwp 순으로 시도)
+hwp_methods = get_available_methods()
+if hwp_methods:
+    logger.info(f"HWP converters available: {hwp_methods}")
+else:
+    logger.warning("No HWP converter available. HWP files will return empty text.")
 
 # python-docx (DOCX 파싱)
 try:
@@ -137,23 +141,23 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 
 def extract_text_from_hwp(hwp_path: str) -> str:
     """
-    HWP 파일에서 텍스트 추출 (pyhwp 사용)
+    HWP 파일에서 텍스트 추출
 
-    ⚠️ 세희 파서에서 가져온 코드 (langflow_세희/extractors.py)
+    ⚠️ core/hwp_converter.py 어댑터 사용 (세희 코드 기반)
+    ⚠️ 여러 변환 방법 중 자동 선택:
+       1. hwp5txt (세희 방식, Linux/Docker 권장)
+       2. LibreOffice CLI (크로스 플랫폼)
+       3. pyhwp (Python 2, deprecated)
 
     Args:
         hwp_path: HWP 파일 경로
 
     Returns:
-        str: 추출된 텍스트 (pyhwp 없으면 빈 문자열)
+        str: 추출된 텍스트 (실패 시 빈 문자열)
 
     Note:
-        pyhwp가 설치되지 않은 경우 경고 로그를 출력하고 빈 문자열 반환
+        변환 방법이 없으면 경고 로그를 출력하고 빈 문자열 반환
     """
-    if not HWP_AVAILABLE:
-        logger.warning(f"pyhwp not installed. Skipping HWP file: {hwp_path}")
-        return ""
-
     try:
         path = Path(hwp_path)
 
@@ -164,18 +168,14 @@ def extract_text_from_hwp(hwp_path: str) -> str:
 
         logger.info(f"Parsing HWP: {hwp_path}")
 
-        # pyhwp로 HWP 파일 읽기 (세희 코드 기반)
-        text = ""
-        doc = pyhwp.HWPDocument(str(path))
+        # hwp_converter 어댑터 호출 (자동 변환 방법 선택)
+        text = convert_hwp_to_text(str(path))
 
-        # 본문의 각 문단(paragraph) 순회
-        for para in doc.bodytext.paragraphs:
-            # 각 문단 내 텍스트 요소(run) 추출
-            for run in para.text:
-                text += run.text
-            text += "\n"  # 문단 종료 후 개행
+        if text:
+            logger.info(f"Successfully extracted {len(text)} characters from HWP")
+        else:
+            logger.warning(f"No text extracted from HWP: {hwp_path}")
 
-        logger.info(f"Successfully extracted {len(text)} characters from HWP")
         return text
 
     except Exception as e:
