@@ -14,8 +14,8 @@ pydantic>=2.7.4
 python-dateutil==2.8.2
 
 # 벡터 스토어 (FAISS)
-faiss-cpu==1.7.4
-numpy==1.24.3
+faiss-cpu>=1.8.0
+numpy>=1.24.3,<2.0.0
 
 # OCR (텍스트 추출 fallback)
 pytesseract==0.3.10
