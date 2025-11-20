@@ -1,8 +1,76 @@
 [tool.poetry]
 name = "ctrlf-ai"
 version = "0.1.0"
-description = ""
-authors = []
+description = "RAG-based document search system with multi-format support"
+authors = ["skRookies4team"]
+readme = "README.md"
+packages = [{include = "app"}, {include = "core"}]
 
 [tool.poetry.dependencies]
-python = "3.12.7"
+python = ">=3.10,<3.13"
+
+# FastAPI 및 서버
+fastapi = "^0.109.0"
+uvicorn = {extras = ["standard"], version = "^0.27.0"}
+python-multipart = "^0.0.6"
+
+# PDF 파싱
+pypdf = "^4.0.1"
+pdfplumber = "^0.10.3"  # 세희 파서에서 가져온 PDF 파서
+
+# 데이터 모델
+pydantic = "^2.7.4"
+
+# 유틸리티
+python-dateutil = "^2.8.2"
+
+# 벡터 스토어 (FAISS)
+faiss-cpu = "^1.8.0"
+numpy = "^1.24.3,<2.0.0"
+
+# OCR (텍스트 추출 fallback)
+pytesseract = "^0.3.10"
+pdf2image = "^1.16.3"
+
+# Streamlit UI
+streamlit = "^1.31.0"
+matplotlib = "^3.8.2"
+pandas = "^2.1.4"
+
+# 선택적 의존성은 수동 설치
+# poetry add openai python-docx python-pptx --group optional
+# poetry add langchain-huggingface sentence-transformers torch --group embeddings
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+pytest-cov = "^4.1.0"
+ruff = "^0.8.0"
+mypy = "^1.13.0"
+
+# [tool.poetry.extras]
+# 선택적 의존성은 별도 그룹으로 관리
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=core --cov=app --cov-report=html --cov-report=term"
