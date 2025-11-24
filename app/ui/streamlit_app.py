@@ -1,4 +1,4 @@
-# app/ui/streamlit_hwp_rag_local.py
+# streamlit_app.py
 import sys
 import os
 import streamlit as st
@@ -17,6 +17,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"
 from core.cleaner import clean_text
 from core.chunker import chunk_text, chunk_by_paragraphs, chunk_by_headings
 from core.hwp_converter import convert_hwp_to_text
+from core.vector_store import get_vector_store
+from core.embedder import embed_texts
 
 # ===============================
 # 한글 폰트 설정 (Windows)
@@ -52,19 +54,18 @@ st.set_page_config(
 # ===============================
 def check_system_health() -> Dict[str, Any]:
     try:
-        response = requests.get(f"{API_BASE_URL}/api/v1/rag/health", timeout=5)
+        response = requests.get(f"{API_BASE_URL}/api/v1/rag/health", timeout=30)
         if response.ok:
             return response.json()
         return {"status": "unhealthy", "message": "API 연결 실패"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"{str(e)}"}
 
 # ===============================
 # 벡터 초기화
 # ===============================
 def reset_vector_store():
     try:
-        # 일반적으로 FastAPI 기반 RAG 예제에서는 아래 경로를 사용
         response = requests.post(f"{API_BASE_URL}/api/v1/rag/reset", timeout=60)
         if response.ok:
             return response.json()
@@ -91,7 +92,7 @@ def upload_file(file, chunk_strategy: str, max_chars: int, overlap_chars: int, u
             f"{API_BASE_URL}/api/v1/ingest/file",
             files=files,
             data=data,
-            timeout=300
+            timeout=600
         )
         if response.ok:
             return response.json()
@@ -107,7 +108,7 @@ def search_documents(query: str, top_k: int):
         response = requests.post(
             f"{API_BASE_URL}/api/v1/rag/query",
             json={"query": query, "top_k": top_k, "include_context": True},
-            timeout=30
+            timeout=60
         )
         if response.ok:
             return response.json()
@@ -127,7 +128,7 @@ def generate_answer(query: str, top_k: int, max_tokens: int, llm_type: Optional[
         response = requests.post(
             f"{API_BASE_URL}/api/v1/rag/answer",
             json=payload,
-            timeout=60
+            timeout=120
         )
         if response.ok:
             return response.json()
@@ -137,6 +138,21 @@ def generate_answer(query: str, top_k: int, max_tokens: int, llm_type: Optional[
     except Exception as e:
         st.error(f"답변 생성 오류: {str(e)}")
         return None
+
+# ===============================
+# 벡터 스토어에 로컬 청크 삽입 (FAISS 호환)
+# ===============================
+def insert_chunks_to_vector_store(ingest_id: str, chunks_list):
+    try:
+        vs = get_vector_store(dim=384)
+        vectors = embed_texts(chunks_list)
+        # 단일 벡터 반복 대신 한 번에 add_vectors 호출
+        metadatas = [{"ingest_id": ingest_id, "chunk_index": i, "text": chunks_list[i]} for i in range(len(chunks_list))]
+        vs.add_vectors(vectors, metadatas)
+        return len(chunks_list)
+    except Exception as e:
+        st.error(f"벡터 삽입 오류: {str(e)}")
+        return 0
 
 # ===============================
 # 로컬 전처리/청킹 (HWP 지원)
@@ -179,15 +195,20 @@ def process_file_local(file, chunk_strategy: str, max_chars: int, overlap_chars:
 
         chunk_lengths = [len(c) for c in chunks_list]
 
+        ingest_id = "local_" + file.name
+        # 벡터 스토어 삽입
+        inserted_count = insert_chunks_to_vector_store(ingest_id, chunks_list)
+
         return {
-            "ingest_id": "local_" + file.name,
+            "ingest_id": ingest_id,
             "status": "OK",
             "num_chunks": len(chunks_list),
             "raw_text_len": len(raw_text),
             "cleaned_text_len": len(cleaned_text),
-            "cleaned_text": cleaned_text,
             "chunk_texts": chunks_list,
-            "chunk_lengths": chunk_lengths
+            "chunk_lengths": chunk_lengths,
+            "inserted_chunks": inserted_count,
+            "cleaned_text": cleaned_text
         }
 
     except Exception as e:
@@ -200,21 +221,14 @@ def process_file_local(file, chunk_strategy: str, max_chars: int, overlap_chars:
 def main():
     st.title("📚 문서 검색 & HWP 전처리 시스템")
 
+    # -------------------------
     # 사이드바
+    # -------------------------
     with st.sidebar:
         st.header("⚙️ 시스템 상태")
-        
-        # 벡터 초기화 버튼 (확인 radio로 대체)
-        reset_confirm = st.radio("벡터 스토어 초기화", ["아니오","예"], index=0)
-        if reset_confirm == "예" and st.button("초기화 실행"):
-            with st.spinner("벡터 초기화 중..."):
-                reset_result = reset_vector_store()
-            if reset_result:
-                st.success(f"✅ 벡터 초기화 완료: {reset_result.get('message','완료')}")
-                st.experimental_rerun()
-
         if st.button("상태 새로고침"):
             st.experimental_rerun()
+
         health = check_system_health()
         status_color = {"healthy":"🟢","degraded":"🟡","unhealthy":"🔴","error":"⚫"}
         st.write(f"{status_color.get(health.get('status','error'),'⚫')} **{health.get('status','unknown').upper()}**")
@@ -252,11 +266,12 @@ def main():
 
             if result:
                 st.success(f"✅ 처리 완료! (Ingest ID: {result['ingest_id']})")
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 col1.metric("상태", result.get("status","N/A"))
                 col2.metric("청크 개수", result.get("num_chunks",0))
                 col3.metric("원본 텍스트", f"{result.get('raw_text_len',0):,} 자")
                 col4.metric("정제 후", f"{result.get('cleaned_text_len',0):,} 자")
+                col5.metric("벡터 삽입 완료", result.get("inserted_chunks",0))
 
                 st.subheader("📝 전처리된 텍스트")
                 preview_text = result.get("cleaned_text","")[:20000]
@@ -267,7 +282,6 @@ def main():
                     for i, chunk_text in enumerate(result["chunk_texts"]):
                         with st.expander(f"청크 {i+1} (길이: {len(chunk_text)})"):
                             st.text_area(f"청크 {i+1}", value=chunk_text, height=200)
-
 
     # -------------------------
     # 탭2: 문서 검색

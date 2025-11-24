@@ -2,11 +2,10 @@
 RAG Query API 라우터
 """
 import logging
-import os
 from fastapi import APIRouter, HTTPException
 
 from core.pipeline import search_similar_chunks
-from core.vector_store import get_vector_store, INDEX_FILE, METADATA_FILE
+from core.vector_store import get_vector_store
 from core.llm import get_llm
 from app.schemas.rag import (
     RAGQueryRequest,
@@ -24,12 +23,26 @@ router = APIRouter(prefix="/api/v1/rag", tags=["rag"])
 
 @router.post("/query", response_model=RAGQueryResponse)
 async def rag_query(request: RAGQueryRequest):
-    """RAG 쿼리 처리"""
+    """
+    RAG 쿼리 처리
+
+    1. 사용자 쿼리를 임베딩
+    2. 벡터 스토어에서 유사한 청크 검색
+    3. 검색 결과 반환
+
+    Args:
+        request: RAG 쿼리 요청
+
+    Returns:
+        RAGQueryResponse: 검색된 청크 리스트
+    """
     try:
         logger.info(f"RAG query: '{request.query[:50]}...', top_k={request.top_k}")
 
+        # 유사한 청크 검색
         results = search_similar_chunks(request.query, top_k=request.top_k)
 
+        # 응답 포맷
         chunks = []
         for r in results:
             chunk = RAGChunk(
@@ -55,15 +68,31 @@ async def rag_query(request: RAGQueryRequest):
 
     except Exception as e:
         logger.error(f"RAG query error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 @router.post("/answer", response_model=RAGAnswerResponse)
 async def rag_answer(request: RAGAnswerRequest):
-    """RAG 답변 생성"""
+    """
+    RAG 답변 생성
+
+    1. 사용자 쿼리를 임베딩
+    2. 벡터 스토어에서 유사한 청크 검색
+    3. LLM으로 답변 생성
+
+    Args:
+        request: RAG 답변 요청
+
+    Returns:
+        RAGAnswerResponse: 생성된 답변 및 검색 결과
+    """
     try:
         logger.info(f"RAG answer request: '{request.query[:50]}...', top_k={request.top_k}, llm_type={request.llm_type}")
 
+        # 1. 유사한 청크 검색
         results = search_similar_chunks(request.query, top_k=request.top_k)
 
         if not results:
@@ -72,8 +101,10 @@ async def rag_answer(request: RAGAnswerRequest):
                 detail="No relevant documents found. Please upload documents first."
             )
 
+        # 2. 청크 텍스트 추출
         context_chunks = [r.get("text", "") for r in results if r.get("text")]
 
+        # 3. LLM으로 답변 생성
         llm = get_llm(llm_type=request.llm_type)
         answer = llm.generate_answer(
             query=request.query,
@@ -81,6 +112,7 @@ async def rag_answer(request: RAGAnswerRequest):
             max_tokens=request.max_tokens
         )
 
+        # 4. 응답 포맷
         chunks = []
         for r in results:
             chunk = RAGChunk(
@@ -109,48 +141,48 @@ async def rag_answer(request: RAGAnswerRequest):
         raise
     except Exception as e:
         logger.error(f"RAG answer error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
 
 
 @router.get("/health", response_model=RAGHealthResponse)
 async def rag_health():
-    """RAG 시스템 헬스체크"""
+    """
+    RAG 시스템 헬스체크
+
+    - 벡터 스토어 상태 확인
+    - 임베더 사용 가능 여부 확인
+    - LLM 사용 가능 여부 확인
+    - 전체 벡터 개수 확인
+
+    Returns:
+        RAGHealthResponse: RAG 시스템 상태
+    """
     try:
         logger.info("Checking RAG system health")
 
+        # 벡터 스토어 상태 확인
         vector_store_available = False
         total_vectors = 0
         embedder_available = False
         llm_available = False
         llm_type_str = None
 
-        # 벡터 스토어 확인
         try:
-            from core.vector_store import get_vector_store
-            from core.embedder import embed_texts
-
             vector_store = get_vector_store(dim=384)
             stats = vector_store.get_stats()
             total_vectors = stats["total_vectors"]
             vector_store_available = True
             logger.info(f"Vector store available: {total_vectors} vectors")
-
-            # ❗ 벡터가 없으면 dummy vector 추가
-            if total_vectors == 0:
-                logger.info("No vectors found. Adding dummy vector for health check...")
-                dummy_texts = ["This is a dummy document for RAG health check."]
-                vectors = embed_texts(dummy_texts)
-                metadatas = [{"file_name": "dummy.txt", "chunk_index": 0, "text": dummy_texts[0]}]
-                vector_store.add_vectors(vectors, metadatas)
-                total_vectors = vector_store.get_stats()["total_vectors"]
-                logger.info(f"Dummy vector added. Total vectors: {total_vectors}")
-
         except Exception as e:
             logger.error(f"Vector store unavailable: {e}")
 
-        # 임베더 확인
+        # 임베더 사용 가능 여부 확인
         try:
             from core.embedder import embed_texts
+            # 간단한 테스트 임베딩
             test_vector = embed_texts(["test"])
             if test_vector and len(test_vector) > 0:
                 embedder_available = True
@@ -158,7 +190,7 @@ async def rag_health():
         except Exception as e:
             logger.error(f"Embedder unavailable: {e}")
 
-        # LLM 확인
+        # LLM 사용 가능 여부 확인
         try:
             llm = get_llm()
             llm_available = llm.is_available()
@@ -167,13 +199,13 @@ async def rag_health():
         except Exception as e:
             logger.error(f"LLM unavailable: {e}")
 
-        # 상태 결정
+        # 전체 상태 결정
         if vector_store_available and embedder_available and llm_available and total_vectors > 0:
             status = "healthy"
             message = "RAG system is fully operational"
         elif vector_store_available and embedder_available and llm_available:
             status = "degraded"
-            message = "RAG system is operational but no vectors available. Please reset or ingest documents."
+            message = "RAG system is operational but no vectors available"
         else:
             status = "unhealthy"
             message = "RAG system is not operational"
@@ -193,24 +225,7 @@ async def rag_health():
 
     except Exception as e:
         logger.error(f"RAG health check error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@router.post("/reset")
-async def reset_vector_store():
-    """벡터 스토어 초기화"""
-    try:
-        store = get_vector_store()
-
-        if INDEX_FILE.exists():
-            os.remove(INDEX_FILE)
-        if METADATA_FILE.exists():
-            os.remove(METADATA_FILE)
-
-        store.init_index()
-
-        logger.info("Vector store reset successfully")
-        return {"message": "벡터 스토어 초기화 완료", "total_vectors": store.vector_count}
-
-    except Exception as e:
-        logger.error(f"Vector store reset error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to reset vector store: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
