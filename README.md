@@ -2,8 +2,9 @@
 
 PDF/HWP/DOCX/PPTX 다중 형식 지원 RAG(Retrieval-Augmented Generation) 문서 검색 시스템
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10--3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg)](https://fastapi.tiangolo.com/)
+[![Poetry](https://img.shields.io/badge/Poetry-1.8+-purple.svg)](https://python-poetry.org/)
 [![License](https://img.shields.io/badge/License-Internal-red.svg)]()
 
 ## 📋 목차
@@ -118,7 +119,8 @@ CTRL-F AI는 다양한 형식의 문서를 업로드하고, 의미론적 검색�
 
 ### 환경 요구사항
 
-- **Python**: 3.9 이상
+- **Python**: 3.10-3.12 (⚠️ 3.13 미지원)
+- **Poetry**: 1.8+ (권장) 또는 pip
 - **OS**: Windows / Linux / macOS
 - **RAM**: 최소 2GB (Qwen3 사용 시 4GB 권장)
 
@@ -127,31 +129,47 @@ CTRL-F AI는 다양한 형식의 문서를 업로드하고, 의미론적 검색�
 ```bash
 git clone https://github.com/skRookies4team/ctrlf-ai.git
 cd ctrlf-ai
+git checkout feature/initial-rag-system  # 또는 main
 ```
 
-### 2. 가상환경 생성 및 활성화
+### 2. 의존성 설치
+
+#### 방법 A: Poetry 사용 (권장)
 
 ```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
+# Poetry 설치 (없다면)
+curl -sSL https://install.python-poetry.org | python3 -
 
-# Linux/Mac
-python -m venv venv
-source venv/bin/activate
+# 의존성 설치
+poetry install
+
+# 가상환경 활성화
+poetry shell
+
+# 선택적 의존성 설치
+poetry add python-docx python-pptx  # Office 파일 지원
+poetry add langchain-huggingface sentence-transformers torch  # Qwen3 임베딩
+poetry add openai  # OpenAI LLM
 ```
 
-### 3. 의존성 설치
+#### 방법 B: pip 사용 (기존 방식)
 
 ```bash
+# 가상환경 생성
+python -m venv venv
+
+# 활성화
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Linux/Mac
+
 # 필수 의존성
 pip install -r requirements.txt
 
-# 선택적: Qwen3 임베딩 (권장)
+# 선택적: Qwen3 임베딩
 pip install langchain-huggingface sentence-transformers torch
 ```
 
-### 4. 환경변수 설정
+### 3. 환경변수 설정
 
 ```bash
 # .env.example을 .env로 복사
@@ -177,27 +195,31 @@ OPENAI_MODEL=gpt-3.5-turbo
 API_BASE_URL=http://localhost:8000
 ```
 
-### 5. 서버 실행
+### 4. 서버 실행
 
-#### 방법 1: FastAPI만 실행
+#### Poetry 사용 시:
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# FastAPI 서버
+poetry run uvicorn app.main:app --reload
+
+# Streamlit UI (별도 터미널)
+poetry run streamlit run app/ui/streamlit_app.py
 ```
 
-**접속**: http://localhost:8000/docs (Swagger UI)
-
-#### 방법 2: Streamlit UI 실행 (권장)
+#### pip 사용 시:
 
 ```bash
-# 터미널 1: FastAPI 서버
-uvicorn app.main:app --reload
+# FastAPI 서버
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# 터미널 2: Streamlit UI
+# Streamlit UI (별도 터미널)
 streamlit run app/ui/streamlit_app.py
 ```
 
-**접속**: http://localhost:8501 (Streamlit UI)
+**접속**:
+- Swagger UI: http://localhost:8000/docs
+- Streamlit UI: http://localhost:8501
 
 ---
 

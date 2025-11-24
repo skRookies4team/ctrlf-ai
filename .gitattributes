@@ -22,6 +22,10 @@
 .gitattributes text eol=lf
 .dockerignore text eol=lf
 
+# Requirements 파일: LF 강제
+requirements.txt text eol=lf
+requirements*.txt text eol=lf
+
 # Docker 파일: LF 강제
 Dockerfile* text eol=lf
 docker-compose*.yml text eol=lf
