@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from core.models import ChunkingReport
 from core.parser import extract_text_from_file, get_page_count
-from core.cleaner import clean_text
+from core.cleaner import clean_text, safe_smart_chunk
 from core.structure import normalize_structure, apply_structure, split_paragraphs, detect_headings
 from core.chunker import chunk_text, chunk_by_paragraphs, chunk_by_headings
 from core.evaluator import evaluate_chunking
@@ -30,6 +30,24 @@ from core.monitoring import (
 logger = logging.getLogger(__name__)
 
 
+# ================================================
+# 🔥 blast-safe 문자열 변환기 추가
+# ================================================
+def ensure_string(text):
+    """모든 입력 타입을 안전하게 문자열로 변환한다."""
+    if text is None:
+        return ""
+    if isinstance(text, bytes):
+        return text.decode("utf-8", errors="ignore")
+    if isinstance(text, list):
+        return "\n".join([ensure_string(t) for t in text])
+    if isinstance(text, dict):
+        return "\n".join([f"{k}: {ensure_string(v)}" for k, v in text.items()])
+    if not isinstance(text, str):
+        return str(text)
+    return text
+
+
 def _calculate_stats(values: List[int]) -> Tuple[Optional[int], Optional[int], Optional[float], Optional[float]]:
     """리스트의 통계값 계산"""
     if not values:
@@ -39,7 +57,6 @@ def _calculate_stats(values: List[int]) -> Tuple[Optional[int], Optional[int], O
     max_val = max(values)
     avg_val = sum(values) / len(values)
 
-    # 표준편차 계산
     if len(values) > 1:
         variance = sum((x - avg_val) ** 2 for x in values) / len(values)
         std_val = variance ** 0.5
@@ -59,22 +76,14 @@ def process_file(
 ) -> Tuple[ChunkingReport, Optional[IngestMonitoring]]:
     """
     파일 처리 전체 파이프라인 실행 (모니터링 포함)
-
-    지원 형식: PDF, HWP, DOCX, PPTX
-
-    Returns:
-        Tuple[ChunkingReport, Optional[IngestMonitoring]]: (리포트, 모니터링 데이터)
     """
     from core.ocr import run_ocr
 
-    # ingest_id 생성
     ingest_id = uuid4().hex
     created_at = datetime.now(timezone.utc).isoformat()
 
     logger.info(f"Starting pipeline for {file_name} (ID: {ingest_id})")
-    logger.info(f"Strategy: {chunk_strategy}, max_chars: {max_chars}, OCR fallback: {use_ocr_fallback}")
 
-    # 모니터링 변수 초기화
     raw_text = ""
     cleaned = ""
     chunks = []
@@ -92,117 +101,109 @@ def process_file(
     vector_store_error = None
 
     try:
-        # === 1. 파일 정보 수집 ===
+        # 파일 정보 수집
         try:
             size_bytes = os.path.getsize(file_path)
             extension = os.path.splitext(file_name)[1].lower()
-        except Exception as e:
-            logger.error(f"Error getting file info: {e}")
+        except Exception:
             size_bytes = 0
             extension = ".pdf"
 
-        # === 2. 파일에서 텍스트 추출 (확장자 기반 라우팅) ===
-        logger.info(f"Step 1: Extracting text from {extension}")
+        # =========================================
+        # 1) 텍스트 추출
+        # =========================================
         try:
             raw_text = extract_text_from_file(file_path)
-            parse_success = True if raw_text and len(raw_text.strip()) > 0 else False
+            raw_text = ensure_string(raw_text)   # 🔥 패치 A
 
-            # 페이지 수 추출 시도 (PDF만 해당)
+            parse_success = True if raw_text.strip() else False
+
             if extension == ".pdf":
                 num_pages = get_page_count(file_path)
             else:
                 num_pages = None
 
         except Exception as e:
-            logger.error(f"Error extracting text: {e}")
+            logger.error(f"Error extracting text: {e}", exc_info=True)
             parse_error = str(e)
             parse_success = False
 
-        # 텍스트 추출 실패 시 OCR fallback
-        if (not raw_text or len(raw_text.strip()) == 0) and use_ocr_fallback:
-            logger.warning("No text extracted, trying OCR fallback")
+        # OCR fallback
+        if (not raw_text.strip()) and use_ocr_fallback:
             try:
                 ocr_result = run_ocr(file_path)
                 if ocr_result:
                     used_ocr = True
-                    ocr_text_len = len(ocr_result)
-                    raw_text = ocr_result
+                    raw_text = ensure_string(ocr_result)
+                    ocr_text_len = len(raw_text)
                     parse_success = True
-                    logger.info(f"OCR succeeded: {len(raw_text)} characters extracted")
             except Exception as e:
                 logger.error(f"OCR failed: {e}")
 
-        # 일반 추출 실패 (OCR 미사용 또는 실패)
-        if not raw_text or len(raw_text.strip()) == 0:
-            logger.warning("No text extracted from PDF")
-            # 빈 결과로 평가 진행
+        # 텍스트가 아예 없으면 빈 리포트 반환
+        if not raw_text.strip():
             report = evaluate_chunking(
                 ingest_id=ingest_id,
                 file_name=file_name,
                 file_path=file_path,
                 raw_text="",
-                cleaned_text="",
+                cleaned_text=""
+                ,
                 chunks=[],
                 chunk_strategy=chunk_strategy,
                 max_chars=max_chars,
                 overlap_chars=overlap_chars
             )
 
-            # 모니터링 객체 생성
             monitoring = _create_monitoring(
                 ingest_id, created_at, file_name, file_path, extension, size_bytes, num_pages,
                 "", 0, parse_success, parse_error, used_ocr, ocr_text_len, num_pages,
                 "", 0, chunk_strategy, max_chars, overlap_chars, [], sections,
-                paragraph_count, heading_count, section_count, vectors,
-                vector_store_insert_success, vector_store_error, report
+                0, 0, 0, vectors, False, None, report
             )
 
             return report, monitoring
 
-        # === 3. 텍스트 클리닝 ===
-        logger.info("Step 2: Cleaning text")
+        # =========================================
+        # 2) 텍스트 클리닝
+        # =========================================
         cleaned = clean_text(raw_text)
+        cleaned = ensure_string(cleaned)     # 🔥 패치 B
 
-        # === 4. 청킹 전략에 따라 처리 ===
+        # =========================================
+        # 3) 청킹 전략
+        # =========================================
         if chunk_strategy == "character_window":
-            logger.info("Step 3: Normalizing structure (passthrough)")
             normalized = normalize_structure(cleaned)
-            logger.info("Step 4: Chunking text (character_window)")
             chunks = chunk_text(normalized, max_chars=max_chars, overlap_chars=overlap_chars)
 
         elif chunk_strategy == "paragraph_based":
-            logger.info("Step 3: Applying structure analysis")
             sections = apply_structure(cleaned)
             section_count = len(sections)
 
-            # 문단 수 계산
             for sec in sections:
                 paras = split_paragraphs(sec.get("content", ""))
                 paragraph_count += len(paras)
 
-            logger.info("Step 4: Chunking by paragraphs")
             chunks = chunk_by_paragraphs(sections, max_chars=max_chars)
 
         elif chunk_strategy == "heading_based":
-            logger.info("Step 3: Applying structure analysis")
             sections = apply_structure(cleaned)
             section_count = len(sections)
 
-            # 제목 수 계산
             headings = detect_headings(cleaned)
             heading_count = len(headings)
 
-            logger.info("Step 4: Chunking by headings")
             chunks = chunk_by_headings(sections, max_chars=max_chars)
 
         else:
-            logger.warning(f"Unknown chunk_strategy '{chunk_strategy}', using character_window")
             normalized = normalize_structure(cleaned)
             chunks = chunk_text(normalized, max_chars=max_chars, overlap_chars=overlap_chars)
             chunk_strategy = "character_window"
 
-        # === 5. 평가 ===
-        logger.info("Step 5: Evaluating chunking")
+        # =========================================
+        # 4) 평가
+        # =========================================
         report = evaluate_chunking(
             ingest_id=ingest_id,
             file_name=file_name,
@@ -215,55 +216,48 @@ def process_file(
             overlap_chars=overlap_chars
         )
 
-        # === 6. 임베딩 + 벡터DB 저장 (status가 OK 또는 WARN일 때만) ===
+        # =========================================
+        # 5) 임베딩 & 벡터 저장
+        # =========================================
         if report.status in ["OK", "WARN"]:
             try:
-                logger.info("Step 6: Embedding chunks")
                 vectors = embed_texts(chunks)
-                logger.info(f"Successfully embedded {len(vectors)} chunks")
+                vector_store = get_vector_store(dim=384)
 
-                # 7. FAISS에 벡터 추가
-                logger.info("Step 7: Adding vectors to FAISS")
-
-                # 메타데이터 구성
                 metadatas = []
                 for i, chunk in enumerate(chunks):
-                    metadata = {
+                    metadatas.append({
                         "ingest_id": ingest_id,
                         "file_name": file_name,
                         "chunk_index": i,
                         "text": chunk,
                         "strategy": chunk_strategy
-                    }
-                    metadatas.append(metadata)
+                    })
 
-                # VectorStore에 추가
-                vector_store = get_vector_store(dim=384)
                 vector_store.add_vectors(vectors, metadatas)
                 vector_store_insert_success = True
-                logger.info(f"Successfully added {len(vectors)} vectors to FAISS")
 
             except Exception as e:
-                logger.error(f"Error during embedding/vector store: {e}", exc_info=True)
-                vector_store_insert_success = False
+                logger.error(f"Vector store error: {e}", exc_info=True)
                 vector_store_error = str(e)
-        else:
-            logger.info(f"Skipping embedding/vector store due to status: {report.status}")
 
-        # === 모니터링 객체 생성 ===
+        # =========================================
+        # 6) 모니터링 생성
+        # =========================================
         monitoring = _create_monitoring(
             ingest_id, created_at, file_name, file_path, extension, size_bytes, num_pages,
-            raw_text, len(raw_text.split('\n')), parse_success, parse_error, used_ocr, ocr_text_len, num_pages,
-            cleaned, len(cleaned.split('\n')), chunk_strategy, max_chars, overlap_chars, chunks, sections,
-            paragraph_count, heading_count, section_count, vectors,
-            vector_store_insert_success, vector_store_error, report
+            raw_text, len(raw_text.split("\n")), parse_success, parse_error,
+            used_ocr, ocr_text_len, num_pages,
+            cleaned, len(cleaned.split("\n")),
+            chunk_strategy, max_chars, overlap_chars,
+            chunks, sections, paragraph_count, heading_count, section_count,
+            vectors, vector_store_insert_success, vector_store_error, report
         )
 
-        logger.info(f"Pipeline completed for {file_name}. Status: {report.status}")
         return report, monitoring
 
     except Exception as e:
-        logger.error(f"Unexpected pipeline error: {e}", exc_info=True)
+        logger.error(f"Pipeline fatal error: {e}", exc_info=True)
         report = evaluate_chunking(
             ingest_id=ingest_id,
             file_name=file_name,
@@ -277,12 +271,13 @@ def process_file(
         )
 
         monitoring = _create_monitoring(
-            ingest_id, created_at, file_name, file_path, extension if 'extension' in locals() else ".pdf",
-            size_bytes if 'size_bytes' in locals() else 0, num_pages,
-            "", 0, False, str(e), used_ocr, ocr_text_len, num_pages,
-            "", 0, chunk_strategy, max_chars, overlap_chars, [], sections,
-            paragraph_count, heading_count, section_count, vectors,
-            vector_store_insert_success, vector_store_error, report
+            ingest_id, created_at, file_name, file_path, extension, size_bytes, num_pages,
+            "", 0, False, str(e),
+            used_ocr, ocr_text_len, num_pages,
+            "", 0,
+            chunk_strategy, max_chars, overlap_chars,
+            [], [], 0, 0, 0,
+            [], False, str(e), report
         )
 
         return report, monitoring
