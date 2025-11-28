@@ -1,11 +1,12 @@
 import json
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import gc
 import time
+import datetime
 
 # === .env 파일 로드 ===
 load_dotenv()
@@ -20,18 +21,26 @@ MODELS = {
 # === GPT-4o 클라이언트 ===
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# =====================================================
+# 파일 로드 함수
+# =====================================================
 def load_data():
     with open(EVAL_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
+# =====================================================
+# 모델 로드 함수 (8bit는 BitsAndBytesConfig 사용)
+# =====================================================
 def load_model(model_path, use_8bit=False):
     if use_8bit:
+        quant_config = BitsAndBytesConfig(load_in_8bit=True)
         return AutoModelForCausalLM.from_pretrained(
             model_path,
-            load_in_8bit=True,
+            quantization_config=quant_config,
             device_map="auto",
             trust_remote_code=True
         )
+
     return AutoModelForCausalLM.from_pretrained(
         model_path,
         dtype=torch.float16,
@@ -39,26 +48,29 @@ def load_model(model_path, use_8bit=False):
         trust_remote_code=True
     )
 
+# =====================================================
+# GPT-4o judge: 의미 일치 기반 평가
+# =====================================================
 def llm_judge_score(question, expected, answer):
     prompt = f"""
-다음은 LLM 성능 평가입니다.  
-너의 역할은 공정한 평가자(Judge)이며, 모델 답변이 정답과 의미적으로 얼마나 일치하는지 판단해야 합니다.
+너는 LLM 성능 평가를 수행하는 전문 채점자(Judge)이다.  
+항상 **한국어로 평가**하며, 모델 답변이 정답과 의미적으로 얼마나 일치하는지 채점하라.
 
 ### 질문
 {question}
 
-### 정답(정답자)
+### 정답
 {expected}
 
 ### 모델의 답변
 {answer}
 
-0~1 사이 점수로 평가하되 규칙은 다음과 같다.
-- 의미가 매우 정확히 같으면: 0.9~1.0
-- 핵심 내용 대부분 같으면: 0.7~0.89
-- 절반 정도 맞으면: 0.4~0.69
-- 일부만 맞으면: 0.1~0.39
-- 전혀 맞지 않으면: 0.0~0.09
+### 채점 기준 (0~1)
+- 0.9~1.0 : 의미 정확도 매우 높음
+- 0.7~0.89 : 핵심 내용 대부분 일치
+- 0.4~0.69 : 절반 정도만 일치
+- 0.1~0.39 : 일부만 일치
+- 0.0~0.09 : 거의 또는 전혀 일치하지 않음
 
 출력은 JSON 형식으로 한 줄만:
 {{"score": float}}
@@ -70,22 +82,35 @@ def llm_judge_score(question, expected, answer):
         temperature=0
     )
 
-    # ⛔️ 디버깅용 RAW 출력 (핵심)
     raw = response.choices[0].message.content
     print("\n🔍 DEBUG RAW RESPONSE:", raw)
 
-    # JSON 파싱 시도 (실패하면 에러 메시지 표시)
     try:
-        data = json.loads(raw)
-        return data["score"]
-    except Exception as e:
-        print("\n❌ JSON 파싱 오류:", e)
-        print("❗ GPT-4o가 JSON 형식으로 출력하지 않았습니다.")
+        return json.loads(raw)["score"]
+    except Exception:
+        print("❌ GPT-4o가 JSON 형식을 지키지 않았습니다. 0점 처리합니다.")
         return 0.0
 
+# =====================================================
+# 결과 저장 함수
+# =====================================================
+def save_results(model_name, results, avg_score):
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{model_name}_eval_result_{timestamp}.json"
+
+    data = {
+        "model": model_name,
+        "average_score": avg_score,
+        "results": results
+    }
+
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    print(f"📁 결과 저장 완료: {filename}")
 
 # =====================================================
-# 🔥 여기서부터 실제 평가 함수 (로그 출력 포함)
+# 모델 평가 함수
 # =====================================================
 def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
     print(f"\n===== Evaluating {model_name} =====")
@@ -96,13 +121,16 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
     model.eval()
 
     scores = []
+    results = []
 
     for item in eval_data:
         question = item["question"]
         expected = item["expected_answer"]
 
-        # 모델 답변 생성
-        inputs = tokenizer(question, return_tensors="pt").to(model.device)
+        # 🔥 질문 앞에 "가능하면 한국어로 답해주세요" 추가
+        prompt = f"가능하면 한국어로 답변해줘.\n\n{question}"
+
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         output = model.generate(
             **inputs,
             max_new_tokens=150,
@@ -110,7 +138,6 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
         )
         answer = tokenizer.decode(output[0], skip_special_tokens=True)
 
-        # GPT-4o로 평가
         score = llm_judge_score(question, expected, answer)
 
         print(f"\nQ: {question}")
@@ -119,11 +146,19 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
         print(f"Judge Score  : {score:.3f}")
 
         scores.append(score)
+        results.append({
+            "question": question,
+            "expected": expected,
+            "answer": answer,
+            "score": score
+        })
 
         time.sleep(0.3)
 
     avg_score = sum(scores) / len(scores)
     print(f"\n🔥 {model_name} FINAL SCORE: {avg_score:.3f}")
+
+    save_results(model_name, results, avg_score)
 
     del model
     del tokenizer
@@ -132,9 +167,8 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
 
     return avg_score
 
-
 # =====================================================
-# 🔥 main 실행부
+# 🔥 Main 실행부
 # =====================================================
 if __name__ == "__main__":
     eval_data = load_data()
