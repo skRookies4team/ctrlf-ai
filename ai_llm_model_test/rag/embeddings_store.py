@@ -1,20 +1,20 @@
 import os
 import glob
+from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-
-DOCUMENT_PATH = "./ai_llm_model_test/rag/docs"
-DB_PATH = "./ai_llm_model_test/rag/chroma_db"
+ 
+BASE_DIR = Path(__file__).parent
+DOCUMENT_PATH = BASE_DIR / "docs"
+DB_PATH = BASE_DIR / "chroma_db"
 
 def load_all_md_files():
-    files = glob.glob(os.path.join(DOCUMENT_PATH, "*.md"))
+    files = list((DOCUMENT_PATH).glob("*.md"))
     docs = []
-
     for file in files:
         with open(file, "r", encoding="utf-8") as f:
             docs.append(f.read())
-
     return docs
 
 def store_embeddings():
@@ -41,11 +41,12 @@ def store_embeddings():
     db = Chroma.from_texts(
         texts=split_docs,
         embedding=embedding_model,
-        persist_directory=DB_PATH
+        collection_name="company_docs",
+        persist_directory=str(DB_PATH)
     )
 
     db.persist()
-    print("✅ Chroma DB 저장 완료:", DB_PATH)
+    print("✅ Chroma DB 저장 완료:", str(DB_PATH))
 
 if __name__ == "__main__":
     store_embeddings()

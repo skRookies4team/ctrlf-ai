@@ -1,35 +1,28 @@
-import os
 import chromadb
-from chromadb.config import Settings
-from dotenv import load_dotenv
-from openai import OpenAI
-
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
+from pathlib import Path
+from langchain_community.embeddings import HuggingFaceEmbeddings
+ 
 # === ChromaDB 로컬 storage ===
-DB_DIR = "./vector_db"
-
-chroma_client = chromadb.Client(
-    Settings(chroma_db_impl="duckdb+parquet", persist_directory=DB_DIR)
-)
-
+BASE_DIR = Path(__file__).parent
+DB_DIR = str(BASE_DIR / "chroma_db")
+ 
+# Persistent Chroma client pointing to the same directory used by embeddings_store
+chroma_client = chromadb.PersistentClient(path=DB_DIR)
+ 
+# Must match the collection_name used in embeddings_store.Chroma.from_texts
 collection = chroma_client.get_or_create_collection(
     name="company_docs",
     metadata={"hnsw:space": "cosine"}
 )
-
-
-# === 🔥  임베딩 함수  ===
+ 
+# === 🔥  임베딩 함수 (HF 임베딩으로 인덱스와 동일한 모델을 사용) ===
+_embedding_model = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-mpnet-base-v2"
+)
+ 
 def embed_text(text: str):
-    """쿼리를 임베딩으로 변환"""
-    res = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text
-    )
-    return res.data[0].embedding
+    """쿼리를 임베딩으로 변환 (index와 동일한 임베딩 모델 사용)"""
+    return _embedding_model.embed_query(text)
 
 
 # === 🔥  Retriever: Similarity Search 함수 ===

@@ -1,20 +1,24 @@
+import os
 import json
 import time
 import gc
+from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
-
-from rag.generator import generate_rag_answer
-
-
+ 
+from .generator import generate_rag_answer
+ 
+ 
 load_dotenv()
 client = OpenAI()  # OPENAI_API_KEY 자동 로드
-
-EVAL_FILE = "emp_eval_50.json"
-
-BASE_MODEL_PATH = "/home/team4/.cache/huggingface/hub/models--Qwen--Qwen2-7B-Instruct/snapshots/f2826a00ceef68f0f2b946d945ecc0477ce4450c"
+ 
+BASE_DIR = Path(__file__).parent
+EVAL_FILE = str(BASE_DIR / "emp_eval_50.json")
+ 
+# 환경변수 우선, 없으면 공개 모델 ID 사용
+BASE_MODEL_PATH = os.getenv("LOCAL_LLM_PATH", "Qwen/Qwen2-7B-Instruct")
 RAG_MODEL_PATH = BASE_MODEL_PATH  # 같은 모델 사용(RAG는 문서 검색만 추가)
 
 
@@ -63,12 +67,35 @@ def gpt_judge(question, expected, answer):
 # Base Model Generation
 # ------------------------------------------------------
 def load_base_model():
-    model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL_PATH,
-        load_in_8bit=True,
-        device_map="auto",
-        trust_remote_code=True,
-    )
+    """
+    로컬 LLM 로딩 (base 모델).
+    GPU 및 8bit 가능 시 8bit → 그 외 fp16/cpu fp32로 폴백.
+    """
+    prefer_8bit = bool(torch.cuda.is_available())
+    try:
+        if prefer_8bit:
+            model = AutoModelForCausalLM.from_pretrained(
+                BASE_MODEL_PATH,
+                load_in_8bit=True,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+        else:
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            model = AutoModelForCausalLM.from_pretrained(
+                BASE_MODEL_PATH,
+                torch_dtype=dtype,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+    except Exception:
+        # 최후 폴백: CPU float32
+        model = AutoModelForCausalLM.from_pretrained(
+            BASE_MODEL_PATH,
+            torch_dtype=torch.float32,
+            device_map="cpu",
+            trust_remote_code=True,
+        )
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_PATH, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
     return model, tokenizer

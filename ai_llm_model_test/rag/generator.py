@@ -1,33 +1,46 @@
+import os
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from rag.retriever import retrieve_context
+from .retriever import retrieve_context
 
 
 def load_local_model(model_path: str, use_8bit: bool = True):
     """
-    로컬 LLM을 로딩 (메모리 절약을 위해 8bit 기본값)
+    로컬 LLM 로딩.
+    - CUDA 사용 가능 + 8bit 요청 시: 8bit 로딩 시도
+    - 실패 시 또는 GPU 미사용 시: 적절한 dtype으로 폴백
     """
-    if use_8bit:
+    prefer_8bit = bool(use_8bit and torch.cuda.is_available())
+    try:
+        # 8bit 우선 시도 (CUDA 필요, bitsandbytes가 없으면 예외 발생)
+        if prefer_8bit:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                load_in_8bit=True,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+        else:
+            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=dtype,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+    except Exception:
+        # 최후 폴백: CPU float32
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            load_in_8bit=True,
-            device_map="auto",
-            trust_remote_code=True
+            torch_dtype=torch.float32,
+            device_map="cpu",
+            trust_remote_code=True,
         )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True
-        )
-
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         trust_remote_code=True
     )
     tokenizer.pad_token = tokenizer.eos_token
-
     return model, tokenizer
 
 
@@ -84,7 +97,9 @@ def generate_rag_answer(
         top_p=0.9,
     )
 
-    answer = tokenizer.decode(output[0], skip_special_tokens=True)
+    # 프롬프트 토큰 길이만큼을 잘라 생성된 토큰만 디코드
+    generated_ids = output[0][inputs["input_ids"].shape[-1]:]
+    answer = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
 
     return {
         "question": question,
@@ -97,10 +112,11 @@ def generate_rag_answer(
 
 # === 간단 실행 테스트 ===
 if __name__ == "__main__":
-    MODEL_PATH = "/home/team4/.cache/huggingface/hub/models--Qwen--Qwen2-7B-Instruct/snapshots/f2826a00ceef68f0f2b946d945ecc0477ce4450c"
+    MODEL_PATH = os.getenv("LOCAL_LLM_PATH", "Qwen/Qwen2-7B-Instruct")
+    USE_8BIT = os.getenv("LLM_8BIT", "false").lower() in ("1", "true", "yes")
 
     query = "재택근무 신청 절차가 어떻게 돼?"
-    result = generate_rag_answer(query, MODEL_PATH)
+    result = generate_rag_answer(query, MODEL_PATH, use_8bit=USE_8BIT)
 
     print("\n📌 [RAG ANSWER]")
     print(result["answer"])

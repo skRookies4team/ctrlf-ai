@@ -7,11 +7,16 @@ import os
 import gc
 import time
 import datetime
+from pathlib import Path
+from ai_llm_model_test.rag.generator import generate_rag_answer
 
 # === .env 파일 로드 ===
 load_dotenv()
 
-EVAL_FILE = "emp_eval_50.json"
+BASE_DIR = Path(__file__).resolve().parent
+EVAL_FILE = str((BASE_DIR.parent / "rag" / "emp_eval_50.json"))
+# RAG 평가 사용 여부 (기본 True). 환경변수 EVAL_USE_RAG=false 로 끌 수 있음.
+USE_RAG = os.getenv("EVAL_USE_RAG", "true").lower() in ("1", "true", "yes")
 
 MODELS = {
     "Qwen2-7B-Instruct": "/home/team4/.cache/huggingface/hub/models--Qwen--Qwen2-7B-Instruct/snapshots/f2826a00ceef68f0f2b946d945ecc0477ce4450c",
@@ -115,10 +120,11 @@ def save_results(model_name, results, avg_score):
 def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
     print(f"\n===== Evaluating {model_name} =====")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    tokenizer.pad_token = tokenizer.eos_token
-    model = load_model(model_path, use_8bit=use_8bit)
-    model.eval()
+    if not USE_RAG:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer.pad_token = tokenizer.eos_token
+        model = load_model(model_path, use_8bit=use_8bit)
+        model.eval()
 
     scores = []
     results = []
@@ -127,16 +133,24 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
         question = item["question"]
         expected = item["expected_answer"]
 
-        # 🔥 질문 앞에 "가능하면 한국어로 답해주세요" 추가
-        prompt = f"가능하면 한국어로 답변해줘.\n\n{question}"
-
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        output = model.generate(
-            **inputs,
-            max_new_tokens=150,
-            temperature=0.2
-        )
-        answer = tokenizer.decode(output[0], skip_special_tokens=True)
+        if USE_RAG:
+            rag = generate_rag_answer(
+                question=question,
+                model_path=model_path,
+                use_8bit=use_8bit,
+                top_k=5
+            )
+            answer = rag["answer"]
+        else:
+            # 🔥 질문 앞에 "가능하면 한국어로 답해주세요" 추가
+            prompt = f"가능하면 한국어로 답변해줘.\n\n{question}"
+            inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+            output = model.generate(
+                **inputs,
+                max_new_tokens=150,
+                temperature=0.2
+            )
+            answer = tokenizer.decode(output[0], skip_special_tokens=True)
 
         score = llm_judge_score(question, expected, answer)
 
@@ -160,10 +174,11 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
 
     save_results(model_name, results, avg_score)
 
-    del model
-    del tokenizer
-    torch.cuda.empty_cache()
-    gc.collect()
+    if not USE_RAG:
+        del model
+        del tokenizer
+        torch.cuda.empty_cache()
+        gc.collect()
 
     return avg_score
 
