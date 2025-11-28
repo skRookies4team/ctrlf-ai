@@ -70,7 +70,18 @@ def llm_judge_score(question, expected, answer):
         temperature=0
     )
 
-    return json.loads(response.choices[0].message.content)["score"]
+    # ⛔️ 디버깅용 RAW 출력 (핵심)
+    raw = response.choices[0].message.content
+    print("\n🔍 DEBUG RAW RESPONSE:", raw)
+
+    # JSON 파싱 시도 (실패하면 에러 메시지 표시)
+    try:
+        data = json.loads(raw)
+        return data["score"]
+    except Exception as e:
+        print("\n❌ JSON 파싱 오류:", e)
+        print("❗ GPT-4o가 JSON 형식으로 출력하지 않았습니다.")
+        return 0.0
 
 
 # =====================================================
