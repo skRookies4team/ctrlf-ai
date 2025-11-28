@@ -4,7 +4,7 @@ import chromadb
 from chromadb.config import Settings
 from dotenv import load_dotenv
 from openai import OpenAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # === Load .env ===
 load_dotenv()
