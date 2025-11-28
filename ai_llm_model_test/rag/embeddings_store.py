@@ -1,75 +1,51 @@
 import os
 import glob
-import chromadb
-from chromadb.config import Settings
-from dotenv import load_dotenv
-from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
 
-# === Load .env ===
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DOCUMENT_PATH = "./ai_llm_model_test/rag/docs"
+DB_PATH = "./ai_llm_model_test/rag/chroma_db"
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+def load_all_md_files():
+    files = glob.glob(os.path.join(DOCUMENT_PATH, "*.md"))
+    docs = []
 
-# === ChromaDB Local Storage ===
-DB_DIR = "./vector_db"
+    for file in files:
+        with open(file, "r", encoding="utf-8") as f:
+            docs.append(f.read())
 
-chroma_client = chromadb.Client(
-    Settings(chroma_db_impl="duckdb+parquet", persist_directory=DB_DIR)
-)
+    return docs
 
-collection = chroma_client.get_or_create_collection(
-    name="company_docs",
-    metadata={"hnsw:space": "cosine"}  # cosine similarity
-)
+def store_embeddings():
+    print("📌 문서 로딩 중...")
+    texts = load_all_md_files()
 
-# === Document loader ===
-DOCS_PATH = "./docs/*.md"   # 생성한 문서 위치
-files = glob.glob(DOCS_PATH)
+    print(f"총 {len(texts)}개 문서 로드 완료")
 
-if len(files) == 0:
-    raise FileNotFoundError("❌ 문서(.md)가 없습니다. ./docs/ 경로를 확인해주세요.")
-
-print(f"📄 Total documents found: {len(files)}")
-
-# === Chunking ===
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=600,
-    chunk_overlap=80,
-    separators=["\n\n", "\n", " ", ""]
-)
-
-def embed_text(text: str):
-    """OpenAI Embedding 호출"""
-    res = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100
     )
-    return res.data[0].embedding
 
-# === Main Process: 문서 -> chunk -> embedding -> vectorDB 저장 ===
-doc_id = 0
-for file_path in files:
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
+    split_docs = splitter.split_text("\n\n".join(texts))
 
-    chunks = splitter.split_text(content)
-    print(f"📌 {os.path.basename(file_path)} → Chunks: {len(chunks)}")
+    print(f"총 {len(split_docs)}개 청크로 분할 완료")
 
-    for chunk in chunks:
-        embedding = embed_text(chunk)
+    embedding_model = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-mpnet-base-v2"
+    )
 
-        collection.add(
-            ids=[f"chunk-{doc_id}"],
-            documents=[chunk],
-            embeddings=[embedding]
-        )
-        doc_id += 1
+    print("🔄 Chroma DB 빌드 중...")
 
-# === Save ChromaDB ===
-chroma_client.persist()
+    db = Chroma.from_texts(
+        texts=split_docs,
+        embedding=embedding_model,
+        persist_directory=DB_PATH
+    )
 
-print("\n🎉 ChromaDB 저장 완료!")
-print(f"➡ 저장 위치: {DB_DIR}")
-print(f"➡ 총 청크 개수: {doc_id}")
+    db.persist()
+    print("✅ Chroma DB 저장 완료:", DB_PATH)
+
+if __name__ == "__main__":
+    store_embeddings()
