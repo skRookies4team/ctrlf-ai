@@ -15,7 +15,7 @@ load_dotenv()
 client = OpenAI()  # OPENAI_API_KEY 자동 로드
  
 BASE_DIR = Path(__file__).parent
-EVAL_FILE = str(BASE_DIR / "emp_eval_50.json")
+EVAL_FILE = str(BASE_DIR / "emp_eval_30.json")
  
 # 환경변수 우선, 없으면 공개 모델 ID 사용
 BASE_MODEL_PATH = os.getenv("LOCAL_LLM_PATH", "Qwen/Qwen2-7B-Instruct")

@@ -14,13 +14,14 @@ from ai_llm_model_test.rag.generator import generate_rag_answer
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
-EVAL_FILE = str((BASE_DIR.parent / "rag" / "emp_eval_50.json"))
+EVAL_FILE = str((BASE_DIR.parent / "rag" / "emp_eval_30.json"))
 # RAG 평가 사용 여부 (기본 True). 환경변수 EVAL_USE_RAG=false 로 끌 수 있음.
 USE_RAG = os.getenv("EVAL_USE_RAG", "true").lower() in ("1", "true", "yes")
 
 MODELS = {
     "Qwen2-7B-Instruct": "/home/team4/.cache/huggingface/hub/models--Qwen--Qwen2-7B-Instruct/snapshots/f2826a00ceef68f0f2b946d945ecc0477ce4450c",
-    "Llama3-8B-Instruct": "/home/team4/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct/snapshots/8afb486c1db24fe5011ec46dfbe5b5dccdb575c2"
+    "Llama3-8B-Instruct": "/home/team4/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct/snapshots/8afb486c1db24fe5011ec46dfbe5b5dccdb575c2",
+    "Gemma-3-12B-Instruct": "/home/team4/.cache/huggingface/hub/models--google--gemma-3-12b-it/snapshots/96b6f1eccf38110c56df3a15bffe176da04bfd80"
 }
 
 # === GPT-4o 클라이언트 ===
@@ -188,7 +189,14 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
 if __name__ == "__main__":
     eval_data = load_data()
     # 평가 문항을 20개로 제한
-    eval_data = eval_data[:20]
+    eval_data = eval_data[:30]
+
+    gemma_score = evaluate_model(
+        "Gemma-3-12B-Instruct",
+        MODELS["Gemma-3-12B-Instruct"],
+        eval_data,
+        use_8bit=True
+    )
 
     qwen_score = evaluate_model(
         "Qwen2-7B-Instruct",
@@ -207,8 +215,12 @@ if __name__ == "__main__":
     print("\n===== FINAL RESULT =====")
     print(f"Qwen2 7B Score : {qwen_score:.3f}")
     print(f"Llama3 8B Score: {llama_score:.3f}")
+    print(f"Gemma3 12B Score: {gemma_score:.3f}")
 
-    if qwen_score > llama_score:
-        print("🏆 Winner: Qwen2-7B-Instruct")
-    else:
-        print("🏆 Winner: Llama3-8B-Instruct")
+    scores = {
+        "Qwen2-7B-Instruct": qwen_score,
+        "Llama3-8B-Instruct": llama_score,
+        "Gemma-3-12B-Instruct": gemma_score,
+    }
+    winner = max(scores, key=scores.get)
+    print(f"🏆 Winner: {winner}")

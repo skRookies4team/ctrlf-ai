@@ -1,0 +1,184 @@
+[
+  {
+    "id": "EMP-101",
+    "question": "우리 회사의 기본 근무시간과 주당 근로시간 기준이 어떻게 돼?",
+    "expected_answer": "기본 근무는 월~금 09:00~18:00(휴게 1시간 포함), 주 40시간이 원칙이다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-102",
+    "question": "시차출퇴근제를 쓰고 싶은데, 몇 시부터 몇 시 사이에 출근할 수 있어?",
+    "expected_answer": "출근 가능 시간은 08:00~11:00 사이이며, 코어타임은 11:00~16:00이다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-103",
+    "question": "반차를 쓸 때 시간 기준이 어떻게 되나요? 오전/오후 구분도 알려줘.",
+    "expected_answer": "반차는 4시간 기준이며, 예시로 오전 09:00~13:00, 오후 14:00~18:00을 적용한다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-104",
+    "question": "시간단위 연차는 최소 몇 시간부터 가능하고, 1년에 최대 몇 시간까지 쓸 수 있어?",
+    "expected_answer": "최소 1시간 단위로 사용할 수 있으며 연간 최대 24시간(3일분)까지 가능하다.",
+    "task_type": "numeric_reasoning"
+  },
+  {
+    "id": "EMP-105",
+    "question": "재택근무는 어떤 기준과 절차로 허용돼? 보안 측면도 포함해서 알려줘.",
+    "expected_answer": "직무·보안 요구를 고려해 허용하며 별도 운영지침에 따른 신청·승인이 필요하고, 근무 중 협업툴 상시 접속 및 정보보안규정 준수가 필수다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-106",
+    "question": "주요 시설 출입은 어떻게 통제돼? 제한구역과 통제구역의 접근 방식이 궁금해.",
+    "expected_answer": "제한·통제구역은 카드/지문 등 통제시설로 관리하며, 승인된 인원만 출입하고 출입기록을 관리한다.",
+    "task_type": "security_policy"
+  },
+  {
+    "id": "EMP-107",
+    "question": "출입통제카드를 분실했어. 어떻게 처리해야 해?",
+    "expected_answer": "즉시 담당 부서에 연락해 효력을 정지시키고 보고 후 재발급을 신청해야 한다. 분실카드 사용 책임은 본인에게 있다.",
+    "task_type": "instruction_following"
+  },
+  {
+    "id": "EMP-108",
+    "question": "문서의 결재와 시행은 어떤 원칙과 절차로 처리해?",
+    "expected_answer": "문서는 결재권자의 서명으로 성립하고 전자문서시스템으로 기안·결재·등록·시행하며 수신 도달 시 효력이 발생한다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-109",
+    "question": "공문서 작성 시 숫자와 날짜 표기, 문장 부호 사용에 대한 기본 원칙이 있어?",
+    "expected_answer": "숫자는 아라비아 숫자, 날짜는 연·월·일 사이 온점, 쌍점은 앞말에 붙여 쓰는 등 규정된 표기 원칙을 따른다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-110",
+    "question": "기록물은 어느 부서에서 어떤 기준으로 분류·보존해?",
+    "expected_answer": "문서주관부서가 기록관을 운영하며 기록물분류기준표에 따라 단위업무별로 분류하고 보존기간 기준에 따라 보존한다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-111",
+    "question": "내부신고는 어디로, 어떤 방식으로 접수할 수 있지?",
+    "expected_answer": "홈페이지·인트라넷 등 신고센터로 접수하며 서면 또는 전자 형태로 신고서와 증빙을 제출하거나 구술 신고도 가능하다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-112",
+    "question": "내부신고를 했을 때 신분 노출이나 불이익이 걱정돼. 보호 조치가 있나?",
+    "expected_answer": "신고자 신분은 비밀 보장되며 불이익 조치는 금지된다. 필요시 보호조치를 신청할 수 있고 조사 후 보호결정을 내린다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-113",
+    "question": "개인정보보호 책임자(CPO)의 역할은 무엇이야?",
+    "expected_answer": "보호계획 수립·시행, 처리 실태 점검·개선, 침해사고 예방·대응, 교육·준수 관리 등을 총괄한다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-114",
+    "question": "개인정보를 제3자에게 동의 없이 제공할 수 있는 예외가 있어?",
+    "expected_answer": "법령 근거, 수사기관의 적법 요청, 생명·신체의 급박한 위험 방지 등 예외적으로 제공 가능하다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-115",
+    "question": "개인정보 보유기간이 끝났어. 처리 원칙은 어떻게 돼?",
+    "expected_answer": "목적 달성 또는 기간 경과 시 지체 없이 파기하며, 법령상 보존 필요 시 별도 분리보관 후 최소 접근으로 관리한다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-116",
+    "question": "주민등록번호 같은 고유식별정보는 어떤 기준으로 처리해야 해?",
+    "expected_answer": "법령 허용 범위에서만 처리하고 반드시 암호화해 저장하며 접근권한을 엄격히 제한한다.",
+    "task_type": "security_policy"
+  },
+  {
+    "id": "EMP-117",
+    "question": "정보보안 규정에서 계정 발급과 회수, 비밀번호 관리는 어떻게 하나요?",
+    "expected_answer": "인사·업무 변경에 따라 신속 발급·회수하며, 비밀번호는 복잡도 기준을 충족하고 정기 변경·공유 금지 원칙을 따른다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-118",
+    "question": "외부 SaaS 같은 클라우드 서비스를 팀에서 쓰려면 무엇을 확인해야 해?",
+    "expected_answer": "사전 보안 수준 검토와 정보보안 담당자 승인 또는 가이드를 따라야 하며, 개인 클라우드에 회사 데이터 저장은 금지다.",
+    "task_type": "instruction_following"
+  },
+  {
+    "id": "EMP-119",
+    "question": "개발자가 소스코드와 비밀키를 외부 레포지토리에 업로드해도 돼?",
+    "expected_answer": "공개 저장소에는 내부 소스·비밀키 등을 업로드할 수 없고, 비밀 정보는 시크릿 매니저 등 보안 저장소를 사용해야 한다.",
+    "task_type": "security_policy"
+  },
+  {
+    "id": "EMP-120",
+    "question": "복지 포인트나 교육비 같은 복지 항목은 어떤 것들이 있어?",
+    "expected_answer": "연 100만원 복지포인트, 종합건강검진, 도서·교육비 지원, 재택근무 장비 구입비 등 복지 항목을 운영한다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-121",
+    "question": "임금은 어떤 항목으로 구성되고 언제 지급돼?",
+    "expected_answer": "임금은 기본급·각종 수당 등으로 구성되며 매월 1회 이상 지정일(원칙적으로 계좌이체)로 지급한다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-122",
+    "question": "연장·야간·휴일근로에 대한 가산임금은 어떻게 처리하나요?",
+    "expected_answer": "법정 비율 이상으로 가산하여 지급하며 구체 산정은 관계법령 및 급여규정에 따른다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-123",
+    "question": "경조휴가는 어떤 기준으로 부여돼? 대표 항목을 예시로 알려줘.",
+    "expected_answer": "예시로 본인 결혼 5일, 배우자·부모 사망 5일, 조부모 사망 3일 등 내부 기준에 따른다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-124",
+    "question": "직무교육이나 외부교육 수료 후 어떤 서류를 제출해야 해?",
+    "expected_answer": "교육연수결과보고서 등 지정 서식을 기한 내 제출해야 하며 필요 시 수료증 사본을 첨부한다.",
+    "task_type": "instruction_following"
+  },
+  {
+    "id": "EMP-125",
+    "question": "예산 편성은 어떤 절차를 통해 확정돼?",
+    "expected_answer": "운영부서 요구서 제출 후 예산관리부서 조정·편성, 위원회 심의 및 이사회 의결을 거쳐 확정된다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-126",
+    "question": "예산 배정 이후 전용이나 이월은 어떤 기준으로 할 수 있지?",
+    "expected_answer": "불가피한 경우 항간 전용이 가능하며 예산총칙이 정한 비목은 이사회 의결이 필요하고, 이월은 원칙적으로 불가(예외 일부)다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-127",
+    "question": "이사회는 어떤 의사결정과 보고를 주로 다루나요?",
+    "expected_answer": "정관·자본·합병 등 주요 경영사항 의결과 위원회 설치·운영, 재무 관련 중요 의안, 주주총회 관련 사항 등을 다룬다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-128",
+    "question": "개인정보 침해사고가 발생하면 회사는 어떤 절차로 대응해?",
+    "expected_answer": "사고 범위·원인 분석, 긴급 차단, 관계기관 신고·통지 등 법정 절차 이행, 재발방지 대책 수립 및 기록 보관을 수행한다.",
+    "task_type": "process_explanation"
+  },
+  {
+    "id": "EMP-129",
+    "question": "회사 정보자산 분류와 접근통제는 어떤 원칙을 적용해?",
+    "expected_answer": "자산을 등급별로 분류하고 최소 권한 원칙에 따라 접근 권한을 부여·관리한다.",
+    "task_type": "policy_qa"
+  },
+  {
+    "id": "EMP-130",
+    "question": "업무용 단말기 분실 시 구성원이 취해야 할 조치는?",
+    "expected_answer": "즉시 회사에 신고하고 원격 잠금·데이터 삭제 등 가능한 보안 조치를 진행한다.",
+    "task_type": "instruction_following"
+  }
+]
+
+
