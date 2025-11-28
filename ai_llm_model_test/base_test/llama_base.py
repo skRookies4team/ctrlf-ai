@@ -23,7 +23,8 @@ def test_model(model_name, model_path):
 
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        load_in_8bit=True,        # 🔥 핵심 옵션
+            dtype=torch.float16,
+        # load_in_8bit=True,        # 🔥 핵심 옵션
         device_map="auto",        # GPU 자동 배치
         trust_remote_code=True
     )
