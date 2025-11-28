@@ -2,9 +2,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
 MODELS = {
-    "Qwen-7B": "/home/team4/qwen_7b",
-    "Llama3-8B": "/home/team4/llama3_8b",
-    "Gemma3-12B": "/home/team4/gemma3_12b",
+    "Qwen2-7B-Instruct": "/home/team4/.cache/huggingface/hub/models--Qwen--Qwen2-7B-Instruct/snapshots/f2826a00ceef68f0f2b946d945ecc0477ce4450c",
+    "Llama3-8B-Instruct": "/home/team4/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct/snapshots/8afb486c1db24fe5011ec46dfbe5b5dccdb575c2",
+    # "Gemma3-12B": "/home/team4/gemma3_12b"   # 만약 gemma는 직접 설치한 폴더
 }
 
 PROMPT = "아래 문장을 2줄로 요약해줘:\n\n사내 내부 문서 기반 LLM 성능 테스트 중입니다."
