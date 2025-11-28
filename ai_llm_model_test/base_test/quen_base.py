@@ -4,7 +4,6 @@ import gc
 
 MODELS = {
     "Qwen2-7B-Instruct": "/home/team4/.cache/huggingface/hub/models--Qwen--Qwen2-7B-Instruct/snapshots/f2826a00ceef68f0f2b946d945ecc0477ce4450c",
-    "Llama3-8B-Instruct": "/home/team4/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct/snapshots/8afb486c1db24fe5011ec46dfbe5b5dccdb575c2",
 }
 
 PROMPT = "아래 문장을 2줄로 요약해줘:\n\n사내 내부 문서 기반 LLM 성능 테스트 중입니다."
