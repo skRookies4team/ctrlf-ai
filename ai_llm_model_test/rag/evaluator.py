@@ -5,7 +5,7 @@ import gc
 from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
  
 from .generator import generate_rag_answer
@@ -74,9 +74,10 @@ def load_base_model():
     prefer_8bit = bool(torch.cuda.is_available())
     try:
         if prefer_8bit:
+            quant_config = BitsAndBytesConfig(load_in_8bit=True)
             model = AutoModelForCausalLM.from_pretrained(
                 BASE_MODEL_PATH,
-                load_in_8bit=True,
+                quantization_config=quant_config,
                 device_map="auto",
                 trust_remote_code=True,
             )

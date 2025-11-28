@@ -1,6 +1,6 @@
 import os
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from .retriever import retrieve_context
 
 
@@ -14,9 +14,10 @@ def load_local_model(model_path: str, use_8bit: bool = True):
     try:
         # 8bit 우선 시도 (CUDA 필요, bitsandbytes가 없으면 예외 발생)
         if prefer_8bit:
+            quant_config = BitsAndBytesConfig(load_in_8bit=True)
             model = AutoModelForCausalLM.from_pretrained(
                 model_path,
-                load_in_8bit=True,
+                quantization_config=quant_config,
                 device_map="auto",
                 trust_remote_code=True,
             )
