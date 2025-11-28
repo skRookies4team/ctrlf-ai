@@ -187,6 +187,8 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
 # =====================================================
 if __name__ == "__main__":
     eval_data = load_data()
+    # 평가 문항을 20개로 제한
+    eval_data = eval_data[:20]
 
     qwen_score = evaluate_model(
         "Qwen2-7B-Instruct",
