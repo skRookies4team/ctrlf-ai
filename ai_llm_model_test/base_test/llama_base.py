@@ -14,10 +14,17 @@ def test_model(model_name, model_path):
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
+    # model = AutoModelForCausalLM.from_pretrained(
+    #     model_path,
+    #     dtype=torch.float16,
+    #     device_map={"": "cuda:0"},
+    #     trust_remote_code=True
+    # )
+
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        dtype=torch.float16,
-        device_map={"": "cuda:0"},
+        load_in_8bit=True,        # 🔥 핵심 옵션
+        device_map="auto",        # GPU 자동 배치
         trust_remote_code=True
     )
 
