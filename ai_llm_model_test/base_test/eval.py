@@ -204,12 +204,12 @@ if __name__ == "__main__":
     # 평가 문항을 20개로 제한
     eval_data = eval_data[:20]
 
-    # gemma_score = evaluate_model(
-    #     "Gemma-3-12B-Instruct",
-    #     MODELS["Gemma-3-12B-Instruct"],
-    #     eval_data,
-    #     use_8bit=True
-    # )
+    gemma_score = evaluate_model(
+        "Gemma-3-12B-Instruct",
+        MODELS["Gemma-3-12B-Instruct"],
+        eval_data,
+        use_8bit=True
+    )
 
     # qwen_score = evaluate_model(
     #     "Qwen2-7B-Instruct",
@@ -218,17 +218,17 @@ if __name__ == "__main__":
     #     use_8bit=True
     # )
 
-    llama_score = evaluate_model(
-        "Llama3-8B-Instruct",
-        MODELS["Llama3-8B-Instruct"],
-        eval_data,
-        use_8bit=True
-    )
+    # llama_score = evaluate_model(
+    #     "Llama3-8B-Instruct",
+    #     MODELS["Llama3-8B-Instruct"],
+    #     eval_data,
+    #     use_8bit=True
+    # )
 
     print("\n===== FINAL RESULT =====")
     # print(f"Qwen2 7B Score : {qwen_score:.3f}")
-    print(f"Llama3 8B Score: {llama_score:.3f}")
-    # print(f"Gemma3 12B Score: {gemma_score:.3f}")
+    # print(f"Llama3 8B Score: {llama_score:.3f}")
+    print(f"Gemma3 12B Score: {gemma_score:.3f}")
 
     # scores = {
     #     "Qwen2-7B-Instruct": qwen_score,
