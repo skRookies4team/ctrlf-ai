@@ -132,7 +132,7 @@ if __name__ == "__main__":
         "Qwen2-7B-Instruct",
         MODELS["Qwen2-7B-Instruct"],
         eval_data,
-        use_8bit=False
+        use_8bit=True
     )
 
     llama_score = evaluate_model(
