@@ -82,20 +82,32 @@ def llm_judge_score(question, expected, answer):
 {{"score": float}}
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
-
-    raw = response.choices[0].message.content
-    print("\n🔍 DEBUG RAW RESPONSE:", raw)
-
+    # 1차 요청: JSON 강제
     try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content
         return json.loads(raw)["score"]
     except Exception:
-        print("❌ GPT-4o가 JSON 형식을 지키지 않았습니다. 0점 처리합니다.")
-        return 0.0
+        pass
+
+    # 2차 재시도: 포맷 유연, 실패 시 제외(None)
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        raw = response.choices[0].message.content
+        print("\n🔍 DEBUG RAW RESPONSE (retry):", raw)
+        return json.loads(raw)["score"]
+    except Exception:
+        print("❌ GPT-4o 채점 JSON 파싱 실패: 해당 항목은 평균 계산에서 제외합니다.")
+        return None
 
 # =====================================================
 # 결과 저장 함수
@@ -158,19 +170,20 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
         print(f"\nQ: {question}")
         print(f"Model Answer : {answer}")
         print(f"Expected     : {expected}")
-        print(f"Judge Score  : {score:.3f}")
+        print(f"Judge Score  : {0.0 if score is None else score:.3f}")
 
-        scores.append(score)
+        if score is not None:
+            scores.append(score)
         results.append({
             "question": question,
             "expected": expected,
             "answer": answer,
-            "score": score
+            "score": 0.0 if score is None else score
         })
 
         time.sleep(0.3)
 
-    avg_score = sum(scores) / len(scores)
+    avg_score = (sum(scores) / len(scores)) if len(scores) > 0 else 0.0
     print(f"\n🔥 {model_name} FINAL SCORE: {avg_score:.3f}")
 
     save_results(model_name, results, avg_score)
@@ -189,7 +202,7 @@ def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
 if __name__ == "__main__":
     eval_data = load_data()
     # 평가 문항을 20개로 제한
-    eval_data = eval_data[:30]
+    eval_data = eval_data[:20]
 
     gemma_score = evaluate_model(
         "Gemma-3-12B-Instruct",
