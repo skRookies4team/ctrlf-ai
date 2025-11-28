@@ -30,6 +30,12 @@ streamlit==1.31.0
 matplotlib==3.8.2
 pandas==2.1.4
 
+# LLM TEST
+transformers = "^4.44.0"
+torch = "^2.3.0"
+accelerate = "^0.30.0"
+sentencepiece = "^0.2.0"
+
 # LLM 통합 (선택사항 - dev-only)
 # ENABLE_OPENAI=true 환경변수 설정 시 사용
 # openai==1.12.0

@@ -46,6 +46,7 @@ sentencepiece = "^0.2.0"
 # 선택적 의존성은 수동 설치
 # poetry add openai python-docx python-pptx --group optional
 # poetry add langchain-huggingface sentence-transformers torch --group embeddings
+python-dotenv = "^1.2.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.3"
