@@ -7,7 +7,7 @@ import os
 import gc
 import time
 
-# === 📌 .env 파일 로드 ===
+# === .env 파일 로드 ===
 load_dotenv()
 
 EVAL_FILE = "emp_eval_50.json"
@@ -17,7 +17,7 @@ MODELS = {
     "Llama3-8B-Instruct": "/home/team4/.cache/huggingface/hub/models--meta-llama--Meta-Llama-3-8B-Instruct/snapshots/8afb486c1db24fe5011ec46dfbe5b5dccdb575c2"
 }
 
-# === 📌 GPT-4o 클라이언트 생성 ===
+# === GPT-4o 클라이언트 ===
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def load_data():
@@ -61,7 +61,7 @@ def llm_judge_score(question, expected, answer):
 - 전혀 맞지 않으면: 0.0~0.09
 
 출력은 JSON 형식으로 한 줄만:
-{"score": float}
+{{"score": float}}
 """
 
     response = client.chat.completions.create(
@@ -72,4 +72,81 @@ def llm_judge_score(question, expected, answer):
 
     return json.loads(response.choices[0].message.content)["score"]
 
-# (evaluate_model 생략: 너가 기존 코드 그대로 유지하면 됨)
+
+# =====================================================
+# 🔥 여기서부터 실제 평가 함수 (로그 출력 포함)
+# =====================================================
+def evaluate_model(model_name, model_path, eval_data, use_8bit=False):
+    print(f"\n===== Evaluating {model_name} =====")
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.eos_token
+    model = load_model(model_path, use_8bit=use_8bit)
+    model.eval()
+
+    scores = []
+
+    for item in eval_data:
+        question = item["question"]
+        expected = item["expected_answer"]
+
+        # 모델 답변 생성
+        inputs = tokenizer(question, return_tensors="pt").to(model.device)
+        output = model.generate(
+            **inputs,
+            max_new_tokens=150,
+            temperature=0.2
+        )
+        answer = tokenizer.decode(output[0], skip_special_tokens=True)
+
+        # GPT-4o로 평가
+        score = llm_judge_score(question, expected, answer)
+
+        print(f"\nQ: {question}")
+        print(f"Model Answer : {answer}")
+        print(f"Expected     : {expected}")
+        print(f"Judge Score  : {score:.3f}")
+
+        scores.append(score)
+
+        time.sleep(0.3)
+
+    avg_score = sum(scores) / len(scores)
+    print(f"\n🔥 {model_name} FINAL SCORE: {avg_score:.3f}")
+
+    del model
+    del tokenizer
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    return avg_score
+
+
+# =====================================================
+# 🔥 main 실행부
+# =====================================================
+if __name__ == "__main__":
+    eval_data = load_data()
+
+    qwen_score = evaluate_model(
+        "Qwen2-7B-Instruct",
+        MODELS["Qwen2-7B-Instruct"],
+        eval_data,
+        use_8bit=False
+    )
+
+    llama_score = evaluate_model(
+        "Llama3-8B-Instruct",
+        MODELS["Llama3-8B-Instruct"],
+        eval_data,
+        use_8bit=True
+    )
+
+    print("\n===== FINAL RESULT =====")
+    print(f"Qwen2 7B Score : {qwen_score:.3f}")
+    print(f"Llama3 8B Score: {llama_score:.3f}")
+
+    if qwen_score > llama_score:
+        print("🏆 Winner: Qwen2-7B-Instruct")
+    else:
+        print("🏆 Winner: Llama3-8B-Instruct")
