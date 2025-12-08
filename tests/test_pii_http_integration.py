@@ -418,11 +418,13 @@ async def test_chat_service_uses_pii_http_service_when_configured() -> None:
 
     response = await chat_service.handle_chat(request)
 
-    # Verify PII service was called for both INPUT and OUTPUT stages
-    assert len(pii_calls) == 2
+    # Verify PII service was called for INPUT, OUTPUT, and LOG stages
+    # INPUT (1) + OUTPUT (1) + LOG for question and answer (2) = 4 calls
+    assert len(pii_calls) == 4
     stages = [call["stage"] for call in pii_calls]
     assert "input" in stages
     assert "output" in stages
+    assert stages.count("log") == 2  # LOG stage called twice (question + answer)
 
     # Verify response
     assert isinstance(response, ChatResponse)
