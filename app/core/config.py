@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # LLM 서비스 URL (OpenAI API 호환 또는 자체 LLM 서버)
     LLM_BASE_URL: Optional[HttpUrl] = None
 
+    # PII 마스킹 서비스 설정
+    # PII 서비스 URL (외부 PII 마스킹 서비스, 선택사항)
+    PII_BASE_URL: Optional[HttpUrl] = None
+
+    # PII 마스킹 활성화 여부 (True: 마스킹 수행, False: 바이패스)
+    PII_ENABLED: bool = True
+
     # ctrlf-back (Spring 백엔드) 연동 URL
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 

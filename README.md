@@ -179,6 +179,8 @@ curl http://localhost:8000/health
 | `RAGFLOW_BASE_URL` | RAGFlow 서비스 URL | - |
 | `LLM_BASE_URL` | LLM 서비스 URL | - |
 | `BACKEND_BASE_URL` | Spring 백엔드 URL | - |
+| `PII_BASE_URL` | PII 마스킹 서비스 URL (선택) | - |
+| `PII_ENABLED` | PII 마스킹 활성화 여부 | `true` |
 | `CORS_ORIGINS` | 허용할 Origin (쉼표 구분) | `*` |
 
 ## API 엔드포인트
