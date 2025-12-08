@@ -101,12 +101,19 @@ class ChatAnswerMeta(BaseModel):
     """
     Metadata about the AI response.
 
-    Contains information about how the response was generated.
+    Contains information about how the response was generated,
+    including intent classification, routing, and PII detection details.
 
     Attributes:
         used_model: LLM model name used for generation
-        route: Routing path (e.g., ROUTE_RAG_INTERNAL, ROUTE_DIRECT_LLM)
-        masked: Whether PII masking was applied
+        route: Routing path (e.g., ROUTE_RAG_INTERNAL, ROUTE_LLM_ONLY)
+        intent: Classified intent type (e.g., POLICY_QA, INCIDENT_REPORT)
+        domain: Resolved domain (e.g., POLICY, INCIDENT, EDUCATION)
+        masked: Whether any PII masking was applied (input or output)
+        has_pii_input: Whether PII was detected in user input
+        has_pii_output: Whether PII was detected in LLM output
+        rag_used: Whether RAG search was performed
+        rag_source_count: Number of RAG sources retrieved
         latency_ms: Response generation time in milliseconds
     """
 
@@ -115,10 +122,30 @@ class ChatAnswerMeta(BaseModel):
     )
     route: Optional[str] = Field(
         default=None,
-        description="Routing path (e.g., ROUTE_RAG_INTERNAL, ROUTE_DIRECT_LLM)",
+        description="Routing path (e.g., ROUTE_RAG_INTERNAL, ROUTE_LLM_ONLY)",
+    )
+    intent: Optional[str] = Field(
+        default=None,
+        description="Classified intent type (e.g., POLICY_QA, INCIDENT_REPORT)",
+    )
+    domain: Optional[str] = Field(
+        default=None,
+        description="Resolved domain (e.g., POLICY, INCIDENT, EDUCATION)",
     )
     masked: Optional[bool] = Field(
-        default=None, description="Whether PII masking was applied"
+        default=None, description="Whether any PII masking was applied"
+    )
+    has_pii_input: Optional[bool] = Field(
+        default=None, description="Whether PII was detected in user input"
+    )
+    has_pii_output: Optional[bool] = Field(
+        default=None, description="Whether PII was detected in LLM output"
+    )
+    rag_used: Optional[bool] = Field(
+        default=None, description="Whether RAG search was performed"
+    )
+    rag_source_count: Optional[int] = Field(
+        default=None, description="Number of RAG sources retrieved"
     )
     latency_ms: Optional[int] = Field(
         default=None, description="Response generation time in milliseconds"
