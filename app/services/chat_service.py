@@ -9,9 +9,11 @@ Implements the complete RAG + LLM pipeline for generating AI responses:
 4. Build LLM prompt with context from RAG results
 5. Generate response via LLM service
 6. PII masking (output)
-7. Return formatted response with sources and metadata
+7. Generate and send AI log to backend
+8. Return formatted response with sources and metadata
 """
 
+import asyncio
 import time
 from typing import Dict, List, Optional
 
@@ -23,6 +25,7 @@ from app.models.chat import (
     ChatSource,
 )
 from app.models.intent import MaskingStage, RouteType
+from app.services.ai_log_service import AILogService
 from app.services.intent_service import IntentService
 from app.services.llm_client import LLMClient
 from app.services.pii_service import PiiService
@@ -52,13 +55,15 @@ class ChatService:
     4. Build LLM prompt - Construct prompt with RAG context
     5. Generate response - Call LLM for response
     6. PII masking (output) - Mask any PII in LLM response
-    7. Return response - Return formatted ChatResponse
+    7. Generate and send AI log - Create log entry and send to backend
+    8. Return response - Return formatted ChatResponse
 
     Attributes:
         _ragflow: RagflowClient for document search
         _llm: LLMClient for response generation
         _pii: PiiService for PII masking
         _intent: IntentService for intent classification
+        _ai_log: AILogService for logging to backend
 
     Example:
         service = ChatService()
@@ -71,6 +76,7 @@ class ChatService:
         llm_client: Optional[LLMClient] = None,
         pii_service: Optional[PiiService] = None,
         intent_service: Optional[IntentService] = None,
+        ai_log_service: Optional[AILogService] = None,
     ) -> None:
         """
         Initialize ChatService.
@@ -80,12 +86,14 @@ class ChatService:
             llm_client: LLMClient instance. If None, creates a new instance.
             pii_service: PiiService instance. If None, creates a new instance.
             intent_service: IntentService instance. If None, creates a new instance.
+            ai_log_service: AILogService instance. If None, creates a new instance.
                            Pass custom services for testing or dependency injection.
         """
         self._ragflow = ragflow_client or RagflowClient()
         self._llm = llm_client or LLMClient()
         self._pii = pii_service or PiiService()
         self._intent = intent_service or IntentService()
+        self._ai_log = ai_log_service or AILogService(pii_service=self._pii)
 
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
@@ -235,18 +243,43 @@ class ChatService:
         # Calculate latency
         latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-        # Build metadata
+        # Determine if RAG was used
+        rag_used = final_route == RouteType.ROUTE_RAG_INTERNAL and len(sources) > 0
+
+        # Build metadata with extended fields for logging
         meta = ChatAnswerMeta(
             used_model="internal-llm",  # TODO: Get actual model name from LLM response
             route=final_route.value,
+            intent=intent.value,
+            domain=domain,
             masked=has_pii,
+            has_pii_input=pii_input.has_pii,
+            has_pii_output=pii_output.has_pii,
+            rag_used=rag_used,
+            rag_source_count=len(sources),
             latency_ms=latency_ms,
         )
 
         logger.info(
             f"Chat response generated: session_id={req.session_id}, "
             f"latency_ms={latency_ms}, sources_count={len(sources)}, "
-            f"route={final_route.value}, masked={has_pii}"
+            f"route={final_route.value}, intent={intent.value}, masked={has_pii}"
+        )
+
+        # Step 8: Generate and send AI log (fire-and-forget)
+        await self._send_ai_log(
+            req=req,
+            response_answer=final_answer,
+            user_query=user_query,
+            intent=intent.value,
+            domain=domain,
+            route=final_route.value,
+            has_pii_input=pii_input.has_pii,
+            has_pii_output=pii_output.has_pii,
+            rag_used=rag_used,
+            rag_source_count=len(sources),
+            latency_ms=latency_ms,
+            model_name="internal-llm",
         )
 
         return ChatResponse(
@@ -254,6 +287,78 @@ class ChatService:
             sources=sources,
             meta=meta,
         )
+
+    async def _send_ai_log(
+        self,
+        req: ChatRequest,
+        response_answer: str,
+        user_query: str,
+        intent: str,
+        domain: str,
+        route: str,
+        has_pii_input: bool,
+        has_pii_output: bool,
+        rag_used: bool,
+        rag_source_count: int,
+        latency_ms: int,
+        model_name: Optional[str] = None,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """
+        AI 로그를 생성하고 백엔드로 전송합니다 (fire-and-forget).
+
+        LOG 단계 PII 마스킹을 적용하여 question_masked, answer_masked를 생성하고
+        AILogEntry를 만들어 백엔드로 비동기 전송합니다.
+
+        Args:
+            req: 원본 ChatRequest
+            response_answer: 최종 응답 텍스트
+            user_query: 원본 사용자 질문
+            intent: 분류된 의도
+            domain: 보정된 도메인
+            route: 라우팅 결과
+            has_pii_input: 입력 PII 검출 여부
+            has_pii_output: 출력 PII 검출 여부
+            rag_used: RAG 사용 여부
+            rag_source_count: RAG 소스 개수
+            latency_ms: 처리 시간
+            model_name: 사용된 모델명
+            error_code: 에러 코드
+            error_message: 에러 메시지
+        """
+        try:
+            # LOG 단계 PII 마스킹 적용
+            question_masked, answer_masked = await self._ai_log.mask_for_log(
+                question=user_query,
+                answer=response_answer,
+            )
+
+            # 로그 엔트리 생성
+            log_entry = self._ai_log.create_log_entry(
+                request=req,
+                response=ChatResponse(answer=response_answer, sources=[], meta=ChatAnswerMeta()),
+                intent=intent,
+                domain=domain,
+                route=route,
+                has_pii_input=has_pii_input,
+                has_pii_output=has_pii_output,
+                rag_used=rag_used,
+                rag_source_count=rag_source_count,
+                latency_ms=latency_ms,
+                model_name=model_name,
+                error_code=error_code,
+                error_message=error_message,
+                question_masked=question_masked,
+                answer_masked=answer_masked,
+            )
+
+            # 비동기 전송 (fire-and-forget)
+            asyncio.create_task(self._ai_log.send_log_async(log_entry))
+
+        except Exception as e:
+            # 로그 생성/전송 실패는 메인 로직에 영향 주지 않음
+            logger.warning(f"Failed to send AI log: {e}")
 
     def _build_llm_messages(
         self,
