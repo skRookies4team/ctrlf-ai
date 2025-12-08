@@ -2,18 +2,21 @@
 RAG Service Module
 
 Business logic for RAG (Retrieval-Augmented Generation) document processing.
-Handles the document ingestion pipeline including:
-- Document download from URL (planned)
-- Preprocessing via RAGFlow (planned)
-- Embedding generation (planned)
-- Index storage (planned)
+Handles the document ingestion pipeline by forwarding requests to RAGFlow service.
 
-Currently returns dummy responses. Real implementation will be added
-when integrating with RAGFlow service.
+This service acts as the business logic layer between the API router
+and the RAGFlow client, handling:
+- Request validation and logging
+- RAGFlow client invocation
+- Response formatting and error handling
 """
 
+from typing import Optional
+
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.rag import RagProcessRequest, RagProcessResponse
+from app.services.ragflow_client import RagflowClient
 
 logger = get_logger(__name__)
 
@@ -23,19 +26,38 @@ class RagService:
     RAG service handling document processing logic.
 
     This service is responsible for:
-    1. Receiving document processing requests from backend
-    2. Downloading documents from provided URLs (TODO)
-    3. Sending documents to RAGFlow for preprocessing (TODO)
-    4. Managing document embeddings and indexing (TODO)
-    5. Handling ACL (access control) metadata (TODO)
+    1. Receiving document processing requests from API router
+    2. Forwarding requests to RAGFlow via RagflowClient
+    3. Handling errors and returning appropriate responses
 
-    Currently implements dummy responses for API structure validation.
-    Real RAGFlow integration will be added in subsequent phases.
+    The actual document processing (chunking, embedding, indexing)
+    is performed by the ctrlf-ragflow service.
+
+    Attributes:
+        _client: RagflowClient instance for RAGFlow communication
+
+    Example:
+        service = RagService()
+        response = await service.process_document(request)
     """
+
+    def __init__(self, ragflow_client: Optional[RagflowClient] = None) -> None:
+        """
+        Initialize RagService.
+
+        Args:
+            ragflow_client: RagflowClient instance. If None, creates a new instance.
+                           Pass custom client for testing or dependency injection.
+        """
+        self._client = ragflow_client or RagflowClient()
 
     async def process_document(self, req: RagProcessRequest) -> RagProcessResponse:
         """
-        Process a document for RAG indexing.
+        Process a document for RAG indexing via RAGFlow service.
+
+        Forwards the document processing request to RAGFlow and returns the result.
+        If RAGFlow is not configured (RAGFLOW_BASE_URL is empty), returns a
+        dummy success response for development/testing compatibility.
 
         Args:
             req: RagProcessRequest containing document info and ACL
@@ -43,12 +65,9 @@ class RagService:
         Returns:
             RagProcessResponse with processing result
 
-        TODO: Implement the following in future phases:
-            1. Download document from file_url
-            2. Send to RAGFlow preprocessing API
-            3. Generate and store embeddings
-            4. Apply ACL metadata for access control
-            5. Return actual processing status
+        Note:
+            - If RAGFlow is not configured, returns dummy success response
+            - On RAGFlow error, returns success=False with error details
         """
         logger.info(
             f"Processing RAG document: doc_id={req.doc_id}, "
@@ -62,46 +81,44 @@ class RagService:
                 f"departments={req.acl.departments}"
             )
 
-        # TODO: Step 1 - Download document from URL
-        # document_content = await self._download_document(req.file_url)
+        # Check if RAGFlow is configured
+        settings = get_settings()
+        if not settings.RAGFLOW_BASE_URL:
+            # Return dummy success response for development/testing
+            logger.info(
+                f"RAGFlow not configured, returning dummy success: doc_id={req.doc_id}"
+            )
+            return RagProcessResponse(
+                doc_id=req.doc_id,
+                success=True,
+                message=(
+                    "RAG document processing dummy response. "
+                    "RAGFLOW_BASE_URL is not configured. "
+                    "Actual RAGFlow integration will be used when configured."
+                ),
+            )
 
-        # TODO: Step 2 - Send to RAGFlow for preprocessing
-        # chunks = await self._preprocess_document(document_content, req.domain)
+        try:
+            # Forward request to RAGFlow service
+            result = await self._client.process_document(req)
 
-        # TODO: Step 3 - Generate embeddings
-        # embeddings = await self._generate_embeddings(chunks)
+            if result.success:
+                logger.info(f"RAG document processed successfully: doc_id={req.doc_id}")
+            else:
+                logger.warning(
+                    f"RAG document processing returned failure: "
+                    f"doc_id={req.doc_id}, message={result.message}"
+                )
 
-        # TODO: Step 4 - Store in vector database with ACL
-        # await self._store_embeddings(req.doc_id, embeddings, req.acl)
+            return result
 
-        # Dummy response for now
-        logger.info(f"RAG document processed (dummy): doc_id={req.doc_id}")
-
-        return RagProcessResponse(
-            doc_id=req.doc_id,
-            success=True,
-            message=(
-                "RAG document processing dummy response. "
-                "Actual RAGFlow integration will be implemented in the next phase."
-            ),
-        )
-
-    # TODO: Implement these methods in future phases
-
-    # async def _download_document(self, file_url: HttpUrl) -> bytes:
-    #     """Download document from the provided URL."""
-    #     pass
-
-    # async def _preprocess_document(self, content: bytes, domain: str) -> List[str]:
-    #     """Send document to RAGFlow for preprocessing and chunking."""
-    #     pass
-
-    # async def _generate_embeddings(self, chunks: List[str]) -> List[List[float]]:
-    #     """Generate embeddings for document chunks."""
-    #     pass
-
-    # async def _store_embeddings(
-    #     self, doc_id: str, embeddings: List[List[float]], acl: Optional[RagAcl]
-    # ) -> None:
-    #     """Store embeddings in vector database with ACL metadata."""
-    #     pass
+        except Exception as e:
+            # Catch any unexpected errors not handled by RagflowClient
+            logger.exception(
+                f"Unexpected error in RagService.process_document: doc_id={req.doc_id}"
+            )
+            return RagProcessResponse(
+                doc_id=req.doc_id,
+                success=False,
+                message=f"RAGFlow integration failed: {type(e).__name__}: {str(e)}",
+            )
