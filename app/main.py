@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import chat, health, rag
+from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 
@@ -47,19 +48,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Environment: {settings.APP_ENV}")
 
     # TODO: 향후 추가될 초기화 작업
-    # - httpx.AsyncClient 인스턴스 생성 (RAGFlow, LLM 서버 연결용)
     # - 데이터베이스 연결 풀 초기화
     # - 캐시 연결 (Redis 등)
+    # 참고: httpx.AsyncClient는 lazy-init 방식으로 첫 호출 시 생성됨
 
-    yield  # 애플리케이션 실행
+    try:
+        yield  # 애플리케이션 실행
+    finally:
+        # 종료 시 실행
+        await close_async_http_client()
+        logger.info(f"Shutting down {settings.APP_NAME}")
 
-    # 종료 시 실행
-    logger.info(f"Shutting down {settings.APP_NAME}")
-
-    # TODO: 향후 추가될 정리 작업
-    # - HTTP 클라이언트 종료
-    # - 데이터베이스 연결 종료
-    # - 캐시 연결 종료
+        # TODO: 향후 추가될 정리 작업
+        # - 데이터베이스 연결 종료
+        # - 캐시 연결 종료
 
 
 # FastAPI 인스턴스 생성

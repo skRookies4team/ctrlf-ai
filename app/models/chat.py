@@ -80,6 +80,7 @@ class ChatSource(BaseModel):
         title: Document title
         page: Page number in document (if applicable)
         score: Search relevance score (optional)
+        snippet: Text excerpt from document for LLM prompt context (optional)
     """
 
     doc_id: str = Field(description="Document ID managed by backend/RAGFlow")
@@ -89,6 +90,10 @@ class ChatSource(BaseModel):
     )
     score: Optional[float] = Field(
         default=None, description="Search relevance score (optional)"
+    )
+    snippet: Optional[str] = Field(
+        default=None,
+        description="Text excerpt from document for LLM prompt context (optional)",
     )
 
 
