@@ -1,31 +1,31 @@
-# Phase 8: Docker Compose Integration Testing Report
+# Phase 8: Docker Compose 통합 테스트 환경 구축 보고서
 
-## Overview
+## 개요
 
-Phase 8 implements a complete Docker Compose environment for integration testing, including mock services for RAGFlow, LLM, and Backend APIs.
+Phase 8에서는 RAGFlow, LLM, Backend API의 Mock 서비스를 포함한 완전한 Docker Compose 통합 테스트 환경을 구현했습니다.
 
-**Goal**: Run real HTTP requests against containerized services to validate the entire pipeline:
+**목표**: 컨테이너화된 서비스에 실제 HTTP 요청을 보내 전체 파이프라인을 검증
 - AI Gateway (ctrlf-ai)
 - RAGFlow (Mock)
-- Internal LLM (Mock)
+- 내부 LLM (Mock)
 - Backend AI Log API (Mock)
 
-## Changes Summary
+## 변경 사항 요약
 
-### 1. Docker Compose Configuration (`docker-compose.yml`)
+### 1. Docker Compose 설정 (`docker-compose.yml`)
 
 ```yaml
 services:
-  ai-gateway:     # Port 8000 - Main AI Gateway
-  ragflow:        # Port 8080 - Mock RAG Search
-  llm-internal:   # Port 8001 - Mock LLM API
-  backend-mock:   # Port 8081 - Mock AI Log API
+  ai-gateway:     # 포트 8000 - 메인 AI Gateway
+  ragflow:        # 포트 8080 - Mock RAG 검색
+  llm-internal:   # 포트 8001 - Mock LLM API
+  backend-mock:   # 포트 8081 - Mock AI 로그 API
 
 networks:
-  ctrlf-net:      # Shared bridge network
+  ctrlf-net:      # 공유 브리지 네트워크
 ```
 
-#### Service Dependencies
+#### 서비스 의존성
 ```
 ai-gateway
     ├── depends_on: ragflow (healthy)
@@ -33,141 +33,141 @@ ai-gateway
     └── depends_on: backend-mock (healthy)
 ```
 
-#### Environment Variables
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `RAGFLOW_BASE_URL` | `http://ragflow:8080` | RAG search service |
-| `LLM_BASE_URL` | `http://llm-internal:8001` | Internal LLM API |
-| `BACKEND_BASE_URL` | `http://backend-mock:8081` | AI Log collection |
-| `PII_ENABLED` | `true` | Enable PII masking |
+#### 환경변수
+| 변수명 | 값 | 설명 |
+|--------|-----|------|
+| `RAGFLOW_BASE_URL` | `http://ragflow:8080` | RAG 검색 서비스 |
+| `LLM_BASE_URL` | `http://llm-internal:8001` | 내부 LLM API |
+| `BACKEND_BASE_URL` | `http://backend-mock:8081` | AI 로그 수집 |
+| `PII_ENABLED` | `true` | PII 마스킹 활성화 |
 
-### 2. Mock RAGFlow Server (`mock_ragflow/`)
+### 2. Mock RAGFlow 서버 (`mock_ragflow/`)
 
-#### Endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/search` | RAG document search |
-| `GET` | `/health` | Health check |
-| `GET` | `/stats` | Call statistics (for testing) |
-| `POST` | `/stats/reset` | Reset statistics |
+#### 엔드포인트
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `POST` | `/search` | RAG 문서 검색 |
+| `GET` | `/health` | 헬스체크 |
+| `GET` | `/stats` | 호출 통계 (테스트용) |
+| `POST` | `/stats/reset` | 통계 초기화 |
 
-#### Search Logic
-- Returns POLICY documents for queries containing: "annual leave", "vacation", "policy"
-- Returns empty results for other queries (fallback test)
-- Supports `dataset` parameter for domain filtering
+#### 검색 로직
+- "연차", "휴가", "규정" 키워드 포함 시 POLICY 문서 반환
+- 그 외 쿼리는 빈 결과 반환 (fallback 테스트용)
+- `dataset` 파라미터로 도메인 필터링 지원
 
-#### Sample Response
+#### 응답 예시
 ```json
 {
   "results": [
     {
       "doc_id": "HR-001",
-      "title": "Annual Leave Management Policy",
+      "title": "연차휴가 관리 규정",
       "page": 12,
       "score": 0.92,
-      "snippet": "Annual leave carryover cannot exceed 10 days..."
+      "snippet": "연차휴가의 이월은 최대 10일을 초과할 수 없으며..."
     }
   ]
 }
 ```
 
-### 3. Mock LLM Server (`mock_llm/`)
+### 3. Mock LLM 서버 (`mock_llm/`)
 
-#### Endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/v1/chat/completions` | OpenAI-compatible chat completion |
-| `GET` | `/v1/models` | List available models |
-| `GET` | `/health` | Health check |
-| `GET` | `/stats` | Call statistics |
-| `POST` | `/stats/reset` | Reset statistics |
+#### 엔드포인트
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `POST` | `/v1/chat/completions` | OpenAI 호환 채팅 완성 |
+| `GET` | `/v1/models` | 사용 가능한 모델 목록 |
+| `GET` | `/health` | 헬스체크 |
+| `GET` | `/stats` | 호출 통계 |
+| `POST` | `/stats/reset` | 통계 초기화 |
 
-#### Response Generation Logic
-- Generates context-aware responses based on user query keywords
-- Includes RAG context when provided in system message
-- Returns deterministic responses for testing
+#### 응답 생성 로직
+- 사용자 쿼리 키워드에 따라 컨텍스트 인식 응답 생성
+- 시스템 메시지에 RAG 컨텍스트가 있으면 문서 기반 응답
+- 테스트를 위한 결정적(deterministic) 응답 반환
 
-### 4. Mock Backend Server (`mock_backend/`)
+### 4. Mock Backend 서버 (`mock_backend/`)
 
-#### Endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/ai-logs` | Receive AI log entries |
-| `GET` | `/api/ai-logs` | Retrieve stored logs |
-| `GET` | `/health` | Health check |
-| `GET` | `/stats` | Call statistics |
-| `POST` | `/stats/reset` | Reset statistics |
+#### 엔드포인트
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `POST` | `/api/ai-logs` | AI 로그 엔트리 수신 |
+| `GET` | `/api/ai-logs` | 저장된 로그 조회 |
+| `GET` | `/health` | 헬스체크 |
+| `GET` | `/stats` | 호출 통계 |
+| `POST` | `/stats/reset` | 통계 초기화 |
 
-#### Log Storage
-- Stores all received logs in memory
-- Logs can be retrieved for test verification
-- Warns if raw PII data is detected
+#### 로그 저장
+- 모든 수신된 로그를 메모리에 저장
+- 테스트 검증을 위해 로그 조회 가능
+- 원본 PII 데이터 감지 시 경고 출력
 
-### 5. Integration Tests (`tests/integration/test_docker_e2e.py`)
+### 5. 통합 테스트 (`tests/integration/test_docker_e2e.py`)
 
-#### Test Scenarios
+#### 테스트 시나리오
 
-| # | Scenario | Validation |
-|---|----------|------------|
-| 1 | POLICY + RAG + LLM + PII + Log | Full happy path |
-| 2 | LLM-only route (general question) | RAG skipped |
-| 3 | POLICY with no RAG results | Fallback handling |
-| 4 | Response schema completeness | All fields present |
-| 5 | All services healthy | Health check validation |
+| # | 시나리오 | 검증 항목 |
+|---|----------|----------|
+| 1 | POLICY + RAG + LLM + PII + 로그 | 전체 해피패스 |
+| 2 | LLM-only 라우트 (일반 질문) | RAG 스킵 |
+| 3 | POLICY + RAG 결과 없음 | Fallback 처리 |
+| 4 | 응답 스키마 완전성 | 모든 필드 존재 확인 |
+| 5 | 모든 서비스 헬스체크 | 헬스체크 검증 |
 
-#### Test Configuration
+#### 테스트 설정
 ```python
 # pytest.ini
 markers =
-    integration: Docker Compose integration tests
+    integration: Docker Compose 통합 테스트
 
-addopts = -m "not integration"  # Exclude by default
+addopts = -m "not integration"  # 기본적으로 제외
 ```
 
-## Test Results
+## 테스트 결과
 
-### Unit Tests (Excluding Integration)
+### 단위 테스트 (통합 테스트 제외)
 ```
 $ pytest --tb=short -q
 87 passed, 5 deselected in 3.56s
 ```
 
-### Integration Tests (Requires Docker)
+### 통합 테스트 (Docker 필요)
 ```
 $ docker compose up -d
 $ pytest -m integration -v
 
-# Expected output (when Docker is running):
+# 예상 출력 (Docker 실행 중):
 # 5 passed
 ```
 
-## File Structure
+## 파일 구조
 
 ```
 ctrlf-ai/
-├── docker-compose.yml          # Docker Compose configuration
-├── Dockerfile                  # AI Gateway Dockerfile (existing)
+├── docker-compose.yml          # Docker Compose 설정
+├── Dockerfile                  # AI Gateway Dockerfile (기존)
 ├── mock_ragflow/
-│   ├── Dockerfile             # Mock RAGFlow container
-│   └── main.py                # FastAPI mock server
+│   ├── Dockerfile             # Mock RAGFlow 컨테이너
+│   └── main.py                # FastAPI Mock 서버
 ├── mock_llm/
-│   ├── Dockerfile             # Mock LLM container
-│   └── main.py                # OpenAI-compatible mock
+│   ├── Dockerfile             # Mock LLM 컨테이너
+│   └── main.py                # OpenAI 호환 Mock
 ├── mock_backend/
-│   ├── Dockerfile             # Mock Backend container
-│   └── main.py                # AI Log collection mock
+│   ├── Dockerfile             # Mock Backend 컨테이너
+│   └── main.py                # AI 로그 수집 Mock
 ├── tests/
 │   └── integration/
 │       ├── __init__.py
-│       └── test_docker_e2e.py # Integration tests
-└── pytest.ini                  # Updated with integration marker
+│       └── test_docker_e2e.py # 통합 테스트
+└── pytest.ini                  # integration 마커 추가
 ```
 
-## Architecture
+## 아키텍처
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Docker Compose Network (ctrlf-net)                  │
+│                      Docker Compose 네트워크 (ctrlf-net)                    │
 │                                                                             │
 │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐        │
 │  │  Mock RAGFlow   │    │   Mock LLM      │    │  Mock Backend   │        │
@@ -191,53 +191,53 @@ ctrlf-ai/
 └──────────────────────────────────│──────────────────────────────────────────┘
                                    │
                     ┌──────────────▼──────────────┐
-                    │    Integration Tests        │
-                    │    (pytest -m integration)  │
+                    │       통합 테스트           │
+                    │  (pytest -m integration)   │
                     │                             │
-                    │  - HTTP requests to :8000   │
-                    │  - Verify mock stats        │
-                    │  - Check PII masking        │
-                    │  - Validate response schema │
+                    │  - :8000으로 HTTP 요청      │
+                    │  - Mock 통계 검증           │
+                    │  - PII 마스킹 확인          │
+                    │  - 응답 스키마 검증         │
                     └─────────────────────────────┘
 ```
 
-## How to Run
+## 실행 방법
 
-### 1. Start Services
+### 1. 서비스 시작
 ```bash
 cd ctrlf-ai
 docker compose up -d
 
-# Check service status
+# 서비스 상태 확인
 docker compose ps
 
-# View logs
+# 로그 보기
 docker compose logs -f
 ```
 
-### 2. Run Integration Tests
+### 2. 통합 테스트 실행
 ```bash
-# Run only integration tests
+# 통합 테스트만 실행
 pytest -m integration -v
 
-# Run all tests (including integration)
+# 모든 테스트 실행 (통합 테스트 포함)
 pytest --ignore-glob='**/integration/*' -v && pytest -m integration -v
 ```
 
-### 3. Stop Services
+### 3. 서비스 종료
 ```bash
 docker compose down
 ```
 
-### 4. Manual API Testing
+### 4. 수동 API 테스트
 ```bash
-# Health checks
+# 헬스체크
 curl http://localhost:8000/health
 curl http://localhost:8080/health
 curl http://localhost:8001/health
 curl http://localhost:8081/health
 
-# Chat request
+# 채팅 요청
 curl -X POST http://localhost:8000/ai/chat/messages \
   -H "Content-Type: application/json" \
   -d '{
@@ -245,24 +245,24 @@ curl -X POST http://localhost:8000/ai/chat/messages \
     "user_id": "emp-123",
     "user_role": "EMPLOYEE",
     "domain": "POLICY",
-    "messages": [{"role": "user", "content": "Tell me about annual leave policy"}]
+    "messages": [{"role": "user", "content": "연차휴가 규정 알려줘"}]
   }'
 
-# Check mock server stats
+# Mock 서버 통계 확인
 curl http://localhost:8080/stats  # RAGFlow
 curl http://localhost:8001/stats  # LLM
 curl http://localhost:8081/stats  # Backend
 ```
 
-## Next Steps (Phase 9 Candidates)
+## 다음 단계 (Phase 9 후보)
 
-1. **Real Service Integration**: Replace mocks with actual RAGFlow/LLM services
-2. **CI/CD Pipeline**: Add GitHub Actions workflow for integration tests
-3. **Performance Testing**: Load testing with locust or k6
-4. **Multi-Domain Testing**: INCIDENT, EDUCATION domain scenarios
-5. **Streaming Response**: SSE-based streaming integration test
+1. **실제 서비스 연동**: Mock을 실제 RAGFlow/LLM 서비스로 교체
+2. **CI/CD 파이프라인**: GitHub Actions 워크플로우 추가
+3. **성능 테스트**: locust 또는 k6로 부하 테스트
+4. **다중 도메인 테스트**: INCIDENT, EDUCATION 도메인 시나리오
+5. **스트리밍 응답**: SSE 기반 스트리밍 통합 테스트
 
 ---
 
-**Created**: 2025-12-09
-**Author**: Claude Opus 4.5 (AI Assistant)
+**작성일**: 2025-12-09
+**작성자**: Claude Opus 4.5 (AI Assistant)
