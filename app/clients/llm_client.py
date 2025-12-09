@@ -22,12 +22,13 @@ TODO 부분을 수정해야 합니다.
 
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-settings = get_settings()
 
 
 class LLMClient:
@@ -42,10 +43,34 @@ class LLMClient:
         _base_url: LLM 서비스 기본 URL
     """
 
-    def __init__(self) -> None:
-        """LLMClient 초기화"""
-        self._client = get_async_http_client()
-        self._base_url = settings.LLM_BASE_URL
+    # 설정이 없거나 LLM 호출 실패 시 반환할 기본 메시지
+    FALLBACK_MESSAGE = (
+        "LLM service is not configured or unavailable. "
+        "This is a fallback response. Please configure LLM_BASE_URL "
+        "or check the LLM service status."
+    )
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        client: Optional[httpx.AsyncClient] = None,
+    ) -> None:
+        """
+        LLMClient 초기화.
+
+        Args:
+            base_url: LLM 서비스 URL. None이면 설정에서 가져옴.
+            client: httpx.AsyncClient 인스턴스. None이면 공용 클라이언트 사용.
+        """
+        settings = get_settings()
+        self._base_url = base_url if base_url is not None else settings.LLM_BASE_URL
+        self._client = client or get_async_http_client()
+
+        if not self._base_url:
+            logger.warning(
+                "LLM_BASE_URL is not configured. "
+                "LLM API calls will be skipped and return fallback responses."
+            )
 
     def _ensure_base_url(self) -> None:
         """
@@ -86,13 +111,96 @@ class LLMClient:
     async def generate_chat_completion(
         self,
         messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> str:
+        """
+        ChatCompletion 스타일의 응답을 요청하고 텍스트를 반환합니다.
+
+        ChatService에서 사용하는 통합 메서드입니다.
+        base_url이 설정되지 않은 경우 fallback 메시지를 반환합니다.
+
+        Args:
+            messages: 대화 히스토리
+                [{"role": "user"/"assistant"/"system", "content": "..."}]
+            model: 사용할 모델 이름 (선택)
+            temperature: 응답 다양성 조절 (0.0 ~ 1.0)
+            max_tokens: 최대 토큰 수
+
+        Returns:
+            str: LLM 응답 텍스트 또는 fallback 메시지
+        """
+        if not self._base_url:
+            logger.warning("LLM generate_chat_completion skipped: base_url not configured")
+            return self.FALLBACK_MESSAGE
+
+        url = f"{self._base_url}/v1/chat/completions"
+        payload: Dict[str, Any] = {
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if model:
+            payload["model"] = model
+
+        logger.info(
+            f"Sending chat completion request to LLM: "
+            f"messages_count={len(messages)}, model={model or 'default'}"
+        )
+        logger.debug(f"LLM request payload: {payload}")
+
+        try:
+            response = await self._client.post(url, json=payload)
+            response.raise_for_status()
+
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                logger.warning("LLM response has no choices")
+                return self.FALLBACK_MESSAGE
+
+            message = choices[0].get("message", {})
+            content = message.get("content", "")
+
+            if not content:
+                logger.warning("LLM response has empty content")
+                return self.FALLBACK_MESSAGE
+
+            logger.info(
+                f"LLM chat completion success: response_length={len(content)}"
+            )
+            return content
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"LLM chat completion HTTP error: status={e.response.status_code}, "
+                f"detail={e.response.text[:200]}"
+            )
+            return self.FALLBACK_MESSAGE
+
+        except httpx.RequestError as e:
+            logger.error(f"LLM chat completion request error: {e}")
+            return self.FALLBACK_MESSAGE
+
+        except KeyError as e:
+            logger.error(f"LLM response parsing error: missing key {e}")
+            return self.FALLBACK_MESSAGE
+
+        except Exception as e:
+            logger.exception("LLM chat completion unexpected error")
+            return self.FALLBACK_MESSAGE
+
+    async def generate_chat_completion_raw(
+        self,
+        messages: List[Dict[str, str]],
         *,
         model: Optional[str] = None,
         temperature: float = 0.2,
         max_tokens: int = 512,
     ) -> Dict[str, Any]:
         """
-        ChatCompletion 스타일의 응답을 요청합니다.
+        ChatCompletion 스타일의 원본 응답을 반환합니다.
 
         TODO: 실제 LLM API 스펙에 맞게 엔드포인트/필드 이름을 수정해야 합니다.
 
