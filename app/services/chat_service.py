@@ -2,15 +2,23 @@
 Chat Service Module
 
 Business logic for AI chat functionality.
-Implements the complete RAG + LLM pipeline for generating AI responses:
-1. PII masking (input)
-2. Intent classification and routing
-3. Search relevant documents via RAGFlow (if route requires)
-4. Build LLM prompt with context from RAG results
-5. Generate response via LLM service
-6. PII masking (output)
-7. Generate and send AI log to backend
-8. Return formatted response with sources and metadata
+Implements the complete RAG + LLM pipeline for generating AI responses.
+
+Phase 6 RAG E2E 플로우 (ROUTE_RAG_INTERNAL):
+1. PII masking (INPUT) - 사용자 질문에서 PII 마스킹
+2. Intent classification - 의도 분류 및 라우팅 결정
+3. RAG search - RAGFlow에서 관련 문서 검색 (dataset=domain)
+4. Build LLM prompt - RAG context를 포함한 프롬프트 구성
+5. Generate response - LLM으로 답변 생성
+6. PII masking (OUTPUT) - LLM 응답에서 PII 마스킹
+7. Generate AI log - 백엔드로 로그 전송
+8. Return ChatResponse - answer + sources + meta 반환
+
+RAG Fallback 정책:
+- RAG 호출 실패 시: 로그에 경고 남기고 RAG 없이 LLM-only로 진행
+- RAG 결과 0건 시: "관련 문서를 찾지 못했습니다" 안내와 함께 일반 QA로 처리
+- meta.rag_used = len(sources) > 0
+- meta.rag_source_count = len(sources)
 """
 
 import asyncio
@@ -34,8 +42,8 @@ from app.services.pii_service import PiiService
 logger = get_logger(__name__)
 
 
-# System prompt template for LLM
-SYSTEM_PROMPT_TEMPLATE = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
+# System prompt template for LLM (RAG context가 있는 경우)
+SYSTEM_PROMPT_WITH_RAG = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
 아래의 참고 문서 목록을 바탕으로 사용자의 질문에 한국어로 정확하고 친절하게 답변해 주세요.
 답변 시 출처 문서를 인용하면 더 좋습니다.
 
@@ -43,20 +51,38 @@ SYSTEM_PROMPT_TEMPLATE = """당신은 회사 내부 정보보호 및 사규를 �
 추측이나 거짓 정보를 제공하지 마세요.
 """
 
+# System prompt template for LLM (RAG context가 없는 경우)
+SYSTEM_PROMPT_NO_RAG = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
+현재 관련 문서를 찾지 못했습니다. 일반적인 지식을 바탕으로 답변하되,
+구체적인 사내 규정이나 정책에 대해서는 "관련 문서를 찾지 못했으므로, 담당 부서에 직접 문의해 주세요"라고 안내해 주세요.
+추측이나 거짓 정보를 제공하지 마세요.
+"""
+
+# RAG 검색 결과가 없을 때 사용자에게 안내할 메시지
+NO_RAG_RESULTS_NOTICE = (
+    "\n\n※ 참고: 관련 문서를 찾지 못하여 일반적인 답변을 드립니다. "
+    "정확한 정보는 담당 부서에 확인해 주세요."
+)
+
 
 class ChatService:
     """
     Chat service handling AI conversation logic.
 
     This service implements the complete RAG + LLM pipeline:
-    1. PII masking (input) - Mask PII in user query
+    1. PII masking (INPUT) - Mask PII in user query
     2. Intent classification - Determine intent and routing
     3. RAG search - Search relevant documents (if route requires)
     4. Build LLM prompt - Construct prompt with RAG context
     5. Generate response - Call LLM for response
-    6. PII masking (output) - Mask any PII in LLM response
+    6. PII masking (OUTPUT) - Mask any PII in LLM response
     7. Generate and send AI log - Create log entry and send to backend
     8. Return response - Return formatted ChatResponse
+
+    RAG Fallback Strategy:
+    - RAG 호출 실패 시: 경고 로그 남기고 RAG 없이 LLM-only로 진행
+    - RAG 결과 0건 시: 안내 문구와 함께 일반 QA로 처리
+    - meta.rag_used = True only if len(sources) > 0
 
     Attributes:
         _ragflow: RagflowClient for document search
@@ -103,7 +129,7 @@ class ChatService:
         1. Extract user query from last message
         2. PII masking (INPUT stage)
         3. Intent classification and routing
-        4. RAG search (if route requires)
+        4. RAG search (if route requires) - ROUTE_RAG_INTERNAL
         5. Build LLM messages with system prompt and RAG context
         6. Call LLM to generate response
         7. PII masking (OUTPUT stage)
@@ -166,11 +192,15 @@ class ChatService:
 
         # Step 4: RAG Search (based on route)
         sources: List[ChatSource] = []
+        rag_search_attempted = False
+        rag_search_failed = False
 
         if route == RouteType.ROUTE_RAG_INTERNAL:
             # RAG search for internal policy/document queries
+            rag_search_attempted = True
             try:
-                sources = await self._ragflow.search(
+                # search_as_sources: RagDocument → ChatSource 변환 포함
+                sources = await self._ragflow.search_as_sources(
                     query=masked_query,
                     domain=domain,
                     user_role=req.user_role,
@@ -178,8 +208,18 @@ class ChatService:
                     top_k=5,
                 )
                 logger.info(f"RAG search returned {len(sources)} sources")
+
+                if not sources:
+                    logger.warning(
+                        f"RAG search returned no results for query: {masked_query[:50]}..."
+                    )
+
             except Exception as e:
-                logger.exception("RAG search failed")
+                # RAG Fallback 정책: RAG 호출 실패 시 로그 남기고 LLM-only로 진행
+                logger.exception(
+                    f"RAG search failed, proceeding with LLM-only: {e}"
+                )
+                rag_search_failed = True
                 sources = []
 
         elif route in {RouteType.ROUTE_LLM_ONLY, RouteType.ROUTE_TRAINING}:
@@ -199,7 +239,12 @@ class ChatService:
             sources = []
 
         # Step 5: Build LLM prompt messages
-        llm_messages = self._build_llm_messages(masked_query, sources, req)
+        llm_messages = self._build_llm_messages(
+            user_query=masked_query,
+            sources=sources,
+            req=req,
+            rag_attempted=rag_search_attempted,
+        )
 
         # Step 6: Generate LLM response
         raw_answer: str
@@ -212,11 +257,12 @@ class ChatService:
                 temperature=0.2,
                 max_tokens=1024,
             )
-            # Update route based on actual sources used
-            if route == RouteType.ROUTE_RAG_INTERNAL and not sources:
-                # TODO: RAG 결과가 없을 때 route를 ROUTE_LLM_ONLY로 바꿀지 여부
-                # 현재는 그대로 둠
-                pass
+
+            # RAG 시도했지만 결과 없으면 안내 문구 추가
+            if rag_search_attempted and not sources and not rag_search_failed:
+                # LLM 응답에 안내 문구 추가 (RAG 결과 0건인 경우)
+                raw_answer = raw_answer.rstrip() + NO_RAG_RESULTS_NOTICE
+
         except Exception as e:
             logger.exception("LLM generation failed")
             raw_answer = (
@@ -243,8 +289,9 @@ class ChatService:
         # Calculate latency
         latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-        # Determine if RAG was used
-        rag_used = final_route == RouteType.ROUTE_RAG_INTERNAL and len(sources) > 0
+        # Determine if RAG was actually used (results > 0)
+        # Phase 6 정책: rag_used = len(sources) > 0
+        rag_used = len(sources) > 0
 
         # Build metadata with extended fields for logging
         meta = ChatAnswerMeta(
@@ -263,7 +310,8 @@ class ChatService:
         logger.info(
             f"Chat response generated: session_id={req.session_id}, "
             f"latency_ms={latency_ms}, sources_count={len(sources)}, "
-            f"route={final_route.value}, intent={intent.value}, masked={has_pii}"
+            f"route={final_route.value}, intent={intent.value}, "
+            f"rag_used={rag_used}, masked={has_pii}"
         )
 
         # Step 8: Generate and send AI log (fire-and-forget)
@@ -365,12 +413,13 @@ class ChatService:
         user_query: str,
         sources: List[ChatSource],
         req: ChatRequest,
+        rag_attempted: bool = False,
     ) -> List[Dict[str, str]]:
         """
         Build message list for LLM chat completion.
 
         Constructs a message array with:
-        1. System prompt with instructions
+        1. System prompt with instructions (RAG context 유무에 따라 다름)
         2. RAG context (if sources available)
         3. User's actual question
 
@@ -378,21 +427,26 @@ class ChatService:
             user_query: The user's question text (masked if PII was detected)
             sources: List of ChatSource from RAG search
             req: Original ChatRequest for context
+            rag_attempted: Whether RAG search was attempted
 
         Returns:
             List of message dicts with 'role' and 'content' keys
         """
         messages: List[Dict[str, str]] = []
 
-        # System message with instructions
-        system_content = SYSTEM_PROMPT_TEMPLATE
-
-        # Add RAG context to system message if sources found
+        # System message - RAG context 유무에 따라 다른 프롬프트 사용
         if sources:
+            # RAG 결과가 있는 경우
+            system_content = SYSTEM_PROMPT_WITH_RAG
             context_text = self._format_sources_for_prompt(sources)
             system_content += f"\n\n참고 문서:\n{context_text}"
+        elif rag_attempted:
+            # RAG 시도했지만 결과 없는 경우
+            system_content = SYSTEM_PROMPT_NO_RAG
         else:
-            system_content += "\n\n참고 문서: (검색된 문서가 없습니다)"
+            # RAG 시도하지 않은 경우 (ROUTE_LLM_ONLY 등)
+            system_content = SYSTEM_PROMPT_WITH_RAG
+            system_content += "\n\n참고 문서: (검색 대상 아님)"
 
         messages.append({
             "role": "system",
@@ -468,5 +522,7 @@ class ChatService:
                 route=RouteType.ROUTE_FALLBACK.value,
                 masked=has_pii,
                 latency_ms=latency_ms,
+                rag_used=False,
+                rag_source_count=0,
             ),
         )
