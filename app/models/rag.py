@@ -78,3 +78,25 @@ class RagProcessResponse(BaseModel):
     message: Optional[str] = Field(
         default=None, description="Additional description or error message"
     )
+
+
+class RagDocument(BaseModel):
+    """
+    RAG 검색 결과로 반환되는 문서 모델.
+
+    RAGFlow 검색 API 응답을 정규화한 모델입니다.
+    ChatSource로 변환하여 ChatResponse.sources에 포함됩니다.
+
+    Attributes:
+        doc_id: 문서 ID (백엔드/RAGFlow에서 관리)
+        title: 문서 제목
+        page: 문서 내 페이지 번호 (해당되는 경우)
+        score: 검색 관련도 점수 (0.0 ~ 1.0)
+        snippet: 문서에서 추출한 텍스트 발췌문
+    """
+
+    doc_id: str = Field(description="문서 ID (백엔드/RAGFlow에서 관리)")
+    title: str = Field(description="문서 제목")
+    page: Optional[int] = Field(default=None, description="문서 내 페이지 번호")
+    score: float = Field(description="검색 관련도 점수 (0.0 ~ 1.0)")
+    snippet: Optional[str] = Field(default=None, description="문서에서 추출한 텍스트 발췌문")
