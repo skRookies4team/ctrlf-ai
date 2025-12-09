@@ -21,11 +21,11 @@ from app.models.intent import (
     PiiMaskResult,
     RouteType,
 )
+from app.clients.llm_client import LLMClient
+from app.clients.ragflow_client import RagflowClient
 from app.services.chat_service import ChatService
 from app.services.intent_service import IntentService
-from app.services.llm_client import LLMClient
 from app.services.pii_service import PiiService
-from app.services.ragflow_client import RagflowClient
 
 
 @pytest.fixture

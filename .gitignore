@@ -131,5 +131,5 @@ Thumbs.db
 # Project specific
 prompt.txt
 *.xlsx
-DEVELOPMENT_REPORT*.md
+/DEVELOPMENT_REPORT*.md
 .claude/

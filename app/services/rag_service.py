@@ -16,7 +16,7 @@ from typing import Optional
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.rag import RagProcessRequest, RagProcessResponse
-from app.services.ragflow_client import RagflowClient
+from app.clients.ragflow_client import RagflowClient
 
 logger = get_logger(__name__)
 

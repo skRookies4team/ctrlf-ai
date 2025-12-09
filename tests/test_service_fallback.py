@@ -13,10 +13,10 @@ import pytest
 
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
 from app.models.rag import RagProcessRequest, RagProcessResponse
+from app.clients.llm_client import LLMClient
+from app.clients.ragflow_client import RagflowClient
 from app.services.chat_service import ChatService
-from app.services.llm_client import LLMClient
 from app.services.rag_service import RagService
-from app.services.ragflow_client import RagflowClient
 
 
 @pytest.fixture
@@ -227,7 +227,7 @@ async def test_ragflow_client_process_returns_failure_without_config() -> None:
         domain="EDUCATION",
     )
 
-    result = await client.process_document(request)
+    result = await client.process_document_request(request)
 
     assert result.success is False
     assert result.doc_id == "TEST-002"

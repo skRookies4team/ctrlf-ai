@@ -25,11 +25,11 @@ from app.models.chat import (
     ChatSource,
 )
 from app.models.intent import MaskingStage, RouteType
+from app.clients.llm_client import LLMClient
+from app.clients.ragflow_client import RagflowClient
 from app.services.ai_log_service import AILogService
 from app.services.intent_service import IntentService
-from app.services.llm_client import LLMClient
 from app.services.pii_service import PiiService
-from app.services.ragflow_client import RagflowClient
 
 logger = get_logger(__name__)
 
