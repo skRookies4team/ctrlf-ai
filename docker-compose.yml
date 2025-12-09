@@ -1,0 +1,114 @@
+# ctrlf-ai Phase 8: Docker Compose 통합 테스트 환경
+# 사용법: docker compose up -d
+# 테스트: pytest tests/integration/test_docker_e2e.py -v
+
+version: "3.8"
+
+services:
+  # =============================================================================
+  # AI Gateway (ctrlf-ai) - 메인 서비스
+  # =============================================================================
+  ai-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ctrlf-ai-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=ctrlf-ai-gateway
+      - APP_ENV=docker
+      - LOG_LEVEL=DEBUG
+      # 외부 서비스 연결 (Docker 네트워크 내부 호스트명 사용)
+      - RAGFLOW_BASE_URL=http://ragflow:8080
+      - LLM_BASE_URL=http://llm-internal:8001
+      - BACKEND_BASE_URL=http://backend-mock:8081
+      # PII 마스킹은 내장 규칙 사용 (외부 서비스 없음)
+      - PII_BASE_URL=
+      - PII_ENABLED=true
+    depends_on:
+      ragflow:
+        condition: service_healthy
+      llm-internal:
+        condition: service_healthy
+      backend-mock:
+        condition: service_healthy
+    networks:
+      - ctrlf-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # =============================================================================
+  # Mock RAGFlow 서비스 - RAG 검색 API
+  # =============================================================================
+  ragflow:
+    build:
+      context: ./mock_ragflow
+      dockerfile: Dockerfile
+    container_name: ctrlf-mock-ragflow
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_LEVEL=DEBUG
+    networks:
+      - ctrlf-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # =============================================================================
+  # Mock LLM 서비스 - 내부 LLM HTTP API (OpenAI 호환)
+  # =============================================================================
+  llm-internal:
+    build:
+      context: ./mock_llm
+      dockerfile: Dockerfile
+    container_name: ctrlf-mock-llm
+    ports:
+      - "8001:8001"
+    environment:
+      - LOG_LEVEL=DEBUG
+    networks:
+      - ctrlf-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # =============================================================================
+  # Mock Backend 서비스 - AI 로그 수집 API
+  # =============================================================================
+  backend-mock:
+    build:
+      context: ./mock_backend
+      dockerfile: Dockerfile
+    container_name: ctrlf-mock-backend
+    ports:
+      - "8081:8081"
+    environment:
+      - LOG_LEVEL=DEBUG
+    networks:
+      - ctrlf-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+# =============================================================================
+# 네트워크 설정
+# =============================================================================
+networks:
+  ctrlf-net:
+    driver: bridge
+    name: ctrlf-network
