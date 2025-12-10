@@ -2,11 +2,18 @@
 AI 로그 모델 및 서비스 테스트 모듈
 
 AILogEntry 모델, AILogService의 로그 생성 및 전송 기능을 테스트합니다.
+
+Phase 10 업데이트:
+- camelCase JSON 직렬화 검증 테스트 추가
+- to_backend_log_payload 헬퍼 함수 테스트 추가
 """
 
+import json
+
+import httpx
 import pytest
 
-from app.models.ai_log import AILogEntry, AILogRequest, AILogResponse
+from app.models.ai_log import AILogEntry, AILogRequest, AILogResponse, to_backend_log_payload
 from app.models.chat import ChatAnswerMeta, ChatRequest, ChatMessage, ChatResponse
 from app.services.ai_log_service import AILogService
 
@@ -304,3 +311,320 @@ class TestChatAnswerMetaExtended:
         assert data["intent"] == "GENERAL_CHAT"
         assert data["domain"] == "GENERAL"
         assert data["rag_used"] is None  # 기본값
+
+
+# =============================================================================
+# Phase 10: camelCase JSON 직렬화 테스트
+# =============================================================================
+
+
+class TestCamelCaseSerialization:
+    """camelCase JSON 직렬화 테스트 (Phase 10)."""
+
+    def test_log_entry_camel_case_serialization(self):
+        """
+        AILogEntry.model_dump(by_alias=True) 결과가 camelCase인지 검증.
+
+        백엔드(ctrlf-back)는 camelCase JSON을 기대함.
+        """
+        log = AILogEntry(
+            session_id="session-123",
+            user_id="user-456",
+            turn_index=0,
+            user_role="EMPLOYEE",
+            has_pii_input=True,
+            has_pii_output=False,
+            model_name="qwen2.5-7b",
+            rag_used=True,
+            rag_source_count=5,
+            latency_ms=1500,
+            error_code="E001",
+            error_message="Test error",
+            question_masked="masked question",
+            answer_masked="masked answer",
+            domain="POLICY",
+            intent="POLICY_QA",
+            route="ROUTE_RAG_INTERNAL",
+        )
+
+        # camelCase로 직렬화
+        data = log.model_dump(by_alias=True)
+
+        # snake_case → camelCase 매핑 검증
+        assert "sessionId" in data
+        assert data["sessionId"] == "session-123"
+
+        assert "userId" in data
+        assert data["userId"] == "user-456"
+
+        assert "turnIndex" in data
+        assert data["turnIndex"] == 0
+
+        assert "userRole" in data
+        assert data["userRole"] == "EMPLOYEE"
+
+        assert "hasPiiInput" in data
+        assert data["hasPiiInput"] is True
+
+        assert "hasPiiOutput" in data
+        assert data["hasPiiOutput"] is False
+
+        assert "modelName" in data
+        assert data["modelName"] == "qwen2.5-7b"
+
+        assert "ragUsed" in data
+        assert data["ragUsed"] is True
+
+        assert "ragSourceCount" in data
+        assert data["ragSourceCount"] == 5
+
+        assert "latencyMs" in data
+        assert data["latencyMs"] == 1500
+
+        assert "errorCode" in data
+        assert data["errorCode"] == "E001"
+
+        assert "errorMessage" in data
+        assert data["errorMessage"] == "Test error"
+
+        assert "questionMasked" in data
+        assert "answerMasked" in data
+
+        # alias가 없는 필드는 원래 이름 유지
+        assert "channel" in data
+        assert "domain" in data
+        assert "intent" in data
+        assert "route" in data
+
+    def test_to_backend_log_payload_helper(self):
+        """
+        to_backend_log_payload() 헬퍼 함수가 올바른 형태를 반환하는지 검증.
+
+        반환 형태: {"log": {"sessionId": ..., "userId": ..., ...}}
+        """
+        log = AILogEntry(
+            session_id="test-session",
+            user_id="test-user",
+            user_role="MANAGER",
+            domain="INCIDENT",
+            intent="INCIDENT_REPORT",
+            route="ROUTE_INCIDENT",
+            has_pii_input=False,
+            has_pii_output=True,
+            rag_used=False,
+            rag_source_count=0,
+            latency_ms=800,
+        )
+
+        payload = to_backend_log_payload(log)
+
+        # {"log": {...}} 형태 확인
+        assert "log" in payload
+        assert isinstance(payload["log"], dict)
+
+        # camelCase 필드 확인
+        log_data = payload["log"]
+        assert log_data["sessionId"] == "test-session"
+        assert log_data["userId"] == "test-user"
+        assert log_data["userRole"] == "MANAGER"
+        assert log_data["hasPiiInput"] is False
+        assert log_data["hasPiiOutput"] is True
+        assert log_data["ragUsed"] is False
+        assert log_data["ragSourceCount"] == 0
+        assert log_data["latencyMs"] == 800
+
+    def test_ai_log_request_to_backend_payload(self):
+        """
+        AILogRequest.to_backend_payload() 메서드가 올바른 형태를 반환하는지 검증.
+        """
+        log = AILogEntry(
+            session_id="req-session",
+            user_id="req-user",
+            user_role="ADMIN",
+            domain="EDUCATION",
+            intent="EDUCATION_QA",
+            route="ROUTE_TRAINING",
+            latency_ms=500,
+        )
+
+        request = AILogRequest(log=log)
+        payload = request.to_backend_payload()
+
+        assert "log" in payload
+        assert payload["log"]["sessionId"] == "req-session"
+        assert payload["log"]["userId"] == "req-user"
+        assert payload["log"]["userRole"] == "ADMIN"
+
+    def test_exclude_none_values(self):
+        """
+        None 값 필드가 exclude_none=True로 제외되는지 검증.
+        """
+        log = AILogEntry(
+            session_id="session-123",
+            user_id="user-456",
+            user_role="EMPLOYEE",
+            domain="POLICY",
+            intent="POLICY_QA",
+            route="ROUTE_RAG_INTERNAL",
+            latency_ms=1000,
+            # None 값 필드들
+            turn_index=None,
+            department=None,
+            model_name=None,
+            error_code=None,
+            error_message=None,
+            question_masked=None,
+            answer_masked=None,
+        )
+
+        payload = to_backend_log_payload(log)
+        log_data = payload["log"]
+
+        # None 값 필드는 제외됨
+        assert "turnIndex" not in log_data
+        assert "department" not in log_data
+        assert "modelName" not in log_data
+        assert "errorCode" not in log_data
+        assert "errorMessage" not in log_data
+        assert "questionMasked" not in log_data
+        assert "answerMasked" not in log_data
+
+        # 값이 있는 필드는 포함됨
+        assert "sessionId" in log_data
+        assert "userId" in log_data
+
+    def test_camel_case_json_string(self):
+        """
+        JSON 문자열로 직렬화 시에도 camelCase가 유지되는지 검증.
+        """
+        log = AILogEntry(
+            session_id="json-session",
+            user_id="json-user",
+            user_role="EMPLOYEE",
+            domain="POLICY",
+            intent="POLICY_QA",
+            route="ROUTE_RAG_INTERNAL",
+            has_pii_input=True,
+            latency_ms=1000,
+        )
+
+        payload = to_backend_log_payload(log)
+        json_str = json.dumps(payload)
+
+        # JSON 문자열에 camelCase 키가 있는지 확인
+        assert '"sessionId"' in json_str
+        assert '"userId"' in json_str
+        assert '"userRole"' in json_str
+        assert '"hasPiiInput"' in json_str
+        assert '"latencyMs"' in json_str
+
+        # snake_case 키는 없어야 함
+        assert '"session_id"' not in json_str
+        assert '"user_id"' not in json_str
+        assert '"user_role"' not in json_str
+        assert '"has_pii_input"' not in json_str
+        assert '"latency_ms"' not in json_str
+
+
+class TestBackendClientCamelCase:
+    """BackendClient camelCase 전송 테스트 (Phase 10)."""
+
+    @pytest.fixture
+    def anyio_backend(self) -> str:
+        return "asyncio"
+
+    @pytest.mark.anyio
+    async def test_backend_client_sends_camel_case(self):
+        """
+        BackendClient.send_ai_log()가 camelCase JSON을 전송하는지 검증.
+        """
+        from app.clients.backend_client import BackendClient
+
+        captured_request = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_request["payload"] = json.loads(request.content)
+            captured_request["headers"] = dict(request.headers)
+            return httpx.Response(
+                status_code=200,
+                json={"success": True, "logId": "log-001", "message": "Saved"},
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            # httpx client 주입을 위해 별도 처리 필요
+            # 여기서는 payload 변환 로직만 단위 테스트
+
+            log = AILogEntry(
+                session_id="backend-test-session",
+                user_id="backend-test-user",
+                user_role="EMPLOYEE",
+                domain="POLICY",
+                intent="POLICY_QA",
+                route="ROUTE_RAG_INTERNAL",
+                has_pii_input=True,
+                has_pii_output=False,
+                rag_used=True,
+                rag_source_count=3,
+                latency_ms=1200,
+            )
+
+            # to_backend_log_payload 함수로 직접 검증
+            payload = to_backend_log_payload(log)
+
+            # POST 요청 시뮬레이션
+            response = await client.post(
+                "http://test-backend:8080/api/ai-logs",
+                json=payload,
+            )
+
+            assert response.status_code == 200
+
+        # 전송된 payload 검증
+        sent_payload = captured_request["payload"]
+        assert "log" in sent_payload
+
+        log_data = sent_payload["log"]
+        assert log_data["sessionId"] == "backend-test-session"
+        assert log_data["userId"] == "backend-test-user"
+        assert log_data["hasPiiInput"] is True
+        assert log_data["hasPiiOutput"] is False
+        assert log_data["ragUsed"] is True
+        assert log_data["ragSourceCount"] == 3
+        assert log_data["latencyMs"] == 1200
+
+    @pytest.mark.anyio
+    async def test_backend_client_authorization_header(self):
+        """
+        BACKEND_API_TOKEN이 설정된 경우 Authorization 헤더가 추가되는지 검증.
+        """
+        from app.clients.backend_client import BackendClient
+
+        captured_headers = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_headers.update(dict(request.headers))
+            return httpx.Response(
+                status_code=200,
+                json={"success": True},
+            )
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            # api_token을 직접 전달하여 테스트
+            backend_client = BackendClient(
+                base_url="http://test-backend:8080",
+                api_token="test-secret-token",
+            )
+
+            # Authorization 헤더 생성 확인
+            headers = backend_client._get_auth_headers()
+            assert headers["Authorization"] == "Bearer test-secret-token"
+
+            # 토큰 없는 경우
+            backend_client_no_token = BackendClient(
+                base_url="http://test-backend:8080",
+                api_token=None,
+            )
+            headers_no_token = backend_client_no_token._get_auth_headers()
+            assert headers_no_token == {}

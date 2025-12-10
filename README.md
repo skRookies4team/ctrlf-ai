@@ -122,7 +122,7 @@ curl http://localhost:8000/health/ready
 ## 테스트 실행
 
 ```bash
-# 모든 테스트 실행
+# 단위 테스트 실행 (기본, 빠름)
 pytest
 
 # 상세 출력
@@ -134,6 +134,39 @@ pytest tests/test_health.py
 # 커버리지 포함 (pytest-cov 설치 필요)
 pytest --cov=app tests/
 ```
+
+### Docker Compose 통합 테스트 (Mock 모드)
+
+```bash
+# Mock 서비스 시작
+docker compose --profile mock up -d
+
+# Mock 통합 테스트 실행
+pytest -m integration -v
+
+# 서비스 종료
+docker compose --profile mock down
+```
+
+### Real 환경 Smoke 테스트 (Phase 9)
+
+```bash
+# 환경변수 설정 (실제 서비스 URL)
+export RAGFLOW_BASE_URL_REAL=http://your-ragflow:8080
+export LLM_BASE_URL_REAL=http://your-llm:8001
+export BACKEND_BASE_URL_REAL=http://your-backend:8080
+
+# Real 모드로 AI Gateway 시작
+docker compose --profile real up -d
+
+# Real 환경 smoke 테스트 실행
+pytest -m real_integration -v
+
+# 서비스 종료
+docker compose --profile real down
+```
+
+**주의**: Real 테스트는 실제 LLM API를 호출하므로 비용이 발생할 수 있습니다.
 
 ## Docker 빌드 및 실행
 
@@ -170,18 +203,44 @@ curl http://localhost:8000/health
 
 ## 환경변수
 
+### 기본 설정
+
 | 변수명 | 설명 | 기본값 |
 |--------|------|--------|
 | `APP_NAME` | 애플리케이션 이름 | `ctrlf-ai-gateway` |
 | `APP_ENV` | 실행 환경 (local/dev/prod) | `local` |
 | `APP_VERSION` | 버전 | `0.1.0` |
 | `LOG_LEVEL` | 로그 레벨 | `INFO` |
-| `RAGFLOW_BASE_URL` | RAGFlow 서비스 URL | - |
-| `LLM_BASE_URL` | LLM 서비스 URL | - |
-| `BACKEND_BASE_URL` | Spring 백엔드 URL | - |
+| `CORS_ORIGINS` | 허용할 Origin (쉼표 구분) | `*` |
+
+### Mock/Real 모드 설정 (Phase 9)
+
+| 변수명 | 설명 | 기본값 |
+|--------|------|--------|
+| `AI_ENV` | 서비스 모드 (`mock` 또는 `real`) | `mock` |
+| `RAGFLOW_BASE_URL` | RAGFlow URL (직접 지정, 최우선) | - |
+| `RAGFLOW_BASE_URL_MOCK` | Mock 모드용 RAGFlow URL | `http://ragflow:8080` |
+| `RAGFLOW_BASE_URL_REAL` | Real 모드용 RAGFlow URL | - |
+| `LLM_BASE_URL` | LLM URL (직접 지정, 최우선) | - |
+| `LLM_BASE_URL_MOCK` | Mock 모드용 LLM URL | `http://llm-internal:8001` |
+| `LLM_BASE_URL_REAL` | Real 모드용 LLM URL | - |
+| `BACKEND_BASE_URL` | Backend URL (직접 지정, 최우선) | - |
+| `BACKEND_BASE_URL_MOCK` | Mock 모드용 Backend URL | `http://backend-mock:8081` |
+| `BACKEND_BASE_URL_REAL` | Real 모드용 Backend URL | - |
+| `BACKEND_API_TOKEN` | Backend API 인증 토큰 | - |
+
+### PII 마스킹 설정
+
+| 변수명 | 설명 | 기본값 |
+|--------|------|--------|
 | `PII_BASE_URL` | PII 마스킹 서비스 URL (선택) | - |
 | `PII_ENABLED` | PII 마스킹 활성화 여부 | `true` |
-| `CORS_ORIGINS` | 허용할 Origin (쉼표 구분) | `*` |
+
+### URL 선택 우선순위
+
+1. `*_BASE_URL` (직접 지정) - 설정되어 있으면 최우선
+2. `AI_ENV=real` → `*_BASE_URL_REAL` 사용
+3. `AI_ENV=mock` (기본값) → `*_BASE_URL_MOCK` 사용
 
 ## API 엔드포인트
 
@@ -344,13 +403,16 @@ External Services (RAGFlow, LLM)
 5. `app/main.py`에서 라우터 등록
 6. `tests/`에 테스트 파일 추가
 
-### 향후 구현 예정
+### 구현 완료
 
-- [ ] PII 마스킹 로직
-- [ ] 의도 분류 (Intent Classification)
-- [ ] RAGFlow 연동 (문서 검색)
-- [ ] LLM 연동 (응답 생성)
-- [ ] 응답 후처리
+- [x] PII 마스킹 로직 (Phase 4)
+- [x] 의도 분류 및 라우팅 (Phase 4)
+- [x] RAGFlow 연동 (Phase 3)
+- [x] LLM 연동 (Phase 3)
+- [x] AI 로그 백엔드 전송 (Phase 5)
+- [x] Docker Compose 통합 테스트 (Phase 8)
+- [x] Mock/Real 모드 전환 (Phase 9)
+- [x] AI 로그 camelCase JSON (Phase 10)
 
 ## 라이선스
 

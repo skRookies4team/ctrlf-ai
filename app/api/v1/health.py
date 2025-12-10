@@ -109,24 +109,25 @@ async def readiness_check(
     """
     checks: Dict[str, bool] = {}
 
+    # Phase 9: mock/real 모드에 따라 자동으로 URL 선택됨
     # RAGFlow 헬스체크
-    if settings.RAGFLOW_BASE_URL:
+    if settings.ragflow_base_url:
         ragflow_client = RagflowClient()
         rag_ok = await ragflow_client.health_check()
         checks["ragflow"] = rag_ok
 
     # LLM 헬스체크
-    if settings.LLM_BASE_URL:
+    if settings.llm_base_url:
         llm_client = LLMClient()
         llm_ok = await llm_client.health_check()
         checks["llm"] = llm_ok
 
     # Backend(Spring) 헬스체크
-    if settings.BACKEND_BASE_URL:
+    if settings.backend_base_url:
         client = get_async_http_client()
         try:
             # TODO: 실제 백엔드 health 엔드포인트(/actuator/health 등)로 수정
-            resp = await client.get(f"{settings.BACKEND_BASE_URL}/health")
+            resp = await client.get(f"{settings.backend_base_url}/health")
             backend_ok = resp.status_code == 200
         except Exception as e:
             logger.exception("Backend health check error: %s", e)

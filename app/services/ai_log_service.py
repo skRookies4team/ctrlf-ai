@@ -16,7 +16,7 @@ from typing import Optional
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.models.ai_log import AILogEntry, AILogRequest, AILogResponse
+from app.models.ai_log import AILogEntry, AILogRequest, AILogResponse, to_backend_log_payload
 from app.models.chat import ChatRequest, ChatResponse
 from app.models.intent import MaskingStage, PiiMaskResult
 from app.services.pii_service import PiiService
@@ -51,8 +51,9 @@ class AILogService:
         self._pii_service = pii_service or PiiService()
 
         # 백엔드 로그 엔드포인트 설정
-        if settings.BACKEND_BASE_URL:
-            self._backend_log_endpoint = f"{settings.BACKEND_BASE_URL}/api/ai-logs"
+        # Phase 9: backend_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
+        if settings.backend_base_url:
+            self._backend_log_endpoint = f"{settings.backend_base_url}/api/ai-logs"
         else:
             self._backend_log_endpoint = None
 
@@ -74,6 +75,7 @@ class AILogService:
         turn_index: Optional[int] = None,
         question_masked: Optional[str] = None,
         answer_masked: Optional[str] = None,
+        rag_gap_candidate: bool = False,
     ) -> AILogEntry:
         """
         채팅 요청/응답 및 파이프라인 메타데이터로부터 AILogEntry를 생성합니다.
@@ -119,6 +121,7 @@ class AILogService:
             error_message=error_message,
             question_masked=question_masked,
             answer_masked=answer_masked,
+            rag_gap_candidate=rag_gap_candidate,
         )
 
     async def mask_for_log(
@@ -182,14 +185,22 @@ class AILogService:
             logger.debug("BACKEND_BASE_URL not configured, skipping remote log")
             return True
 
-        # 백엔드로 전송
+        # 백엔드로 전송 (camelCase JSON)
         try:
             client = get_async_http_client()
-            request_data = AILogRequest(log=log_entry)
+
+            # camelCase JSON payload 생성
+            payload = to_backend_log_payload(log_entry)
+
+            # 인증 헤더 설정 (있으면)
+            headers = {}
+            if settings.BACKEND_API_TOKEN:
+                headers["Authorization"] = f"Bearer {settings.BACKEND_API_TOKEN}"
 
             response = await client.post(
                 self._backend_log_endpoint,
-                json=request_data.model_dump(),
+                json=payload,
+                headers=headers if headers else None,
                 timeout=5.0,  # 로그 전송은 빠르게
             )
 

@@ -4,7 +4,7 @@ Chat RAG Integration Test Module (Phase 6)
 POLICY 도메인에 대한 RAG + LLM E2E 통합 테스트입니다.
 
 테스트 목표:
-- IntentService가 domain="POLICY", route=ROUTE_RAG_INTERNAL로 분류
+- IntentService가 domain="POLICY", route=RAG_INTERNAL로 분류
 - RagflowClient가 문서를 반환하는 경우 정상 처리 확인
 - RAG 결과 없음/에러 시 fallback 동작 검증
 - ChatResponse의 answer, sources, meta 필드 검증
@@ -22,7 +22,7 @@ import pytest
 from app.clients.llm_client import LLMClient
 from app.clients.ragflow_client import RagflowClient
 from app.models.chat import ChatMessage, ChatRequest, ChatSource
-from app.models.intent import IntentResult, IntentType, RouteType
+from app.models.intent import IntentResult, IntentType, RouteType, UserRole
 from app.models.rag import RagDocument
 from app.services.chat_service import ChatService, NO_RAG_RESULTS_NOTICE
 from app.services.intent_service import IntentService
@@ -148,21 +148,25 @@ class FakeIntentService(IntentService):
     테스트용 Fake IntentService.
 
     미리 설정된 IntentResult를 반환합니다.
+    Phase 10: user_role 필드 추가
     """
 
     def __init__(
         self,
         intent: IntentType = IntentType.POLICY_QA,
         domain: str = "POLICY",
-        route: RouteType = RouteType.ROUTE_RAG_INTERNAL,
+        route: RouteType = RouteType.RAG_INTERNAL,
+        user_role: UserRole = UserRole.EMPLOYEE,
     ):
         self._fake_intent = intent
         self._fake_domain = domain
         self._fake_route = route
+        self._fake_user_role = user_role
 
     def classify(self, req: ChatRequest, user_query: str) -> IntentResult:
         """Fake classify implementation."""
         return IntentResult(
+            user_role=self._fake_user_role,
             intent=self._fake_intent,
             domain=self._fake_domain,
             route=self._fake_route,
@@ -225,7 +229,7 @@ async def test_chat_service_policy_rag_success(
     시나리오 1: 정상 RAG + POLICY 도메인
 
     Given:
-        - IntentResult(intent=POLICY_QA, domain="POLICY", route=ROUTE_RAG_INTERNAL)
+        - IntentResult(intent=POLICY_QA, domain="POLICY", route=RAG_INTERNAL)
         - RagflowClient → RagDocument 2개 반환
 
     When:
@@ -237,7 +241,7 @@ async def test_chat_service_policy_rag_success(
         - response.meta.rag_used is True
         - response.meta.rag_source_count == 2
         - response.meta.domain == "POLICY"
-        - response.meta.route == "ROUTE_RAG_INTERNAL"
+        - response.meta.route == "RAG_INTERNAL"
     """
     # Arrange
     fake_ragflow = FakeRagflowClient(documents=sample_policy_documents)
@@ -245,7 +249,7 @@ async def test_chat_service_policy_rag_success(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
@@ -272,7 +276,7 @@ async def test_chat_service_policy_rag_success(
     assert response.meta.rag_used is True
     assert response.meta.rag_source_count == 2
     assert response.meta.domain == "POLICY"
-    assert response.meta.route == "ROUTE_RAG_INTERNAL"
+    assert response.meta.route == "RAG_INTERNAL"
     assert response.meta.intent == "POLICY_QA"
     assert response.meta.latency_ms is not None
     assert response.meta.latency_ms >= 0
@@ -308,7 +312,7 @@ async def test_chat_service_policy_single_document(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
@@ -353,7 +357,7 @@ async def test_chat_service_no_rag_results(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
@@ -403,7 +407,7 @@ async def test_chat_service_rag_failure_fallback(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
@@ -423,7 +427,7 @@ async def test_chat_service_rag_failure_fallback(
     assert "RAG 없이 생성된 응답" in response.answer
 
     # RAG 실패해도 route는 원래 의도대로 유지
-    assert response.meta.route == "ROUTE_RAG_INTERNAL"
+    assert response.meta.route == "RAG_INTERNAL"
 
 
 # =============================================================================
@@ -445,7 +449,7 @@ async def test_chat_service_llm_failure(
 
     Then:
         - 에러 메시지가 answer에 포함
-        - meta.route == "ROUTE_ERROR"
+        - meta.route == "ERROR"
     """
     # Arrange
     fake_ragflow = FakeRagflowClient(documents=sample_policy_documents)
@@ -453,7 +457,7 @@ async def test_chat_service_llm_failure(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
@@ -467,11 +471,11 @@ async def test_chat_service_llm_failure(
 
     # Assert
     assert "일시적인 문제" in response.answer or "다시 시도" in response.answer
-    assert response.meta.route == "ROUTE_ERROR"
+    assert response.meta.route == "ERROR"
 
 
 # =============================================================================
-# 시나리오 5: ROUTE_LLM_ONLY (RAG 스킵)
+# 시나리오 5: LLM_ONLY (RAG 스킵)
 # =============================================================================
 
 
@@ -480,10 +484,10 @@ async def test_chat_service_llm_only_route(
     sample_chat_request: ChatRequest,
 ) -> None:
     """
-    시나리오 5: ROUTE_LLM_ONLY 라우팅
+    시나리오 5: LLM_ONLY 라우팅
 
     Given:
-        - IntentService가 route=ROUTE_LLM_ONLY 반환
+        - IntentService가 route=LLM_ONLY 반환
 
     Then:
         - RAG 검색이 호출되지 않음
@@ -496,7 +500,7 @@ async def test_chat_service_llm_only_route(
     fake_intent = FakeIntentService(
         intent=IntentType.GENERAL_CHAT,
         domain="GENERAL",
-        route=RouteType.ROUTE_LLM_ONLY,
+        route=RouteType.LLM_ONLY,
     )
 
     service = ChatService(
@@ -512,7 +516,7 @@ async def test_chat_service_llm_only_route(
     assert response.sources == []
     assert response.meta.rag_used is False
     assert response.meta.rag_source_count == 0
-    assert response.meta.route == "ROUTE_LLM_ONLY"
+    assert response.meta.route == "LLM_ONLY"
 
     # RAG 검색이 호출되지 않았어야 함
     assert fake_ragflow._search_called is False
@@ -539,7 +543,7 @@ async def test_chat_response_meta_completeness(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
@@ -556,7 +560,7 @@ async def test_chat_response_meta_completeness(
 
     # 필수 필드들
     assert meta.used_model is not None
-    assert meta.route == "ROUTE_RAG_INTERNAL"
+    assert meta.route == "RAG_INTERNAL"
     assert meta.intent == "POLICY_QA"
     assert meta.domain == "POLICY"
 
@@ -602,7 +606,7 @@ async def test_chat_service_empty_messages() -> None:
 
     # Assert
     assert "No messages" in response.answer
-    assert response.meta.route == "ROUTE_FALLBACK"
+    assert response.meta.route == "FALLBACK"
     assert response.sources == []
 
 
@@ -627,7 +631,7 @@ async def test_rag_document_to_chat_source_mapping(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
 
     service = ChatService(
