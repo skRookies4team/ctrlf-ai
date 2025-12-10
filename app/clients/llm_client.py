@@ -6,6 +6,12 @@ LLM 서비스(OpenAI 호환 또는 내부 LLM 서버)와 통신하는 클라이�
 실제 API 스펙(경로, 헤더, payload 구조)은 이후 팀에서 확정 후
 TODO 부분을 수정해야 합니다.
 
+Phase 12 업데이트:
+- 타임아웃 설정 명시 (30초)
+- UpstreamServiceError로 에러 래핑
+- 재시도 로직 추가 (1회)
+- 개별 latency 측정
+
 사용 방법:
     from app.clients.llm_client import LLMClient
 
@@ -20,13 +26,20 @@ TODO 부분을 수정해야 합니다.
     )
 """
 
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
+from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
+from app.core.retry import (
+    DEFAULT_LLM_TIMEOUT,
+    LLM_RETRY_CONFIG,
+    retry_async_operation,
+)
 
 logger = get_logger(__name__)
 
@@ -38,9 +51,16 @@ class LLMClient:
     실제 API 스펙(경로, 헤더, payload 구조)은 이후 팀에서 확정 후
     TODO 부분을 수정해야 합니다.
 
+    Phase 12 업데이트:
+    - 타임아웃 설정 명시 (30초)
+    - UpstreamServiceError로 에러 래핑
+    - 재시도 로직 추가 (1회)
+    - 개별 latency 측정
+
     Attributes:
         _client: 공용 httpx.AsyncClient 인스턴스
         _base_url: LLM 서비스 기본 URL
+        _timeout: HTTP 요청 타임아웃 (초)
     """
 
     # 설정이 없거나 LLM 호출 실패 시 반환할 기본 메시지
@@ -54,21 +74,28 @@ class LLMClient:
         self,
         base_url: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
+        timeout: float = DEFAULT_LLM_TIMEOUT,
     ) -> None:
         """
         LLMClient 초기화.
 
         Args:
-            base_url: LLM 서비스 URL. None이면 설정에서 가져옴.
+            base_url: LLM 서비스 URL. None이면 settings.llm_base_url 사용.
             client: httpx.AsyncClient 인스턴스. None이면 공용 클라이언트 사용.
+            timeout: HTTP 요청 타임아웃 (초). 기본 30초.
+
+        Note:
+            Phase 9: AI_ENV 환경변수에 따라 mock/real URL이 자동 선택됩니다.
         """
         settings = get_settings()
-        self._base_url = base_url if base_url is not None else settings.LLM_BASE_URL
+        # Phase 9: llm_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
+        self._base_url = base_url if base_url is not None else settings.llm_base_url
         self._client = client or get_async_http_client()
+        self._timeout = timeout
 
         if not self._base_url:
             logger.warning(
-                "LLM_BASE_URL is not configured. "
+                "LLM URL is not configured. "
                 "LLM API calls will be skipped and return fallback responses."
             )
 
@@ -121,6 +148,9 @@ class LLMClient:
         ChatService에서 사용하는 통합 메서드입니다.
         base_url이 설정되지 않은 경우 fallback 메시지를 반환합니다.
 
+        Phase 12: 에러 발생 시 UpstreamServiceError를 raise합니다.
+        ChatService에서 fallback 처리를 해야 합니다.
+
         Args:
             messages: 대화 히스토리
                 [{"role": "user"/"assistant"/"system", "content": "..."}]
@@ -129,7 +159,10 @@ class LLMClient:
             max_tokens: 최대 토큰 수
 
         Returns:
-            str: LLM 응답 텍스트 또는 fallback 메시지
+            str: LLM 응답 텍스트
+
+        Raises:
+            UpstreamServiceError: LLM 호출 실패 시 (Phase 12)
         """
         if not self._base_url:
             logger.warning("LLM generate_chat_completion skipped: base_url not configured")
@@ -151,45 +184,127 @@ class LLMClient:
         logger.debug(f"LLM request payload: {payload}")
 
         try:
-            response = await self._client.post(url, json=payload)
+            # Phase 12: 재시도 로직으로 감싼 HTTP 요청
+            response = await retry_async_operation(
+                self._client.post,
+                url,
+                json=payload,
+                timeout=self._timeout,
+                config=LLM_RETRY_CONFIG,
+                operation_name="llm_chat_completion",
+            )
             response.raise_for_status()
 
             data = response.json()
             choices = data.get("choices", [])
             if not choices:
                 logger.warning("LLM response has no choices")
-                return self.FALLBACK_MESSAGE
+                raise UpstreamServiceError(
+                    service=ServiceType.LLM,
+                    error_type=ErrorType.UPSTREAM_ERROR,
+                    message="LLM response has no choices",
+                )
 
             message = choices[0].get("message", {})
             content = message.get("content", "")
 
             if not content:
                 logger.warning("LLM response has empty content")
-                return self.FALLBACK_MESSAGE
+                raise UpstreamServiceError(
+                    service=ServiceType.LLM,
+                    error_type=ErrorType.UPSTREAM_ERROR,
+                    message="LLM response has empty content",
+                )
 
             logger.info(
                 f"LLM chat completion success: response_length={len(content)}"
             )
             return content
 
+        except UpstreamServiceError:
+            # 이미 래핑된 예외는 그대로 raise
+            raise
+
+        except httpx.TimeoutException as e:
+            logger.error(f"LLM chat completion timeout after {self._timeout}s")
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.UPSTREAM_TIMEOUT,
+                message=f"LLM timeout after {self._timeout}s",
+                is_timeout=True,
+                original_error=e,
+            )
+
         except httpx.HTTPStatusError as e:
             logger.error(
                 f"LLM chat completion HTTP error: status={e.response.status_code}, "
-                f"detail={e.response.text[:200]}"
+                f"detail={e.response.text[:200] if e.response.text else 'N/A'}"
             )
-            return self.FALLBACK_MESSAGE
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.UPSTREAM_ERROR,
+                message=f"LLM HTTP {e.response.status_code}",
+                status_code=e.response.status_code,
+                original_error=e,
+            )
 
         except httpx.RequestError as e:
             logger.error(f"LLM chat completion request error: {e}")
-            return self.FALLBACK_MESSAGE
-
-        except KeyError as e:
-            logger.error(f"LLM response parsing error: missing key {e}")
-            return self.FALLBACK_MESSAGE
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.UPSTREAM_ERROR,
+                message=f"LLM request error: {type(e).__name__}",
+                original_error=e,
+            )
 
         except Exception as e:
             logger.exception("LLM chat completion unexpected error")
-            return self.FALLBACK_MESSAGE
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.INTERNAL_ERROR,
+                message=f"LLM unexpected error: {type(e).__name__}",
+                original_error=e,
+            )
+
+    async def generate_chat_completion_with_latency(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> Tuple[str, int]:
+        """
+        ChatCompletion을 요청하고 응답과 latency를 함께 반환합니다.
+
+        Phase 12: 개별 서비스 latency 측정을 위해 추가.
+
+        Args:
+            messages: 대화 히스토리
+            model: 사용할 모델 이름 (선택)
+            temperature: 응답 다양성 조절
+            max_tokens: 최대 토큰 수
+
+        Returns:
+            Tuple[str, int]: (응답 텍스트, latency_ms)
+
+        Raises:
+            UpstreamServiceError: LLM 호출 실패 시
+        """
+        start_time = time.perf_counter()
+        try:
+            result = await self.generate_chat_completion(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return result, latency_ms
+        except Exception:
+            # latency는 실패해도 측정
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.debug(f"LLM call failed after {latency_ms}ms")
+            raise
 
     async def generate_chat_completion_raw(
         self,
