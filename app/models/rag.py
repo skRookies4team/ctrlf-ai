@@ -87,12 +87,20 @@ class RagDocument(BaseModel):
     RAGFlow 검색 API 응답을 정규화한 모델입니다.
     ChatSource로 변환하여 ChatResponse.sources에 포함됩니다.
 
+    Phase 13 업데이트:
+    - 조항/섹션 메타데이터 필드 추가 (section_label, section_path, article_id, clause_id)
+    - "어떤 문서의 몇 장/몇 조/몇 항인지" 정보를 사용자에게 제공하기 위함
+
     Attributes:
         doc_id: 문서 ID (백엔드/RAGFlow에서 관리)
         title: 문서 제목
         page: 문서 내 페이지 번호 (해당되는 경우)
         score: 검색 관련도 점수 (0.0 ~ 1.0)
         snippet: 문서에서 추출한 텍스트 발췌문
+        section_label: 사람이 읽을 수 있는 조항 라벨 (예: "제10조 (정보보호 의무)")
+        section_path: 조항의 계층 경로 (예: "제3장 정보보호 > 제10조 정보보호 의무 > 제2항")
+        article_id: 조문 번호 (예: "제10조")
+        clause_id: 항 번호 (예: "제2항")
     """
 
     doc_id: str = Field(description="문서 ID (백엔드/RAGFlow에서 관리)")
@@ -100,3 +108,21 @@ class RagDocument(BaseModel):
     page: Optional[int] = Field(default=None, description="문서 내 페이지 번호")
     score: float = Field(description="검색 관련도 점수 (0.0 ~ 1.0)")
     snippet: Optional[str] = Field(default=None, description="문서에서 추출한 텍스트 발췌문")
+
+    # Phase 13: 조항/섹션 메타데이터 필드
+    section_label: Optional[str] = Field(
+        default=None,
+        description="사람이 읽을 수 있는 조항 라벨 (예: '제10조 (정보보호 의무)')",
+    )
+    section_path: Optional[str] = Field(
+        default=None,
+        description="조항의 계층 경로 (예: '제3장 정보보호 > 제10조 정보보호 의무 > 제2항')",
+    )
+    article_id: Optional[str] = Field(
+        default=None,
+        description="조문 번호 (예: '제10조')",
+    )
+    clause_id: Optional[str] = Field(
+        default=None,
+        description="항 번호 (예: '제2항')",
+    )

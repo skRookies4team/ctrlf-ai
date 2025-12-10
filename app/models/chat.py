@@ -75,12 +75,18 @@ class ChatSource(BaseModel):
 
     Represents a reference document used to generate the answer.
 
+    Phase 13 업데이트:
+    - article_label, article_path 필드 추가 (조항/섹션 정보)
+    - 사용자에게 "어떤 문서의 몇 조/몇 항인지" 정보 제공
+
     Attributes:
         doc_id: Document ID managed by backend/RAGFlow
         title: Document title
         page: Page number in document (if applicable)
         score: Search relevance score (optional)
         snippet: Text excerpt from document for LLM prompt context (optional)
+        article_label: Human-readable article label (e.g., "제10조 (정보보호 의무) 제2항")
+        article_path: Hierarchical path to the article (e.g., "제3장 > 제10조 > 제2항")
     """
 
     doc_id: str = Field(description="Document ID managed by backend/RAGFlow")
@@ -96,6 +102,16 @@ class ChatSource(BaseModel):
         description="Text excerpt from document for LLM prompt context (optional)",
     )
 
+    # Phase 13: 조항/섹션 메타데이터 필드
+    article_label: Optional[str] = Field(
+        default=None,
+        description="Human-readable article label (e.g., '제10조 (정보보호 의무) 제2항')",
+    )
+    article_path: Optional[str] = Field(
+        default=None,
+        description="Hierarchical path to the article (e.g., '제3장 정보보호 > 제10조 > 제2항')",
+    )
+
 
 class ChatAnswerMeta(BaseModel):
     """
@@ -104,25 +120,44 @@ class ChatAnswerMeta(BaseModel):
     Contains information about how the response was generated,
     including intent classification, routing, and PII detection details.
 
+    Phase 10 업데이트:
+    - user_role 필드 추가 (UserRole Enum 값)
+
+    Phase 12 업데이트:
+    - error_type, error_message 필드 추가 (에러 표준화)
+    - fallback_reason 필드 추가 (fallback 발생 시 원인)
+    - rag_latency_ms, llm_latency_ms, backend_latency_ms 필드 추가 (개별 지연 측정)
+
     Attributes:
+        user_role: User's role (EMPLOYEE, ADMIN, INCIDENT_MANAGER)
         used_model: LLM model name used for generation
-        route: Routing path (e.g., ROUTE_RAG_INTERNAL, ROUTE_LLM_ONLY)
+        route: Routing path (e.g., RAG_INTERNAL, LLM_ONLY, BACKEND_API)
         intent: Classified intent type (e.g., POLICY_QA, INCIDENT_REPORT)
-        domain: Resolved domain (e.g., POLICY, INCIDENT, EDUCATION)
+        domain: Resolved domain (e.g., POLICY, INCIDENT, EDU)
         masked: Whether any PII masking was applied (input or output)
         has_pii_input: Whether PII was detected in user input
         has_pii_output: Whether PII was detected in LLM output
         rag_used: Whether RAG search was performed
         rag_source_count: Number of RAG sources retrieved
         latency_ms: Response generation time in milliseconds
+        error_type: Error type code (Phase 12)
+        error_message: Summarized error message (Phase 12)
+        fallback_reason: Reason for fallback if applicable (Phase 12)
+        rag_latency_ms: RAG search latency in ms (Phase 12)
+        llm_latency_ms: LLM generation latency in ms (Phase 12)
+        backend_latency_ms: Backend API latency in ms (Phase 12)
     """
 
+    user_role: Optional[str] = Field(
+        default=None,
+        description="User's role (EMPLOYEE, ADMIN, INCIDENT_MANAGER)",
+    )
     used_model: Optional[str] = Field(
         default=None, description="LLM model name used for generation"
     )
     route: Optional[str] = Field(
         default=None,
-        description="Routing path (e.g., ROUTE_RAG_INTERNAL, ROUTE_LLM_ONLY)",
+        description="Routing path (e.g., RAG_INTERNAL, LLM_ONLY, BACKEND_API)",
     )
     intent: Optional[str] = Field(
         default=None,
@@ -130,7 +165,7 @@ class ChatAnswerMeta(BaseModel):
     )
     domain: Optional[str] = Field(
         default=None,
-        description="Resolved domain (e.g., POLICY, INCIDENT, EDUCATION)",
+        description="Resolved domain (e.g., POLICY, INCIDENT, EDU)",
     )
     masked: Optional[bool] = Field(
         default=None, description="Whether any PII masking was applied"
@@ -149,6 +184,34 @@ class ChatAnswerMeta(BaseModel):
     )
     latency_ms: Optional[int] = Field(
         default=None, description="Response generation time in milliseconds"
+    )
+    # Phase 12: 에러 정보 필드
+    error_type: Optional[str] = Field(
+        default=None,
+        description="Error type code (UPSTREAM_TIMEOUT, UPSTREAM_ERROR, BAD_REQUEST, INTERNAL_ERROR)",
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Summarized error message (external details not exposed)",
+    )
+    fallback_reason: Optional[str] = Field(
+        default=None,
+        description="Reason for fallback if applicable (e.g., RAG_FAIL, LLM_FAIL, BACKEND_FAIL)",
+    )
+    # Phase 12: 개별 서비스 지연 시간
+    rag_latency_ms: Optional[int] = Field(
+        default=None, description="RAG search latency in milliseconds"
+    )
+    llm_latency_ms: Optional[int] = Field(
+        default=None, description="LLM generation latency in milliseconds"
+    )
+    backend_latency_ms: Optional[int] = Field(
+        default=None, description="Backend API latency in milliseconds"
+    )
+    # Phase 14: RAG Gap 후보 플래그
+    rag_gap_candidate: bool = Field(
+        default=False,
+        description="Whether this is a RAG gap candidate (POLICY/EDU domain with no/low-score RAG results)",
     )
 
 

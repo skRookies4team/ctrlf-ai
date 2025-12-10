@@ -1,12 +1,29 @@
-# ctrlf-ai Phase 8: Docker Compose 통합 테스트 환경
-# 사용법: docker compose up -d
-# 테스트: pytest tests/integration/test_docker_e2e.py -v
+# =============================================================================
+# ctrlf-ai Docker Compose 설정
+# Phase 8: Docker Compose 통합 테스트 환경
+# Phase 9: mock/real 모드 프로필 지원
+# =============================================================================
+#
+# 사용법:
+#   Mock 모드 (기본값, 통합 테스트용):
+#     docker compose --profile mock up -d
+#     pytest -m integration -v
+#
+#   Real 모드 (실제 서비스 연동):
+#     export RAGFLOW_BASE_URL_REAL=http://real-ragflow:8080
+#     export LLM_BASE_URL_REAL=http://real-llm:8001
+#     export BACKEND_BASE_URL_REAL=http://real-backend:8080
+#     docker compose --profile real up -d
+#     pytest -m real_integration -v
+#
+# =============================================================================
 
 version: "3.8"
 
 services:
   # =============================================================================
   # AI Gateway (ctrlf-ai) - 메인 서비스
+  # Mock/Real 모드 공통으로 사용
   # =============================================================================
   ai-gateway:
     build:
@@ -19,20 +36,22 @@ services:
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
       - LOG_LEVEL=DEBUG
-      # 외부 서비스 연결 (Docker 네트워크 내부 호스트명 사용)
-      - RAGFLOW_BASE_URL=http://ragflow:8080
-      - LLM_BASE_URL=http://llm-internal:8001
-      - BACKEND_BASE_URL=http://backend-mock:8081
+      # Phase 9: AI_ENV 설정으로 mock/real 모드 전환
+      # mock 프로필: AI_ENV=mock (기본값)
+      # real 프로필: AI_ENV=real
+      - AI_ENV=${AI_ENV:-mock}
+      # Mock 모드 URL (Docker 내부 네트워크)
+      - RAGFLOW_BASE_URL_MOCK=http://ragflow:8080
+      - LLM_BASE_URL_MOCK=http://llm-internal:8001
+      - BACKEND_BASE_URL_MOCK=http://backend-mock:8081
+      # Real 모드 URL (외부에서 환경변수로 설정)
+      # TODO: 실제 서비스 URL이 확정되면 여기에 설정
+      - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:-}
+      - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:-}
+      - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:-}
       # PII 마스킹은 내장 규칙 사용 (외부 서비스 없음)
       - PII_BASE_URL=
       - PII_ENABLED=true
-    depends_on:
-      ragflow:
-        condition: service_healthy
-      llm-internal:
-        condition: service_healthy
-      backend-mock:
-        condition: service_healthy
     networks:
       - ctrlf-net
     healthcheck:
@@ -43,13 +62,56 @@ services:
       start_period: 10s
 
   # =============================================================================
-  # Mock RAGFlow 서비스 - RAG 검색 API
+  # AI Gateway - Mock 프로필 전용
+  # Mock 서비스 의존성이 있는 버전
+  # =============================================================================
+  ai-gateway-mock:
+    extends:
+      service: ai-gateway
+    container_name: ctrlf-ai-gateway-mock
+    profiles:
+      - mock
+    environment:
+      - AI_ENV=mock
+      - RAGFLOW_BASE_URL_MOCK=http://ragflow:8080
+      - LLM_BASE_URL_MOCK=http://llm-internal:8001
+      - BACKEND_BASE_URL_MOCK=http://backend-mock:8081
+    depends_on:
+      ragflow:
+        condition: service_healthy
+      llm-internal:
+        condition: service_healthy
+      backend-mock:
+        condition: service_healthy
+
+  # =============================================================================
+  # AI Gateway - Real 프로필 전용
+  # 외부 서비스에 직접 연결 (Mock 서비스 의존성 없음)
+  # =============================================================================
+  ai-gateway-real:
+    extends:
+      service: ai-gateway
+    container_name: ctrlf-ai-gateway-real
+    profiles:
+      - real
+    environment:
+      - AI_ENV=real
+      # Real URL은 반드시 외부에서 환경변수로 설정해야 함
+      - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:?RAGFLOW_BASE_URL_REAL must be set for real mode}
+      - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
+      - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
+    # Real 모드에서는 Mock 서비스 의존성 없음
+
+  # =============================================================================
+  # Mock RAGFlow 서비스 - RAG 검색 API (Mock 프로필 전용)
   # =============================================================================
   ragflow:
     build:
       context: ./mock_ragflow
       dockerfile: Dockerfile
     container_name: ctrlf-mock-ragflow
+    profiles:
+      - mock
     ports:
       - "8080:8080"
     environment:
@@ -64,13 +126,15 @@ services:
       start_period: 5s
 
   # =============================================================================
-  # Mock LLM 서비스 - 내부 LLM HTTP API (OpenAI 호환)
+  # Mock LLM 서비스 - 내부 LLM HTTP API (Mock 프로필 전용)
   # =============================================================================
   llm-internal:
     build:
       context: ./mock_llm
       dockerfile: Dockerfile
     container_name: ctrlf-mock-llm
+    profiles:
+      - mock
     ports:
       - "8001:8001"
     environment:
@@ -85,13 +149,15 @@ services:
       start_period: 5s
 
   # =============================================================================
-  # Mock Backend 서비스 - AI 로그 수집 API
+  # Mock Backend 서비스 - AI 로그 수집 API (Mock 프로필 전용)
   # =============================================================================
   backend-mock:
     build:
       context: ./mock_backend
       dockerfile: Dockerfile
     container_name: ctrlf-mock-backend
+    profiles:
+      - mock
     ports:
       - "8081:8081"
     environment:

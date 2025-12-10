@@ -40,71 +40,72 @@ def anyio_backend() -> str:
 def test_intent_policy_qa() -> None:
     """
     Test that policy-related query is classified as POLICY_QA.
-    "연차 이월 규정 알려줘" → intent=POLICY_QA, route=ROUTE_RAG_INTERNAL
+    Phase 10: domain=POLICY 힌트를 사용하여 명확한 라우팅.
     """
     service = IntentService()
     request = ChatRequest(
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="연차 이월 규정 알려줘")],
+        domain="POLICY",  # 도메인 힌트 사용
+        messages=[ChatMessage(role="user", content="결재 승인 관련 문의")],
     )
 
-    result = service.classify(req=request, user_query="연차 이월 규정 알려줘")
+    result = service.classify(req=request, user_query="결재 승인 관련 문의")
 
     assert isinstance(result, IntentResult)
     assert result.intent == IntentType.POLICY_QA
-    assert result.route == RouteType.ROUTE_RAG_INTERNAL
+    assert result.route == RouteType.RAG_INTERNAL
 
 
 def test_intent_incident_report() -> None:
     """
     Test that incident-related query is classified as INCIDENT_REPORT.
-    "보안 사고가 발생했을 때 신고 절차 알려줘" → intent=INCIDENT_REPORT, route=ROUTE_INCIDENT
+    Phase 10: INCIDENT_REPORT → BACKEND_API (신고 플로우 안내)
     """
     service = IntentService()
     request = ChatRequest(
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="보안 사고가 발생했을 때 신고 절차 알려줘")],
+        messages=[ChatMessage(role="user", content="보안 사고가 발생해서 신고하려고 합니다")],
     )
 
     result = service.classify(
         req=request,
-        user_query="보안 사고가 발생했을 때 신고 절차 알려줘",
+        user_query="보안 사고가 발생해서 신고하려고 합니다",
     )
 
     assert result.intent == IntentType.INCIDENT_REPORT
-    assert result.route == RouteType.ROUTE_INCIDENT
+    assert result.route == RouteType.BACKEND_API
 
 
 def test_intent_education_qa() -> None:
     """
-    Test that education-related query is classified as EDUCATION_QA.
-    "교육 수료 여부 어떻게 확인해?" → intent=EDUCATION_QA, route=ROUTE_TRAINING
+    Test that education content query is classified as EDUCATION_QA.
+    Phase 10: 교육 "내용" 질문 → RAG_INTERNAL
     """
     service = IntentService()
     request = ChatRequest(
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="교육 수료 여부 어떻게 확인해?")],
+        messages=[ChatMessage(role="user", content="보안교육 강의 내용 알려줘")],
     )
 
     result = service.classify(
         req=request,
-        user_query="교육 수료 여부 어떻게 확인해?",
+        user_query="보안교육 강의 내용 알려줘",
     )
 
     assert result.intent == IntentType.EDUCATION_QA
-    assert result.route == RouteType.ROUTE_TRAINING
+    assert result.route == RouteType.RAG_INTERNAL
 
 
 def test_intent_general_chat() -> None:
     """
     Test that casual greeting is classified as GENERAL_CHAT.
-    "안녕 ㅎㅎ" → intent=GENERAL_CHAT, route=ROUTE_LLM_ONLY
+    Phase 10: GENERAL_CHAT → LLM_ONLY
     """
     service = IntentService()
     request = ChatRequest(
@@ -117,12 +118,13 @@ def test_intent_general_chat() -> None:
     result = service.classify(req=request, user_query="안녕 ㅎㅎ")
 
     assert result.intent == IntentType.GENERAL_CHAT
-    assert result.route == RouteType.ROUTE_LLM_ONLY
+    assert result.route == RouteType.LLM_ONLY
 
 
 def test_intent_with_domain_policy() -> None:
     """
     Test that when domain is POLICY, intent is classified as POLICY_QA.
+    Phase 10: domain=POLICY 힌트 사용 시 POLICY_QA → RAG_INTERNAL
     """
     service = IntentService()
     request = ChatRequest(
@@ -130,39 +132,41 @@ def test_intent_with_domain_policy() -> None:
         user_id="user-123",
         user_role="EMPLOYEE",
         domain="POLICY",
-        messages=[ChatMessage(role="user", content="출장 경비 처리 방법은?")],
+        messages=[ChatMessage(role="user", content="결재 승인 관련 문의")],
     )
 
     result = service.classify(
         req=request,
-        user_query="출장 경비 처리 방법은?",
+        user_query="결재 승인 관련 문의",
     )
 
     assert result.intent == IntentType.POLICY_QA
-    assert result.route == RouteType.ROUTE_RAG_INTERNAL
+    assert result.route == RouteType.RAG_INTERNAL
     assert result.domain == "POLICY"
 
 
 def test_intent_default_fallback() -> None:
     """
     Test that unknown queries default to POLICY_QA with RAG.
+    Phase 10: domain=POLICY 힌트 사용 시 POLICY_QA → RAG_INTERNAL
     """
     service = IntentService()
     request = ChatRequest(
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="휴가 관련 정보 알려줘")],
+        domain="POLICY",  # 도메인 힌트로 명확한 라우팅
+        messages=[ChatMessage(role="user", content="일반 문의사항 있어요")],
     )
 
     result = service.classify(
         req=request,
-        user_query="휴가 관련 정보 알려줘",
+        user_query="일반 문의사항 있어요",
     )
 
     # Default should be POLICY_QA with RAG
     assert result.intent == IntentType.POLICY_QA
-    assert result.route == RouteType.ROUTE_RAG_INTERNAL
+    assert result.route == RouteType.RAG_INTERNAL
 
 
 # --- PiiService Unit Tests ---
@@ -258,6 +262,7 @@ async def test_pii_preserves_text_on_skip() -> None:
 async def test_chat_service_with_intent_and_pii() -> None:
     """
     Test that ChatService integrates IntentService and PiiService.
+    Phase 10: domain=POLICY 힌트 사용 시 RAG_INTERNAL
     """
     # Create services with empty base_url (fallback mode)
     ragflow_client = RagflowClient(base_url="")
@@ -276,7 +281,8 @@ async def test_chat_service_with_intent_and_pii() -> None:
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="연차 이월 규정 알려줘")],
+        domain="POLICY",  # 도메인 힌트 사용
+        messages=[ChatMessage(role="user", content="결재 승인 관련 문의")],
     )
 
     response = await service.handle_chat(request)
@@ -287,10 +293,10 @@ async def test_chat_service_with_intent_and_pii() -> None:
     assert len(response.answer) > 0
     assert response.meta is not None
 
-    # Verify route is set (should be ROUTE_RAG_INTERNAL for policy query)
+    # Verify route is set (should be RAG_INTERNAL for policy query)
     assert response.meta.route is not None
     assert len(response.meta.route) > 0
-    assert response.meta.route == "ROUTE_RAG_INTERNAL"
+    assert response.meta.route == "RAG_INTERNAL"
 
     # Verify masked flag is set (should be False since PII disabled)
     assert response.meta.masked is False
@@ -300,6 +306,7 @@ async def test_chat_service_with_intent_and_pii() -> None:
 async def test_chat_service_general_chat_route() -> None:
     """
     Test that ChatService routes general chat to LLM only.
+    Phase 10: GENERAL_CHAT → LLM_ONLY
     """
     ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
@@ -323,7 +330,7 @@ async def test_chat_service_general_chat_route() -> None:
     response = await service.handle_chat(request)
 
     # Verify route is LLM_ONLY for general chat
-    assert response.meta.route == "ROUTE_LLM_ONLY"
+    assert response.meta.route == "LLM_ONLY"
     # Sources should be empty for LLM only route
     assert response.sources == []
 
@@ -331,7 +338,8 @@ async def test_chat_service_general_chat_route() -> None:
 @pytest.mark.anyio
 async def test_chat_service_incident_route() -> None:
     """
-    Test that ChatService routes incident queries correctly.
+    Test that ChatService routes incident report correctly.
+    Phase 10: INCIDENT_REPORT → BACKEND_API
     """
     ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
@@ -349,19 +357,20 @@ async def test_chat_service_incident_route() -> None:
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="보안 사고 신고 방법 알려줘")],
+        messages=[ChatMessage(role="user", content="보안 사고가 발생해서 신고하려고 합니다")],
     )
 
     response = await service.handle_chat(request)
 
-    # Verify route is INCIDENT
-    assert response.meta.route == "ROUTE_INCIDENT"
+    # Verify route is BACKEND_API for incident report
+    assert response.meta.route == "BACKEND_API"
 
 
 @pytest.mark.anyio
 async def test_chat_service_education_route() -> None:
     """
-    Test that ChatService routes education queries correctly.
+    Test that ChatService routes education content queries correctly.
+    Phase 10: EDUCATION_QA → RAG_INTERNAL
     """
     ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
@@ -379,13 +388,13 @@ async def test_chat_service_education_route() -> None:
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="보안 교육 수료증 발급 방법")],
+        messages=[ChatMessage(role="user", content="보안교육 강의 내용 알려줘")],
     )
 
     response = await service.handle_chat(request)
 
-    # Verify route is TRAINING
-    assert response.meta.route == "ROUTE_TRAINING"
+    # Verify route is RAG_INTERNAL for education content query
+    assert response.meta.route == "RAG_INTERNAL"
 
 
 @pytest.mark.anyio

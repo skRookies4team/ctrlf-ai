@@ -82,8 +82,9 @@ class RagService:
             )
 
         # Check if RAGFlow is configured
+        # Phase 9: ragflow_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
         settings = get_settings()
-        if not settings.RAGFLOW_BASE_URL:
+        if not settings.ragflow_base_url:
             # Return dummy success response for development/testing
             logger.info(
                 f"RAGFlow not configured, returning dummy success: doc_id={req.doc_id}"
@@ -100,7 +101,7 @@ class RagService:
 
         try:
             # Forward request to RAGFlow service
-            result = await self._client.process_document(req)
+            result = await self._client.process_document_request(req)
 
             if result.success:
                 logger.info(f"RAG document processed successfully: doc_id={req.doc_id}")

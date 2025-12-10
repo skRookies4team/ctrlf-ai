@@ -11,7 +11,7 @@ FastAPI /ai/chat/messages 엔드포인트를 직접 호출하는 E2E 테스트�
 테스트 시나리오:
 1. POLICY 도메인 + RAG + LLM + PII + 로그 해피패스
 2. POLICY 도메인 + RAG 결과 0건 + fallback + 로그
-3. ROUTE_LLM_ONLY (일반 질문) + PII + 로그
+3. LLM_ONLY (일반 질문) + PII + 로그
 
 구조:
 - FastAPI TestClient 사용
@@ -37,6 +37,7 @@ from app.models.intent import (
     PiiMaskResult,
     PiiTag,
     RouteType,
+    UserRole,
 )
 from app.models.rag import RagDocument
 from app.services.ai_log_service import AILogService
@@ -139,17 +140,20 @@ class FakeIntentService(IntentService):
     테스트용 Fake IntentService.
 
     미리 설정된 IntentResult를 반환합니다.
+    Phase 10: user_role 필드 추가
     """
 
     def __init__(
         self,
         intent: IntentType = IntentType.POLICY_QA,
         domain: str = "POLICY",
-        route: RouteType = RouteType.ROUTE_RAG_INTERNAL,
+        route: RouteType = RouteType.RAG_INTERNAL,
+        user_role: UserRole = UserRole.EMPLOYEE,
     ):
         self._fake_intent = intent
         self._fake_domain = domain
         self._fake_route = route
+        self._fake_user_role = user_role
         self.call_count = 0
         self.last_query: Optional[str] = None
 
@@ -158,6 +162,7 @@ class FakeIntentService(IntentService):
         self.call_count += 1
         self.last_query = user_query
         return IntentResult(
+            user_role=self._fake_user_role,
             intent=self._fake_intent,
             domain=self._fake_domain,
             route=self._fake_route,
@@ -355,7 +360,7 @@ def test_e2e_policy_with_pii_rag_llm_and_logging(
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
     fake_rag = FakeRagflowClient(documents=sample_policy_documents)
     fake_llm = FakeLLMClient(
@@ -431,7 +436,7 @@ def test_e2e_policy_with_pii_rag_llm_and_logging(
         assert meta["rag_used"] is True
         assert meta["rag_source_count"] == 1
         assert meta["domain"] == "POLICY"
-        assert meta["route"] == "ROUTE_RAG_INTERNAL"
+        assert meta["route"] == "RAG_INTERNAL"
         assert meta["intent"] == "POLICY_QA"
         assert meta["has_pii_input"] is True
         assert meta["latency_ms"] is not None
@@ -471,7 +476,7 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
     fake_rag = FakeRagflowClient(documents=[])  # 빈 결과
     fake_llm = FakeLLMClient(
@@ -519,7 +524,7 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
         meta = data["meta"]
         assert meta["rag_used"] is False
         assert meta["rag_source_count"] == 0
-        assert meta["route"] == "ROUTE_RAG_INTERNAL"
+        assert meta["route"] == "RAG_INTERNAL"
 
         # Assert - Fallback 안내 문구
         assert data["answer"] != ""
@@ -544,25 +549,25 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
 
 
 # =============================================================================
-# 시나리오 3: ROUTE_LLM_ONLY (일반 질문) + PII + 로그
+# 시나리오 3: LLM_ONLY (일반 질문) + PII + 로그
 # =============================================================================
 
 
 def test_e2e_llm_only_route_with_pii_and_logging() -> None:
     """
-    시나리오 3: ROUTE_LLM_ONLY (일반/헬프성 질문) + PII + 로그
+    시나리오 3: LLM_ONLY (일반/헬프성 질문) + PII + 로그
 
     RAG 검색을 하지 않고 LLM만으로 응답하는 케이스.
     - RagflowClient가 호출되지 않아야 함
     - meta.rag_used == False
-    - meta.route == ROUTE_LLM_ONLY
+    - meta.route == LLM_ONLY
     """
     # Arrange
     fake_pii = FakePiiService()
     fake_intent = FakeIntentService(
         intent=IntentType.GENERAL_CHAT,
         domain="GENERAL",
-        route=RouteType.ROUTE_LLM_ONLY,
+        route=RouteType.LLM_ONLY,
     )
     # RAG 호출되면 테스트 실패하도록 설정
     fake_rag = FakeRagflowClient(documents=[], fail_if_called=True)
@@ -611,7 +616,7 @@ def test_e2e_llm_only_route_with_pii_and_logging() -> None:
         meta = data["meta"]
         assert meta["rag_used"] is False
         assert meta["rag_source_count"] == 0
-        assert meta["route"] == "ROUTE_LLM_ONLY"
+        assert meta["route"] == "LLM_ONLY"
         assert meta["intent"] == "GENERAL_CHAT"
 
         # Assert - RagflowClient 호출 안 됨
@@ -635,7 +640,7 @@ def test_e2e_llm_only_route_with_pii_and_logging() -> None:
         assert fake_log.call_count >= 1
         log_entry = fake_log.last_log
         assert log_entry.rag_used is False
-        assert log_entry.route == "ROUTE_LLM_ONLY"
+        assert log_entry.route == "LLM_ONLY"
         # 로그에 원본 이메일 없음
         if log_entry.question_masked:
             assert "test@example.com" not in log_entry.question_masked
@@ -660,7 +665,7 @@ def test_e2e_rag_error_fallback_to_llm_only() -> None:
     fake_intent = FakeIntentService(
         intent=IntentType.POLICY_QA,
         domain="POLICY",
-        route=RouteType.ROUTE_RAG_INTERNAL,
+        route=RouteType.RAG_INTERNAL,
     )
     fake_rag = FakeRagflowClient(documents=[], should_fail=True)  # 에러 발생
     fake_llm = FakeLLMClient(response="RAG 없이 생성된 일반 답변입니다.")
@@ -704,7 +709,7 @@ def test_e2e_rag_error_fallback_to_llm_only() -> None:
         assert meta["rag_used"] is False
         assert meta["rag_source_count"] == 0
         # route는 원래 의도대로 유지
-        assert meta["route"] == "ROUTE_RAG_INTERNAL"
+        assert meta["route"] == "RAG_INTERNAL"
 
         # LLM 응답은 정상
         assert data["answer"] != ""
