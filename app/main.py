@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import chat, health, rag
+from app.api.v1 import chat, gap_suggestions, health, rag
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -135,5 +135,7 @@ app.include_router(health.router, prefix="", tags=["Health"])
 # AI API routers
 # - POST /ai/chat/messages: AI chat response generation
 # - POST /ai/rag/process: RAG document processing
+# - POST /ai/gap/policy-edu/suggestions: RAG Gap 보완 제안 (Phase 15)
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(rag.router, tags=["RAG"])
+app.include_router(gap_suggestions.router, prefix="/ai", tags=["Gap Suggestions"])
