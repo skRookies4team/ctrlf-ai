@@ -92,9 +92,9 @@ class RagflowClient:
     # 기본 타임아웃 설정 (초)
     DEFAULT_TIMEOUT = DEFAULT_RAGFLOW_TIMEOUT
 
-    # TODO: RAGFlow 팀이 /search 래퍼를 추가하면 True로 변경
-    # 또는 환경변수로 설정: RAGFLOW_USE_SEARCH_WRAPPER=true
-    USE_SEARCH_WRAPPER = False
+    # RAGFlow /search 래퍼 사용 (2024-12 추가됨)
+    # False로 설정하면 기존 /retrieval_test 직접 호출
+    USE_SEARCH_WRAPPER = True
 
     # dataset(도메인) → kb_id 매핑 테이블
     # TODO: 실제 kb_id가 확정되면 업데이트 필요
@@ -279,7 +279,7 @@ class RagflowClient:
         # dataset → kb_id 변환
         kb_id = self._dataset_to_kb_id(dataset)
 
-        url = f"{self._base_url}/retrieval_test"
+        url = f"{self._base_url}/v1/chunk/retrieval_test"
         payload: Dict[str, Any] = {
             "question": query,  # query → question
             "kb_id": kb_id,     # dataset → kb_id
@@ -495,7 +495,7 @@ class RagflowClient:
                 ]
             }
         """
-        url = f"{self._base_url}/search"
+        url = f"{self._base_url}/v1/chunk/search"
         payload: Dict[str, Any] = {
             "query": query,
             "top_k": top_k,
