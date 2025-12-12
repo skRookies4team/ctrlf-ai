@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import chat, gap_suggestions, health, quiz_generate, rag, search
+from app.api.v1 import chat, faq, gap_suggestions, health, quiz_generate, rag, search
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -137,9 +137,11 @@ app.include_router(health.router, prefix="", tags=["Health"])
 # - POST /ai/rag/process: RAG document processing
 # - POST /ai/gap/policy-edu/suggestions: RAG Gap 보완 제안 (Phase 15)
 # - POST /ai/quiz/generate: 퀴즈 자동 생성 (Phase 16)
-# - POST /search: 표준 RAG 검색 API (Phase 18)
+# - POST /search: 표준 RAG 검색 API
+# - POST /ai/faq/generate: FAQ 초안 생성 (Phase 18)
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(rag.router, tags=["RAG"])
 app.include_router(gap_suggestions.router, prefix="/ai", tags=["Gap Suggestions"])
 app.include_router(quiz_generate.router, prefix="/ai", tags=["Quiz Generate"])
 app.include_router(search.router, tags=["Search"])
+app.include_router(faq.router, prefix="/ai", tags=["FAQ"])
