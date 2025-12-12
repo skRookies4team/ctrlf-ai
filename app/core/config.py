@@ -88,6 +88,17 @@ class Settings(BaseSettings):
     PII_ENABLED: bool = True
 
     # =========================================================================
+    # RAGFlow 검색 서비스 설정 (Phase 18)
+    # =========================================================================
+    # RAGFlow 검색 타임아웃 (초)
+    RAGFLOW_TIMEOUT_SEC: float = 10.0
+
+    # Dataset 슬러그 → kb_id 매핑
+    # 형식: "slug1:kb_id1,slug2:kb_id2,..."
+    # 예: "policy:kb_policy_001,training:kb_training_001,incident:kb_incident_001"
+    RAGFLOW_DATASET_MAPPING: str = "policy:kb_policy_001,training:kb_training_001,incident:kb_incident_001"
+
+    # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
     # =========================================================================
     @field_validator(
@@ -214,6 +225,29 @@ class Settings(BaseSettings):
     def is_real_mode(self) -> bool:
         """Real 모드인지 확인합니다."""
         return self.AI_ENV == "real"
+
+    @property
+    def ragflow_dataset_to_kb_mapping(self) -> dict[str, str]:
+        """
+        Dataset 슬러그 → kb_id 매핑을 딕셔너리로 반환합니다.
+
+        RAGFLOW_DATASET_MAPPING 환경변수를 파싱합니다.
+        형식: "slug1:kb_id1,slug2:kb_id2,..."
+
+        Returns:
+            dict[str, str]: {"policy": "kb_policy_001", ...}
+        """
+        mapping: dict[str, str] = {}
+        if not self.RAGFLOW_DATASET_MAPPING:
+            return mapping
+
+        for pair in self.RAGFLOW_DATASET_MAPPING.split(","):
+            pair = pair.strip()
+            if ":" in pair:
+                slug, kb_id = pair.split(":", 1)
+                mapping[slug.strip().lower()] = kb_id.strip()
+
+        return mapping
 
 
 @lru_cache()
