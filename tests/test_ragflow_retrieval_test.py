@@ -30,6 +30,12 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def disable_search_wrapper(monkeypatch):
+    """이 테스트 파일에서는 retrieval_test 직접 호출을 테스트하므로 래퍼 비활성화."""
+    monkeypatch.setattr(RagflowClient, "USE_SEARCH_WRAPPER", False)
+
+
 # =============================================================================
 # Mock Response Data
 # =============================================================================
@@ -105,7 +111,7 @@ async def test_retrieval_test_request_payload_mapping() -> None:
         )
 
     # Assert: URL
-    assert "/retrieval_test" in captured_request["url"]
+    assert "/v1/chunk/retrieval_test" in captured_request["url"]
     assert captured_request["method"] == "POST"
 
     # Assert: Payload mapping

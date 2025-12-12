@@ -32,6 +32,12 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def disable_search_wrapper(monkeypatch):
+    """RagflowClient 직접 호출 테스트를 위해 래퍼 비활성화."""
+    monkeypatch.setattr(RagflowClient, "USE_SEARCH_WRAPPER", False)
+
+
 # =============================================================================
 # 1. RagDocument 조항 메타 필드 테스트
 # =============================================================================
