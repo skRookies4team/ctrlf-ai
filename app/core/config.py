@@ -93,9 +93,12 @@ class Settings(BaseSettings):
     # RAGFlow 검색 타임아웃 (초)
     RAGFLOW_TIMEOUT_SEC: float = 10.0
 
-    # Dataset 슬러그 → kb_id 매핑
-    # 형식: "slug1:kb_id1,slug2:kb_id2,..."
-    # 예: "policy:kb_policy_001,training:kb_training_001,incident:kb_incident_001"
+    # RAGFlow API Key (인증 필요 시)
+    RAGFLOW_API_KEY: Optional[str] = None
+
+    # Dataset 슬러그 → dataset_id 매핑
+    # 형식: "slug1:dataset_id1,slug2:dataset_id2,..."
+    # 예: "policy:41e03caccb5f11f0a421a640f6c0fe08"
     RAGFLOW_DATASET_MAPPING: str = "policy:kb_policy_001,training:kb_training_001,incident:kb_incident_001"
 
     # =========================================================================

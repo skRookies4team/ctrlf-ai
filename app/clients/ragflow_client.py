@@ -111,6 +111,7 @@ class RagflowClient:
         base_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         client: Optional[httpx.AsyncClient] = None,
+        api_key: Optional[str] = None,
     ) -> None:
         """
         RagflowClient 초기화.
@@ -119,6 +120,7 @@ class RagflowClient:
             base_url: RAGFlow 서비스 URL. None이면 settings.ragflow_base_url 사용.
             timeout: HTTP 요청 타임아웃 (초). 기본값 10초.
             client: httpx.AsyncClient 인스턴스. None이면 공용 클라이언트 사용.
+            api_key: RAGFlow API Key. None이면 settings.RAGFLOW_API_KEY 사용.
 
         Note:
             Phase 9: AI_ENV 환경변수에 따라 mock/real URL이 자동 선택됩니다.
@@ -128,6 +130,13 @@ class RagflowClient:
         self._base_url = base_url if base_url is not None else settings.ragflow_base_url
         self._timeout = timeout
         self._client = client or get_async_http_client()
+        self._api_key = api_key if api_key is not None else settings.RAGFLOW_API_KEY
+
+        # settings에서 dataset 매핑 로드 (동적 업데이트)
+        if settings.ragflow_dataset_to_kb_mapping:
+            self._dataset_mapping = settings.ragflow_dataset_to_kb_mapping
+        else:
+            self._dataset_mapping = {}
 
         if not self._base_url:
             logger.warning(
@@ -135,23 +144,42 @@ class RagflowClient:
                 "RAGFlow API calls will be skipped and return empty results."
             )
 
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """
+        RAGFlow API 인증 헤더를 반환합니다.
+
+        Returns:
+            Dict[str, str]: Authorization 헤더 (API 키가 있는 경우)
+        """
+        if self._api_key:
+            return {"Authorization": f"Bearer {self._api_key}"}
+        return {}
+
     def _dataset_to_kb_id(self, dataset: Optional[str]) -> str:
         """
-        도메인(dataset)을 지식베이스 ID(kb_id)로 변환합니다.
+        도메인(dataset)을 지식베이스 ID(dataset_id)로 변환합니다.
 
         Args:
             dataset: 도메인 이름 (예: "POLICY", "INCIDENT", "EDUCATION")
                      None이면 "POLICY"로 처리
 
         Returns:
-            str: 해당 도메인의 지식베이스 ID
+            str: 해당 도메인의 dataset ID
 
         Note:
-            매핑 테이블은 DATASET_TO_KB_ID 클래스 변수에 정의되어 있습니다.
-            RAGFlow 팀에서 실제 kb_id를 확정하면 이 매핑을 업데이트해야 합니다.
+            1. 먼저 settings의 RAGFLOW_DATASET_MAPPING에서 찾습니다 (소문자 키)
+            2. 없으면 클래스 변수 DATASET_TO_KB_ID에서 찾습니다 (대문자 키)
+            3. 둘 다 없으면 POLICY 기본값 사용
         """
-        key = (dataset or "POLICY").upper()
-        return self.DATASET_TO_KB_ID.get(key, self.DATASET_TO_KB_ID["POLICY"])
+        key_lower = (dataset or "policy").lower()
+        key_upper = (dataset or "POLICY").upper()
+
+        # 1. settings 매핑에서 찾기 (우선)
+        if key_lower in self._dataset_mapping:
+            return self._dataset_mapping[key_lower]
+
+        # 2. 클래스 변수에서 찾기 (fallback)
+        return self.DATASET_TO_KB_ID.get(key_upper, self.DATASET_TO_KB_ID["POLICY"])
 
     async def health(self) -> bool:
         """
@@ -468,76 +496,84 @@ class RagflowClient:
         department: Optional[str],
     ) -> List[RagDocument]:
         """
-        /search 래퍼 엔드포인트를 통한 검색 (향후 사용).
+        RAGFlow 공식 API /api/v1/retrieval을 통한 검색.
 
-        RAGFlow 팀이 /search 래퍼를 추가하면 이 메서드가 사용됩니다.
-        USE_SEARCH_WRAPPER = True로 설정하면 활성화됩니다.
+        USE_SEARCH_WRAPPER = True로 설정하면 이 메서드가 사용됩니다.
 
-        요청 형식:
-            POST /search
+        요청 형식 (RAGFlow 공식 API):
+            POST /api/v1/retrieval
+            Headers: Authorization: Bearer {API_KEY}
             {
-                "query": "검색 쿼리",
-                "top_k": 5,
-                "dataset": "POLICY",
-                "user_role": "EMPLOYEE",
-                "department": "개발팀"
+                "question": "검색 쿼리",
+                "dataset_ids": ["dataset_id_1", "dataset_id_2"],
+                "top_k": 5
             }
 
         응답 형식:
             {
-                "results": [
-                    {
-                        "doc_id": "...",
-                        "title": "...",
-                        "page": 12,
-                        "score": 0.92,
-                        "snippet": "..."
-                    }
-                ]
+                "code": 0,
+                "data": {
+                    "chunks": [
+                        {
+                            "id": "...",
+                            "content": "...",
+                            "document_id": "...",
+                            "document_name": "...",
+                            "similarity": 0.92,
+                            ...
+                        }
+                    ],
+                    "total": 5
+                }
             }
         """
-        url = f"{self._base_url}/v1/chunk/search"
+        # dataset → dataset_id 변환
+        dataset_id = self._dataset_to_kb_id(dataset)
+
+        url = f"{self._base_url}/api/v1/retrieval"
         payload: Dict[str, Any] = {
-            "query": query,
+            "question": query,
+            "dataset_ids": [dataset_id],
             "top_k": top_k,
         }
-        if dataset:
-            payload["dataset"] = dataset
-        if user_role:
-            payload["user_role"] = user_role
-        if department:
-            payload["department"] = department
 
         logger.info(
-            f"Searching RAGFlow (wrapper): query='{query[:50]}...', "
-            f"dataset={dataset}, top_k={top_k}"
+            f"Searching RAGFlow (official API): query='{query[:50]}...', "
+            f"dataset_id={dataset_id}, top_k={top_k}"
         )
 
         try:
             response = await self._client.post(
                 url,
+                headers=self._get_auth_headers(),
                 json=payload,
                 timeout=self._timeout,
             )
             response.raise_for_status()
             data = response.json()
 
-            # 응답 파싱: results → RagDocument
-            items = data.get("results", [])
+            # RAGFlow 응답 검증
+            if data.get("code") != 0:
+                error_msg = data.get("message", "Unknown error")
+                logger.error(f"RAGFlow API error: {error_msg}")
+                return []
+
+            # 응답 파싱: chunks → RagDocument
+            chunks = data.get("data", {}).get("chunks", [])
             documents: List[RagDocument] = []
 
-            for item in items:
+            for chunk in chunks:
                 try:
                     doc = RagDocument(
-                        doc_id=item.get("doc_id", "unknown"),
-                        title=item.get("title", "Untitled"),
-                        page=item.get("page"),
-                        score=item.get("score", 0.0),
-                        snippet=item.get("snippet"),
+                        doc_id=chunk.get("id") or chunk.get("chunk_id", "unknown"),
+                        title=chunk.get("document_name") or chunk.get("doc_name", "Untitled"),
+                        page=chunk.get("page_num") or chunk.get("page"),
+                        score=chunk.get("similarity") or chunk.get("score", 0.0),
+                        snippet=chunk.get("content") or chunk.get("text", ""),
                     )
                     documents.append(doc)
                 except Exception as e:
-                    logger.warning(f"Failed to parse search result item: {e}")
+                    logger.warning(f"Failed to parse chunk: {e}")
                     continue
 
             logger.info(f"RAGFlow search returned {len(documents)} documents")
