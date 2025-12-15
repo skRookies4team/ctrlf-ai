@@ -131,11 +131,35 @@ state = ServerState()
 # =============================================================================
 
 
+def extract_rag_context(messages: List[ChatMessage]) -> Optional[str]:
+    """
+    시스템 메시지에서 RAG 컨텍스트를 추출합니다.
+
+    Returns:
+        str: RAG 컨텍스트 텍스트, 없으면 None
+    """
+    for msg in messages:
+        if msg.role == "system":
+            content = msg.content
+            # "참고 문서:" 또는 "Context:" 이후의 내용 추출
+            markers = ["참고 문서:", "참고문서:", "Context:", "검색 결과:"]
+            for marker in markers:
+                if marker in content:
+                    idx = content.find(marker)
+                    context = content[idx + len(marker):].strip()
+                    if context:
+                        return context
+            # 마커가 없어도 시스템 메시지에 충분한 내용이 있으면 사용
+            if len(content) > 200:
+                return content
+    return None
+
+
 def generate_response(messages: List[ChatMessage]) -> str:
     """
     메시지 내용에 따라 적절한 응답을 생성합니다.
 
-    실제 LLM 없이 규칙 기반으로 응답을 생성합니다.
+    RAG 컨텍스트가 있으면 이를 기반으로 응답을 생성합니다.
     """
     # 마지막 사용자 메시지 추출
     user_message = ""
@@ -144,27 +168,31 @@ def generate_response(messages: List[ChatMessage]) -> str:
             user_message = msg.content
             break
 
-    # 시스템 메시지에서 RAG 컨텍스트 확인
-    has_rag_context = False
-    for msg in messages:
-        if msg.role == "system" and "문서" in msg.content:
-            has_rag_context = True
-            break
+    # RAG 컨텍스트 추출
+    rag_context = extract_rag_context(messages)
 
-    # 응답 생성
+    logger.info(f"[Mock LLM] User question: {user_message[:100]}")
+    logger.info(f"[Mock LLM] RAG context available: {rag_context is not None}")
+    if rag_context:
+        logger.info(f"[Mock LLM] RAG context preview: {rag_context[:200]}...")
+
+    # RAG 컨텍스트가 있으면 컨텍스트 기반 응답 생성
+    if rag_context:
+        # 컨텍스트에서 핵심 문장 추출 (첫 500자 기준)
+        context_summary = rag_context[:500]
+
+        return (
+            f"문의하신 '{user_message[:30]}...'에 대해 답변드립니다.\n\n"
+            f"사내 규정에 따르면, {context_summary}\n\n"
+            f"추가 문의사항이 있으시면 담당 부서로 연락해 주세요."
+        )
+
+    # RAG 컨텍스트 없는 경우: 키워드 기반 응답
     if "연차" in user_message or "휴가" in user_message:
-        if has_rag_context:
-            return (
-                "연차휴가 이월에 대해 안내드립니다. "
-                "HR-001 연차휴가 관리 규정에 따르면, 연차휴가의 이월은 최대 10일을 초과할 수 없으며, "
-                "이월된 연차는 다음 해 6월 30일까지 사용해야 합니다. "
-                "추가 문의사항이 있으시면 인사팀으로 연락해 주세요."
-            )
-        else:
-            return (
-                "연차휴가에 대해 안내드립니다. "
-                "구체적인 규정은 인사팀에 문의해 주세요."
-            )
+        return (
+            "연차휴가에 대해 안내드립니다. "
+            "구체적인 규정은 인사팀에 문의해 주세요."
+        )
     elif "교육" in user_message:
         return (
             "정보보호 교육 일정에 대해 안내드립니다. "
@@ -175,10 +203,16 @@ def generate_response(messages: List[ChatMessage]) -> str:
             "보안 관련 문의에 대해 안내드립니다. "
             "보안사고 발생 시 즉시 정보보안팀(내선 1234)에 신고해 주세요."
         )
+    elif "근무" in user_message or "출퇴근" in user_message or "시간" in user_message:
+        return (
+            "근무시간에 대해 안내드립니다. "
+            "일반적인 근무시간은 오전 9시부터 오후 6시까지이며, "
+            "자세한 내용은 인사팀에 문의해 주세요."
+        )
     else:
         return (
-            f"질문에 대해 답변드립니다. "
-            f"'{user_message[:50]}...' 에 대한 자세한 내용은 담당 부서에 문의해 주세요."
+            f"'{user_message[:50]}'에 대한 문의 감사합니다. "
+            f"해당 내용에 대해서는 담당 부서에서 정확한 안내를 받으실 수 있습니다."
         )
 
 
