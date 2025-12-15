@@ -2,11 +2,11 @@
 검색 서비스 모듈 (Phase 18)
 
 AI Gateway 표준 RAG 검색 API의 비즈니스 로직을 처리합니다.
-RAGFlow의 /v1/chunk/search 엔드포인트와 연동하여 문서를 검색합니다.
+RAGFlow의 /api/v1/retrieval 엔드포인트와 연동하여 문서를 검색합니다.
 
 주요 기능:
-- dataset 슬러그 → kb_id 변환
-- RAGFlow /v1/chunk/search 호출
+- dataset 슬러그 → dataset_id 변환
+- RAGFlow /api/v1/retrieval 호출
 - 응답 정규화 및 에러 처리
 
 사용 예시:
@@ -16,7 +16,7 @@ RAGFlow의 /v1/chunk/search 엔드포인트와 연동하여 문서를 검색합�
     response = await service.search(request)
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import httpx
 
@@ -48,7 +48,8 @@ class SearchService:
     Attributes:
         _base_url: RAGFlow 서비스 기본 URL
         _timeout: HTTP 요청 타임아웃 (초)
-        _dataset_mapping: dataset 슬러그 → kb_id 매핑
+        _dataset_mapping: dataset 슬러그 → dataset_id 매핑
+        _api_key: RAGFlow API Key
         _client: httpx.AsyncClient 인스턴스
 
     Example:
@@ -66,6 +67,7 @@ class SearchService:
         timeout: Optional[float] = None,
         dataset_mapping: Optional[dict[str, str]] = None,
         client: Optional[httpx.AsyncClient] = None,
+        api_key: Optional[str] = None,
     ) -> None:
         """
         SearchService 초기화
@@ -73,8 +75,9 @@ class SearchService:
         Args:
             base_url: RAGFlow 서비스 URL. None이면 settings에서 로드.
             timeout: HTTP 요청 타임아웃 (초). None이면 settings에서 로드.
-            dataset_mapping: dataset → kb_id 매핑. None이면 settings에서 로드.
+            dataset_mapping: dataset → dataset_id 매핑. None이면 settings에서 로드.
             client: httpx.AsyncClient. None이면 공용 클라이언트 사용.
+            api_key: RAGFlow API Key. None이면 settings에서 로드.
         """
         settings = get_settings()
 
@@ -82,12 +85,19 @@ class SearchService:
         self._timeout = timeout or settings.RAGFLOW_TIMEOUT_SEC
         self._dataset_mapping = dataset_mapping or settings.ragflow_dataset_to_kb_mapping
         self._client = client or get_async_http_client()
+        self._api_key = api_key or settings.RAGFLOW_API_KEY
 
         if not self._base_url:
             logger.warning(
                 "RAGFlow URL is not configured. "
                 "Search API calls will return empty results."
             )
+
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """RAGFlow API 인증 헤더를 반환합니다."""
+        if self._api_key:
+            return {"Authorization": f"Bearer {self._api_key}"}
+        return {}
 
     def get_kb_id(self, dataset: str) -> str:
         """
@@ -131,30 +141,37 @@ class SearchService:
             logger.warning("RAGFlow search skipped: base_url not configured")
             return SearchResponse(results=[])
 
-        # dataset → kb_id 변환
-        kb_id = self.get_kb_id(request.dataset)
+        # dataset → dataset_id 변환
+        dataset_id = self.get_kb_id(request.dataset)
 
-        # RAGFlow /v1/chunk/search 호출
-        url = f"{self._base_url}/v1/chunk/search"
+        # RAGFlow /api/v1/retrieval 호출 (공식 API)
+        url = f"{self._base_url}/api/v1/retrieval"
         payload = {
-            "query": request.query,
+            "question": request.query,
+            "dataset_ids": [dataset_id],
             "top_k": request.top_k,
-            "dataset": kb_id,  # 실제 kb_id 전송
         }
 
         logger.info(
             f"Searching RAGFlow: query='{request.query[:50]}...', "
-            f"dataset={request.dataset} (kb_id={kb_id}), top_k={request.top_k}"
+            f"dataset={request.dataset} (dataset_id={dataset_id}), top_k={request.top_k}"
         )
 
         try:
             response = await self._client.post(
                 url,
+                headers=self._get_auth_headers(),
                 json=payload,
                 timeout=self._timeout,
             )
             response.raise_for_status()
             data = response.json()
+
+            # RAGFlow 응답 코드 확인
+            if data.get("code") != 0:
+                error_msg = data.get("message", "Unknown error")
+                logger.error(f"RAGFlow API error: {error_msg}")
+                return SearchResponse(results=[])
 
             # 응답 파싱
             results = self._parse_results(data, request.dataset)
@@ -195,22 +212,27 @@ class SearchService:
             List[SearchResultItem]: 파싱된 결과 리스트
         """
         results: List[SearchResultItem] = []
-        items = data.get("results", [])
 
-        for item in items:
+        # RAGFlow /api/v1/retrieval 응답 형식: {"code": 0, "data": {"chunks": [...]}}
+        chunks = data.get("data", {}).get("chunks", [])
+        if not chunks:
+            # fallback: 기존 형식 호환
+            chunks = data.get("results", [])
+
+        for chunk in chunks:
             try:
                 result = SearchResultItem(
-                    doc_id=item.get("doc_id") or item.get("chunk_id", "unknown"),
-                    title=item.get("title") or item.get("doc_name", "Untitled"),
-                    page=item.get("page") or item.get("page_num"),
-                    score=item.get("score") or item.get("similarity", 0.0),
-                    snippet=item.get("snippet") or item.get("content"),
+                    doc_id=chunk.get("id") or chunk.get("doc_id") or chunk.get("chunk_id", "unknown"),
+                    title=chunk.get("document_name") or chunk.get("title") or chunk.get("doc_name", "Untitled"),
+                    page=chunk.get("page_num") or chunk.get("page"),
+                    score=chunk.get("similarity") or chunk.get("score", 0.0),
+                    snippet=chunk.get("content") or chunk.get("snippet") or chunk.get("text"),
                     dataset=dataset_slug,
                     source="ragflow",
                 )
                 results.append(result)
             except Exception as e:
-                logger.warning(f"Failed to parse search result item: {e}")
+                logger.warning(f"Failed to parse search result chunk: {e}")
                 continue
 
         return results
