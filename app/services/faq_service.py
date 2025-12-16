@@ -1,5 +1,5 @@
 """
-FAQ Draft Service (Phase 18 + Phase 19-AI-2)
+FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
 RAG + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
@@ -8,6 +8,12 @@ Phase 19-AI-2 업데이트:
 - RagflowSearchClient 연동 (/v1/chunk/search)
 - NO_DOCS_FOUND 에러 처리
 - RAGFlow 검색 결과 기반 컨텍스트 구성
+
+Phase 19-AI-3 업데이트:
+- 프롬프트 템플릿 개선 (근거 기반 + 짧고 명확 + 마크다운)
+- answer_source: TOP_DOCS / RAGFLOW 구분
+- LOW_RELEVANCE_CONTEXT 실패 규칙 추가
+- 필드별 텍스트 출력 파싱 지원
 """
 
 import json
@@ -67,51 +73,56 @@ class RagSearchResult:
 
 
 # =============================================================================
-# LLM 프롬프트 템플릿
+# Phase 19-AI-3: LLM 프롬프트 템플릿 (개선)
 # =============================================================================
 
-SYSTEM_PROMPT = """너는 사내 보안/사규/교육 FAQ를 만드는 어시스턴트다.
+SYSTEM_PROMPT = """너는 기업 내부 FAQ 작성 보조자다.
 
-주어진 대표 질문과 실제 직원 질문 예시, 정책/사규 문서 발췌(snippet)를 바탕으로 공식 FAQ 초안을 작성하라.
+## 핵심 원칙
+1. 답변은 반드시 제공된 컨텍스트(context_docs) 범위에서만 작성한다.
+2. 컨텍스트에 없는 내용은 추측하지 않는다.
+3. 컨텍스트가 질문과 관련이 없다고 판단되면 status를 "LOW_RELEVANCE"로 설정한다.
 
-작성 원칙:
-1. 질문(question)은 명확하고 간결하게 작성
-2. 답변(answer_markdown)은 다음 구조로 작성:
-   - 첫 줄: 핵심 내용 한 줄 요약
-   - 이후: 상세 설명 (bullet 2~3개)
-   - 필요 시 추가 참고사항
-3. 문서에서 근거를 찾을 수 없으면 일반적인 가이드 제공
-4. 정확한 정보만 제공하고, 확실하지 않은 내용은 포함하지 않음
+## 출력 형식
+아래 형식으로 정확히 출력하라. 각 필드는 레이블과 콜론으로 시작한다.
 
-중요: 반드시 아래 JSON 형식으로만 응답하라. 다른 텍스트 없이 JSON만 출력하라.
+```
+status: SUCCESS 또는 LOW_RELEVANCE
+question: [canonical_question을 자연스러운 FAQ 질문으로 다듬되 의미 변경 금지]
+summary: [1문장, 최대 120자]
+answer_markdown: |
+  [결론 1~2문장]
 
-응답 JSON 형식:
-{
-  "question": "최종 FAQ 질문 문구",
-  "answer_markdown": "**한 줄 요약**\\n\\n- 상세 설명 1\\n- 상세 설명 2\\n- 상세 설명 3",
-  "summary": "한 줄 요약 텍스트",
-  "source_doc_id": "근거 문서 ID (없으면 null)",
-  "source_doc_version": "근거 문서 버전 (없으면 null)",
-  "source_article_label": "근거 조항 라벨 (없으면 null)",
-  "source_article_path": "근거 조항 경로 (없으면 null)",
-  "answer_source": "AI_RAG",
-  "ai_confidence": 0.85
-}
+  - [핵심 규칙/절차 bullet 1]
+  - [핵심 규칙/절차 bullet 2]
+  - [핵심 규칙/절차 bullet 3]
+  (3~6개 bullet)
+
+  **참고**
+  - [문서 타이틀 (p.페이지)]
+ai_confidence: [0.00~1.00, 컨텍스트 적합도가 높을수록 높게]
+```
+
+## 주의사항
+- summary는 반드시 120자 이내로 작성
+- answer_markdown의 bullet은 3~6개
+- ai_confidence는 컨텍스트와 질문의 연관성을 0.00~1.00으로 평가
+- 컨텍스트가 질문과 관련 없으면: status: LOW_RELEVANCE, ai_confidence: 0.3 이하
 """
 
 USER_PROMPT_TEMPLATE = """## 도메인
 {domain}
 
-## 대표 질문
+## 대표 질문 (canonical_question)
 {canonical_question}
 
-## 실제 직원 질문 예시
+## 실제 직원 질문 예시 (sample_questions)
 {sample_questions_text}
 
-## 참고 문서 발췌
+## 컨텍스트 문서 (context_docs)
 {docs_text}
 
-위 정보를 바탕으로 FAQ 초안을 JSON 형식으로 작성해 주세요.
+위 컨텍스트를 바탕으로 FAQ를 작성해 주세요. 컨텍스트에 없는 내용은 작성하지 마세요.
 """
 
 
@@ -128,10 +139,10 @@ class FaqDraftService:
     """
     FAQ 초안 생성 서비스.
 
-    Phase 19-AI-2 업데이트:
-    - RagflowSearchClient 사용 (/v1/chunk/search)
-    - NO_DOCS_FOUND 에러 처리
-    - top_docs vs RAGFlow 검색 결과 구분 처리
+    Phase 19-AI-3 업데이트:
+    - 프롬프트 템플릿 개선 (근거 기반)
+    - answer_source: TOP_DOCS / RAGFLOW 구분
+    - LOW_RELEVANCE_CONTEXT 실패 규칙
     """
 
     def __init__(
@@ -156,7 +167,7 @@ class FaqDraftService:
         context_docs, used_top_docs = await self._get_context_docs(req)
         logger.info(
             f"Got {len(context_docs)} context documents "
-            f"(source: {'top_docs' if used_top_docs else 'ragflow_search'})"
+            f"(source: {'TOP_DOCS' if used_top_docs else 'RAGFLOW'})"
         )
 
         # 2. LLM 메시지 구성
@@ -176,14 +187,20 @@ class FaqDraftService:
             logger.exception(f"LLM call failed: {e}")
             raise FaqGenerationError(f"LLM 호출 실패: {type(e).__name__}: {str(e)}")
 
-        # 4. 응답 파싱
+        # 4. 응답 파싱 (Phase 19-AI-3: 필드별 텍스트 파싱)
         try:
             parsed = self._parse_llm_response(llm_response)
         except Exception as e:
             logger.exception(f"LLM response parsing failed: {e}")
             raise FaqGenerationError(f"LLM 응답 파싱 실패: {str(e)}")
 
-        # 5. FaqDraft 생성 (Phase 19-AI-2)
+        # 5. Phase 19-AI-3: LOW_RELEVANCE_CONTEXT 체크
+        status = parsed.get("status", "SUCCESS").upper()
+        if status == "LOW_RELEVANCE":
+            logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
+            raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
+
+        # 6. FaqDraft 생성 (Phase 19-AI-3)
         draft = self._create_faq_draft(req, parsed, context_docs, used_top_docs)
 
         logger.info(
@@ -249,7 +266,7 @@ class FaqDraftService:
         return context_docs, False
 
     # =========================================================================
-    # Phase 19-AI-2: LLM 메시지 구성
+    # Phase 19-AI-3: LLM 메시지 구성
     # =========================================================================
 
     def _build_llm_messages(
@@ -309,13 +326,13 @@ class FaqDraftService:
             포맷된 문서 문자열
         """
         if not context_docs:
-            return "(관련 문서를 찾지 못했습니다. 일반적인 가이드를 제공해 주세요.)"
+            return "(컨텍스트 문서 없음)"
 
         docs_lines = []
 
         if used_top_docs:
             # FaqSourceDoc 포맷
-            for i, doc in enumerate(context_docs[:3], start=1):
+            for i, doc in enumerate(context_docs[:5], start=1):
                 doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
                 if doc.article_label:
                     doc_info += f" ({doc.article_label})"
@@ -324,7 +341,7 @@ class FaqDraftService:
                 docs_lines.append(doc_info)
         else:
             # RagSearchResult 포맷 (Phase 19-AI-2)
-            for i, doc in enumerate(context_docs[:3], start=1):
+            for i, doc in enumerate(context_docs[:5], start=1):
                 doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
                 if doc.page is not None:
                     doc_info += f" (p.{doc.page})"
@@ -336,7 +353,7 @@ class FaqDraftService:
         return "\n\n".join(docs_lines)
 
     # =========================================================================
-    # Phase 19-AI-2: FaqDraft 생성
+    # Phase 19-AI-3: FaqDraft 생성
     # =========================================================================
 
     def _create_faq_draft(
@@ -349,9 +366,10 @@ class FaqDraftService:
         """
         파싱된 LLM 응답으로 FaqDraft를 생성합니다.
 
-        Phase 19-AI-2 스펙:
+        Phase 19-AI-3 스펙:
+        - answer_source: TOP_DOCS 또는 RAGFLOW
         - top_docs 사용 시: source_doc_id 등 그대로 사용
-        - RAGFlow 검색 시: source 필드는 null, answer_markdown에 참고 문서 추가
+        - RAGFlow 검색 시: source 필드는 null
 
         Args:
             req: FAQ 초안 생성 요청
@@ -364,23 +382,16 @@ class FaqDraftService:
         """
         answer_markdown = parsed.get("answer_markdown", "")
 
-        # RAGFlow 검색 결과 사용 시 참고 문서 정보 추가
-        if not used_top_docs and context_docs:
-            ref_lines = ["\n\n---\n**참고 문서:**"]
-            for doc in context_docs[:3]:
-                ref_line = f"- {doc.title or '제목 없음'}"
-                if doc.page is not None:
-                    ref_line += f" (p.{doc.page})"
-                ref_lines.append(ref_line)
-            answer_markdown += "\n".join(ref_lines)
+        # Phase 19-AI-3: answer_source 결정
+        answer_source = "TOP_DOCS" if used_top_docs else "RAGFLOW"
 
         # source 필드 결정
         if used_top_docs and context_docs:
             first_doc = context_docs[0]
-            source_doc_id = parsed.get("source_doc_id") or first_doc.doc_id
-            source_doc_version = parsed.get("source_doc_version") or first_doc.doc_version
-            source_article_label = parsed.get("source_article_label") or first_doc.article_label
-            source_article_path = parsed.get("source_article_path") or first_doc.article_path
+            source_doc_id = first_doc.doc_id
+            source_doc_version = first_doc.doc_version
+            source_article_label = first_doc.article_label
+            source_article_path = first_doc.article_path
         else:
             # RAGFlow 검색 결과는 source 정보 없음
             source_doc_id = None
@@ -388,29 +399,36 @@ class FaqDraftService:
             source_article_label = None
             source_article_path = None
 
+        # summary 길이 검증 (Phase 19-AI-3: 최대 120자)
+        summary = parsed.get("summary", "")
+        if len(summary) > 120:
+            summary = summary[:117] + "..."
+
         return FaqDraft(
             faq_draft_id=str(uuid.uuid4()),
             cluster_id=req.cluster_id,
             domain=req.domain,
             question=parsed.get("question", req.canonical_question),
             answer_markdown=answer_markdown,
-            summary=parsed.get("summary"),
+            summary=summary,
             source_doc_id=source_doc_id,
             source_doc_version=source_doc_version,
             source_article_label=source_article_label,
             source_article_path=source_article_path,
-            answer_source=self._normalize_answer_source(parsed.get("answer_source")),
+            answer_source=answer_source,
             ai_confidence=self._normalize_confidence(parsed.get("ai_confidence")),
             created_at=datetime.now(timezone.utc),
         )
 
     # =========================================================================
-    # LLM 응답 파싱
+    # Phase 19-AI-3: LLM 응답 파싱 (필드별 텍스트 + JSON 지원)
     # =========================================================================
 
     def _parse_llm_response(self, llm_response: str) -> dict:
         """
         LLM 응답을 파싱합니다.
+
+        Phase 19-AI-3: 필드별 텍스트 형식과 JSON 형식 모두 지원
 
         Args:
             llm_response: LLM 응답 텍스트
@@ -421,24 +439,104 @@ class FaqDraftService:
         Raises:
             FaqGenerationError: 파싱 실패 시
         """
-        # JSON 추출
+        # 방법 1: 필드별 텍스트 형식 파싱 시도
+        parsed = self._parse_field_text_format(llm_response)
+        if parsed and parsed.get("question") and parsed.get("answer_markdown"):
+            return parsed
+
+        # 방법 2: JSON 형식 파싱 시도 (하위 호환)
         json_str = self._extract_json_from_response(llm_response)
+        if json_str:
+            try:
+                data = json.loads(json_str)
+                if data.get("question") and data.get("answer_markdown"):
+                    return data
+            except json.JSONDecodeError:
+                pass
 
-        if not json_str:
-            raise FaqGenerationError("LLM 응답에서 JSON을 찾을 수 없습니다")
+        # 파싱 실패
+        raise FaqGenerationError("LLM 응답 파싱 실패: 필드별 텍스트 또는 JSON 형식을 찾을 수 없습니다")
 
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError as e:
-            raise FaqGenerationError(f"JSON 파싱 실패: {e}")
+    def _parse_field_text_format(self, response: str) -> Optional[dict]:
+        """
+        Phase 19-AI-3: 필드별 텍스트 형식을 파싱합니다.
 
-        # 필수 필드 검증
-        if not data.get("question"):
-            raise FaqGenerationError("필수 필드 'question'이 없습니다")
-        if not data.get("answer_markdown"):
-            raise FaqGenerationError("필수 필드 'answer_markdown'이 없습니다")
+        형식:
+        status: SUCCESS
+        question: 질문 내용
+        summary: 요약 내용
+        answer_markdown: |
+          답변 내용
+        ai_confidence: 0.85
 
-        return data
+        Args:
+            response: LLM 응답 텍스트
+
+        Returns:
+            파싱된 딕셔너리 또는 None
+        """
+        result = {}
+
+        # status 추출
+        status_match = re.search(r'^status:\s*(.+)$', response, re.MULTILINE | re.IGNORECASE)
+        if status_match:
+            result["status"] = status_match.group(1).strip()
+
+        # question 추출
+        question_match = re.search(r'^question:\s*(.+)$', response, re.MULTILINE | re.IGNORECASE)
+        if question_match:
+            result["question"] = question_match.group(1).strip()
+
+        # summary 추출
+        summary_match = re.search(r'^summary:\s*(.+)$', response, re.MULTILINE | re.IGNORECASE)
+        if summary_match:
+            result["summary"] = summary_match.group(1).strip()
+
+        # ai_confidence 추출
+        confidence_match = re.search(r'^ai_confidence:\s*([\d.]+)', response, re.MULTILINE | re.IGNORECASE)
+        if confidence_match:
+            try:
+                result["ai_confidence"] = float(confidence_match.group(1))
+            except ValueError:
+                pass
+
+        # answer_markdown 추출 (멀티라인)
+        # 패턴 1: answer_markdown: | 로 시작하는 YAML 스타일
+        md_match = re.search(
+            r'^answer_markdown:\s*\|?\s*\n((?:[ \t]+.+\n?)+)',
+            response,
+            re.MULTILINE | re.IGNORECASE
+        )
+        if md_match:
+            # 들여쓰기 제거
+            lines = md_match.group(1).split('\n')
+            # 최소 들여쓰기 찾기
+            min_indent = float('inf')
+            for line in lines:
+                if line.strip():
+                    indent = len(line) - len(line.lstrip())
+                    min_indent = min(min_indent, indent)
+            if min_indent == float('inf'):
+                min_indent = 0
+            # 들여쓰기 제거하여 결합
+            cleaned_lines = []
+            for line in lines:
+                if len(line) >= min_indent:
+                    cleaned_lines.append(line[min_indent:])
+                else:
+                    cleaned_lines.append(line)
+            result["answer_markdown"] = '\n'.join(cleaned_lines).strip()
+        else:
+            # 패턴 2: answer_markdown: 이후 다음 필드까지
+            md_match2 = re.search(
+                r'^answer_markdown:\s*(.+?)(?=^(?:ai_confidence|status|question|summary):|\Z)',
+                response,
+                re.MULTILINE | re.DOTALL | re.IGNORECASE
+            )
+            if md_match2:
+                result["answer_markdown"] = md_match2.group(1).strip()
+
+        return result if result else None
 
     def _extract_json_from_response(self, response: str) -> Optional[str]:
         """
@@ -471,11 +569,11 @@ class FaqDraftService:
     def _normalize_answer_source(
         self, source: Optional[str]
     ) -> str:
-        """answer_source를 정규화합니다."""
-        valid_sources = {"AI_RAG", "LOG_REUSE", "MIXED"}
+        """answer_source를 정규화합니다. (하위 호환용)"""
+        valid_sources = {"TOP_DOCS", "RAGFLOW", "AI_RAG", "LOG_REUSE", "MIXED"}
         if source and source.upper() in valid_sources:
             return source.upper()
-        return "AI_RAG"
+        return "RAGFLOW"
 
     def _normalize_confidence(
         self, confidence: Optional[float]

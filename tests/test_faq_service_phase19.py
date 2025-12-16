@@ -314,7 +314,7 @@ class TestFormatDocsForPrompt:
 
         result = service._format_docs_for_prompt([], used_top_docs=True)
 
-        assert "관련 문서를 찾지 못했습니다" in result
+        assert "컨텍스트 문서 없음" in result
 
 
 # =============================================================================
@@ -353,7 +353,7 @@ class TestCreateFaqDraft:
     def test_create_with_ragflow_results(
         self, mock_search_client, mock_llm_client, sample_request, sample_ragflow_chunks
     ):
-        """RAGFlow 검색 결과 사용 시 source 필드 null, 참고 문서 추가"""
+        """RAGFlow 검색 결과 사용 시 source 필드 null, answer_source=RAGFLOW"""
         context_docs = [RagSearchResult.from_chunk(c) for c in sample_ragflow_chunks]
         service = FaqDraftService(
             search_client=mock_search_client,
@@ -361,7 +361,7 @@ class TestCreateFaqDraft:
         )
         parsed = {
             "question": "연차휴가 이월 규정은?",
-            "answer_markdown": "**답변입니다**",
+            "answer_markdown": "**답변입니다**\n\n**참고**\n- 인사규정.pdf (p.15)",
             "summary": "요약",
             "answer_source": "AI_RAG",
             "ai_confidence": 0.9,
@@ -374,9 +374,9 @@ class TestCreateFaqDraft:
         assert draft.source_doc_id is None
         assert draft.source_doc_version is None
         assert draft.source_article_label is None
-        assert "참고 문서:" in draft.answer_markdown
-        assert "인사규정.pdf" in draft.answer_markdown
-        assert "(p.15)" in draft.answer_markdown
+        assert draft.answer_source == "RAGFLOW"
+        # Phase 19-AI-3: LLM이 직접 참고 섹션을 생성
+        assert "참고" in draft.answer_markdown
 
 
 # =============================================================================
@@ -404,6 +404,7 @@ class TestGenerateFaqDraft:
         assert draft.cluster_id == "cluster-001"
         assert draft.domain == "POLICY"
         assert draft.source_doc_id == "doc-001"
+        assert draft.answer_source == "TOP_DOCS"
         mock_search_client.search_chunks.assert_not_called()
 
     @pytest.mark.anyio
@@ -421,7 +422,7 @@ class TestGenerateFaqDraft:
 
         assert draft.faq_draft_id is not None
         assert draft.source_doc_id is None
-        assert "참고 문서:" in draft.answer_markdown
+        assert draft.answer_source == "RAGFLOW"
         mock_search_client.search_chunks.assert_called_once()
 
     @pytest.mark.anyio
