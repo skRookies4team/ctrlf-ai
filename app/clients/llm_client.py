@@ -168,18 +168,23 @@ class LLMClient:
             logger.warning("LLM generate_chat_completion skipped: base_url not configured")
             return self.FALLBACK_MESSAGE
 
-        url = f"{self._base_url}/v1/chat/completions"
+        base = str(self._base_url).rstrip("/")
+        url = f"{base}/v1/chat/completions"
+
+        # 모델명이 없으면 설정에서 가져옴
+        settings = get_settings()
+        actual_model = model or settings.LLM_MODEL_NAME
+
         payload: Dict[str, Any] = {
+            "model": actual_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        if model:
-            payload["model"] = model
 
         logger.info(
             f"Sending chat completion request to LLM: "
-            f"messages_count={len(messages)}, model={model or 'default'}"
+            f"messages_count={len(messages)}, model={actual_model}"
         )
         logger.debug(f"LLM request payload: {payload}")
 
@@ -343,7 +348,8 @@ class LLMClient:
             payload["model"] = model
 
         # TODO: 실제 LLM 엔드포인트로 수정 (예: /v1/chat/completions)
-        url = f"{self._base_url}/v1/chat/completions"
+        base = str(self._base_url).rstrip("/")
+        url = f"{base}/v1/chat/completions"
         resp = await self._client.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
