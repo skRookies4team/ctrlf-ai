@@ -3,12 +3,17 @@ RAG API Test Module
 
 Tests for the /ai/rag/process endpoint.
 Verifies that the RAG API returns expected response structure.
+
+Phase 21+: Mock 모드 테스트 추가
+- AI_ENV=mock 설정 시 RAGFlow 없이 Mock 응답 반환
 """
 
+import os
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.core.config import clear_settings_cache
 
 
 @pytest.fixture
@@ -181,3 +186,97 @@ async def test_rag_process_preserves_doc_id(client: AsyncClient) -> None:
     data = response.json()
 
     assert data["doc_id"] == doc_id
+
+
+# =============================================================================
+# Mock 모드 테스트 (Phase 21+)
+# =============================================================================
+
+
+@pytest.fixture
+def mock_mode():
+    """Mock 모드 활성화 fixture."""
+    original = os.environ.get("AI_ENV")
+    os.environ["AI_ENV"] = "mock"
+    clear_settings_cache()
+    yield
+    if original is not None:
+        os.environ["AI_ENV"] = original
+    else:
+        os.environ.pop("AI_ENV", None)
+    clear_settings_cache()
+
+
+@pytest.mark.anyio
+async def test_rag_process_mock_mode_returns_mock_response(mock_mode) -> None:
+    """
+    Test that mock mode returns [MOCK] prefixed response.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "doc_id": "MOCK-DOC-001",
+            "file_url": "https://example.com/docs/mock.pdf",
+            "domain": "POLICY",
+        }
+
+        response = await client.post("/ai/rag/process", json=payload)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["doc_id"] == "MOCK-DOC-001"
+        assert data["success"] is True
+        assert "[MOCK]" in data["message"]
+
+
+@pytest.mark.anyio
+async def test_rag_process_mock_mode_includes_domain(mock_mode) -> None:
+    """
+    Test that mock mode response includes domain information.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "doc_id": "MOCK-DOC-002",
+            "file_url": "https://example.com/docs/mock.pdf",
+            "domain": "EDUCATION",
+        }
+
+        response = await client.post("/ai/rag/process", json=payload)
+        data = response.json()
+
+        assert "EDUCATION" in data["message"]
+
+
+@pytest.mark.anyio
+async def test_rag_process_real_mode_no_ragflow_returns_dummy() -> None:
+    """
+    Test that real mode without RAGFlow returns dummy response (not mock).
+
+    unittest.mock을 사용하여 settings를 직접 패치합니다.
+    """
+    from unittest.mock import patch, MagicMock
+    from app.services.rag_service import RagService
+    from app.models.rag import RagProcessRequest
+
+    # Mock settings 생성
+    mock_settings = MagicMock()
+    mock_settings.is_mock_mode = False  # Real mode
+    mock_settings.ragflow_base_url = None  # RAGFlow 미설정
+
+    with patch("app.services.rag_service.get_settings", return_value=mock_settings):
+        service = RagService()
+
+        request = RagProcessRequest(
+            doc_id="REAL-DOC-001",
+            file_url="https://example.com/docs/real.pdf",
+            domain="POLICY",
+        )
+
+        result = await service.process_document(request)
+
+        assert result.doc_id == "REAL-DOC-001"
+        assert result.success is True
+        # Real mode without RAGFlow should NOT have [MOCK] prefix
+        assert "[MOCK]" not in result.message
+        assert "not configured" in result.message.lower()

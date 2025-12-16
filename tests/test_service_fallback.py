@@ -151,8 +151,10 @@ async def test_rag_service_returns_dummy_success_without_config() -> None:
     """
     Test that RagService returns dummy success when RAGFlow is not configured.
 
-    Note: RagService returns success=True with dummy message when RAGFLOW_BASE_URL
+    Note: RagService returns success=True with dummy/mock message when RAGFLOW_BASE_URL
     is not set, for backward compatibility with existing tests.
+
+    Phase 21+: Mock 모드에서는 [MOCK] 접두사가 붙은 응답을 반환합니다.
     """
     # RagService checks settings.RAGFLOW_BASE_URL internally
     service = RagService()
@@ -165,12 +167,14 @@ async def test_rag_service_returns_dummy_success_without_config() -> None:
 
     response = await service.process_document(request)
 
-    # Should return dummy success when RAGFlow is not configured
+    # Should return dummy/mock success when RAGFlow is not configured
     assert isinstance(response, RagProcessResponse)
     assert response.doc_id == "TEST-001"
-    assert response.success is True  # Dummy success for compatibility
+    assert response.success is True  # Dummy/mock success for compatibility
     assert response.message is not None
-    assert "dummy" in response.message.lower() or "not configured" in response.message.lower()
+    # Accept either dummy, not configured, or mock mode response
+    msg_lower = response.message.lower()
+    assert "dummy" in msg_lower or "not configured" in msg_lower or "[mock]" in msg_lower
 
 
 @pytest.mark.anyio

@@ -56,6 +56,7 @@ class RagService:
         Process a document for RAG indexing via RAGFlow service.
 
         Forwards the document processing request to RAGFlow and returns the result.
+        If in mock mode (AI_ENV=mock), returns a mock success response.
         If RAGFlow is not configured (RAGFLOW_BASE_URL is empty), returns a
         dummy success response for development/testing compatibility.
 
@@ -66,6 +67,7 @@ class RagService:
             RagProcessResponse with processing result
 
         Note:
+            - If AI_ENV=mock, returns mock success response (no RAGFlow needed)
             - If RAGFlow is not configured, returns dummy success response
             - On RAGFlow error, returns success=False with error details
         """
@@ -81,9 +83,24 @@ class RagService:
                 f"departments={req.acl.departments}"
             )
 
+        settings = get_settings()
+
+        # Mock 모드: RAGFlow 없이 Mock 응답 반환
+        if settings.is_mock_mode:
+            logger.info(
+                f"[MOCK MODE] Returning mock success for RAG document: doc_id={req.doc_id}"
+            )
+            return RagProcessResponse(
+                doc_id=req.doc_id,
+                success=True,
+                message=(
+                    f"[MOCK] Document '{req.doc_id}' processed successfully. "
+                    f"Domain: {req.domain}, File: {req.file_url or 'N/A'}"
+                ),
+            )
+
         # Check if RAGFlow is configured
         # Phase 9: ragflow_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
-        settings = get_settings()
         if not settings.ragflow_base_url:
             # Return dummy success response for development/testing
             logger.info(

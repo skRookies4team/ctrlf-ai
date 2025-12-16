@@ -5,9 +5,11 @@
 pytest와 httpx.AsyncClient를 사용합니다.
 """
 
+import os
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.core.config import clear_settings_cache
 from app.main import app
 
 
@@ -15,6 +17,44 @@ from app.main import app
 def anyio_backend() -> str:
     """pytest-anyio 백엔드 설정"""
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def disable_service_urls():
+    """
+    Readiness 테스트를 위해 서비스 URL을 비활성화합니다.
+
+    실제 서비스에 연결하지 않도록 모든 URL을 빈 문자열로 설정합니다.
+    직접 URL과 Mock URL 모두 비활성화합니다.
+    """
+    # 원본 값 저장
+    originals = {
+        "RAGFLOW_BASE_URL": os.environ.get("RAGFLOW_BASE_URL"),
+        "RAGFLOW_BASE_URL_MOCK": os.environ.get("RAGFLOW_BASE_URL_MOCK"),
+        "LLM_BASE_URL": os.environ.get("LLM_BASE_URL"),
+        "LLM_BASE_URL_MOCK": os.environ.get("LLM_BASE_URL_MOCK"),
+        "BACKEND_BASE_URL": os.environ.get("BACKEND_BASE_URL"),
+        "BACKEND_BASE_URL_MOCK": os.environ.get("BACKEND_BASE_URL_MOCK"),
+    }
+
+    # 모든 URL 비활성화
+    os.environ["RAGFLOW_BASE_URL"] = ""
+    os.environ["RAGFLOW_BASE_URL_MOCK"] = ""
+    os.environ["LLM_BASE_URL"] = ""
+    os.environ["LLM_BASE_URL_MOCK"] = ""
+    os.environ["BACKEND_BASE_URL"] = ""
+    os.environ["BACKEND_BASE_URL_MOCK"] = ""
+    clear_settings_cache()
+
+    yield
+
+    # 원본 값 복원
+    for key, value in originals.items():
+        if value is not None:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
+    clear_settings_cache()
 
 
 @pytest.fixture

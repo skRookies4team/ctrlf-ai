@@ -115,6 +115,32 @@ class Settings(BaseSettings):
     RAGFLOW_KB_ID_EDUCATION: Optional[str] = None
 
     # =========================================================================
+    # Phase 20: FAQ 생성 고도화 설정
+    # =========================================================================
+    # RAGFlow 검색 결과 캐싱 (Phase 20-AI-1)
+    FAQ_RAG_CACHE_ENABLED: bool = True  # 캐시 활성화 여부
+    FAQ_RAG_CACHE_TTL_SECONDS: int = 300  # 캐시 TTL (초)
+    FAQ_RAG_CACHE_MAXSIZE: int = 2048  # 최대 캐시 항목 수
+
+    # 배치 FAQ 생성 동시성 (Phase 20-AI-2)
+    FAQ_BATCH_CONCURRENCY: int = 4  # 동시 처리 가능한 요청 수
+
+    # 품질 모니터링 (Phase 20-AI-4)
+    FAQ_CONFIDENCE_WARN_THRESHOLD: float = 0.6  # 경고 임계값
+
+    # =========================================================================
+    # Phase 21: Intent Router 설정
+    # =========================================================================
+    # LLM Router 사용 여부 (False면 Rule Router만 사용)
+    ROUTER_USE_LLM: bool = True
+
+    # Rule Router만 사용할 최소 신뢰도 (이상이면 LLM Router 스킵)
+    ROUTER_RULE_CONFIDENCE_THRESHOLD: float = 0.85
+
+    # 되묻기/확인 대기 만료 시간 (초)
+    ROUTER_PENDING_TIMEOUT_SECONDS: int = 300  # 5분
+
+    # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
     # =========================================================================
     @field_validator(

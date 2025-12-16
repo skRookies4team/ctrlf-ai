@@ -1,18 +1,25 @@
 """
-FAQ API 엔드포인트 (Phase 18)
+FAQ API 엔드포인트 (Phase 18 + Phase 20)
 
 FAQ 초안 생성 API를 제공합니다.
 백엔드에서 FAQ 후보 클러스터 정보를 전달하면,
 RAG + LLM을 사용하여 FAQ 초안을 생성합니다.
 
 엔드포인트:
-    POST /ai/faq/generate - FAQ 초안 생성
+    POST /ai/faq/generate - FAQ 초안 생성 (단건)
+    POST /ai/faq/generate/batch - FAQ 초안 배치 생성 (Phase 20-AI-2)
 """
+
+import asyncio
+from typing import List
 
 from fastapi import APIRouter
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
+    FaqDraftGenerateBatchRequest,
+    FaqDraftGenerateBatchResponse,
     FaqDraftGenerateRequest,
     FaqDraftGenerateResponse,
 )
@@ -132,3 +139,145 @@ async def generate_faq_draft(
             faq_draft=None,
             error_message=f"예기치 않은 오류: {type(e).__name__}: {str(e)}",
         )
+
+
+# =============================================================================
+# Phase 20-AI-2: 배치 FAQ 생성 엔드포인트
+# =============================================================================
+
+
+async def _process_single_item(
+    service: FaqDraftService,
+    request: FaqDraftGenerateRequest,
+    semaphore: asyncio.Semaphore,
+) -> FaqDraftGenerateResponse:
+    """
+    단일 FAQ 요청을 처리합니다 (배치 내부용).
+
+    세마포어로 동시성을 제한하고, 예외를 개별적으로 처리합니다.
+    """
+    async with semaphore:
+        try:
+            draft = await service.generate_faq_draft(request)
+            return FaqDraftGenerateResponse(
+                status="SUCCESS",
+                faq_draft=draft,
+                error_message=None,
+            )
+        except FaqGenerationError as e:
+            logger.warning(
+                f"FAQ batch item failed: cluster_id={request.cluster_id}, error={e}"
+            )
+            return FaqDraftGenerateResponse(
+                status="FAILED",
+                faq_draft=None,
+                error_message=str(e),
+            )
+        except Exception as e:
+            logger.exception(
+                f"FAQ batch item unexpected error: cluster_id={request.cluster_id}"
+            )
+            return FaqDraftGenerateResponse(
+                status="FAILED",
+                faq_draft=None,
+                error_message=f"예기치 않은 오류: {type(e).__name__}: {str(e)}",
+            )
+
+
+@router.post(
+    "/generate/batch",
+    response_model=FaqDraftGenerateBatchResponse,
+    summary="FAQ 초안 배치 생성 (Phase 20)",
+    description="다수의 FAQ 클러스터를 한 번에 생성합니다. 각 항목은 독립적으로 처리됩니다.",
+    responses={
+        200: {
+            "description": "배치 FAQ 초안 생성 결과",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "mixed_results": {
+                            "summary": "일부 성공/일부 실패",
+                            "value": {
+                                "items": [
+                                    {
+                                        "status": "SUCCESS",
+                                        "faq_draft": {
+                                            "faq_draft_id": "FAQ-cluster-001-a1b2c3d4",
+                                            "domain": "SEC_POLICY",
+                                            "cluster_id": "cluster-001",
+                                            "question": "USB 반출 절차는?",
+                                            "answer_markdown": "정보보호팀 승인 필요",
+                                            "answer_source": "RAGFLOW",
+                                            "ai_confidence": 0.85,
+                                            "created_at": "2025-12-16T10:00:00Z",
+                                        },
+                                        "error_message": None,
+                                    },
+                                    {
+                                        "status": "FAILED",
+                                        "faq_draft": None,
+                                        "error_message": "PII_DETECTED",
+                                    },
+                                ],
+                                "total_count": 2,
+                                "success_count": 1,
+                                "failed_count": 1,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+    },
+)
+async def generate_faq_draft_batch(
+    request: FaqDraftGenerateBatchRequest,
+) -> FaqDraftGenerateBatchResponse:
+    """
+    배치로 FAQ 초안을 생성합니다 (Phase 20-AI-2).
+
+    Args:
+        request: 배치 FAQ 초안 생성 요청
+            - items: FAQ 초안 생성 요청 리스트
+            - concurrency: 동시 처리 수 (선택)
+
+    Returns:
+        FaqDraftGenerateBatchResponse: 배치 생성 결과
+            - items: 요청 순서대로 응답 리스트
+            - total_count: 전체 요청 수
+            - success_count: 성공한 요청 수
+            - failed_count: 실패한 요청 수
+    """
+    settings = get_settings()
+    concurrency = request.concurrency or settings.FAQ_BATCH_CONCURRENCY
+
+    logger.info(
+        f"FAQ batch generate request: item_count={len(request.items)}, "
+        f"concurrency={concurrency}"
+    )
+
+    service = get_faq_service()
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # 모든 항목을 병렬로 처리 (순서 유지)
+    tasks = [
+        _process_single_item(service, item, semaphore)
+        for item in request.items
+    ]
+    results: List[FaqDraftGenerateResponse] = await asyncio.gather(*tasks)
+
+    # 통계 계산
+    success_count = sum(1 for r in results if r.status == "SUCCESS")
+    failed_count = len(results) - success_count
+
+    logger.info(
+        f"FAQ batch generate completed: total={len(results)}, "
+        f"success={success_count}, failed={failed_count}"
+    )
+
+    return FaqDraftGenerateBatchResponse(
+        items=results,
+        total_count=len(results),
+        success_count=success_count,
+        failed_count=failed_count,
+    )

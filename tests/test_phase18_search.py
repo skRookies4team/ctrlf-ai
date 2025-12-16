@@ -185,16 +185,20 @@ class TestSearchService:
         """검색 성공 테스트"""
         mock_response = MagicMock()
         mock_response.status_code = 200
+        # RAGFlow 공식 API 응답 형식 (code: 0, data.chunks)
         mock_response.json.return_value = {
-            "results": [
-                {
-                    "doc_id": "chunk-001",
-                    "title": "인사규정",
-                    "page": 3,
-                    "score": 0.87,
-                    "snippet": "연차휴가는...",
-                }
-            ]
+            "code": 0,
+            "data": {
+                "chunks": [
+                    {
+                        "id": "chunk-001",
+                        "document_name": "인사규정",
+                        "page_num": 3,
+                        "similarity": 0.87,
+                        "content": "연차휴가는...",
+                    }
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -217,10 +221,10 @@ class TestSearchService:
         assert response.results[0].dataset == "policy"
         assert response.results[0].source == "ragflow"
 
-        # kb_id가 올바르게 전송되었는지 확인
+        # dataset_ids가 올바르게 전송되었는지 확인
         mock_client.post.assert_called_once()
         call_args = mock_client.post.call_args
-        assert call_args[1]["json"]["dataset"] == "kb_policy_001"
+        assert call_args[1]["json"]["dataset_ids"] == ["kb_policy_001"]
 
     @pytest.mark.anyio
     async def test_search_timeout(self):
@@ -461,26 +465,29 @@ class TestSearchIntegration:
     @pytest.mark.anyio
     async def test_full_search_flow(self):
         """전체 검색 플로우 테스트"""
-        # Mock RAGFlow response
+        # Mock RAGFlow response (공식 API 형식: code: 0, data.chunks)
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "results": [
-                {
-                    "doc_id": "chunk-001",
-                    "title": "인사규정 v2.0",
-                    "page": 5,
-                    "score": 0.92,
-                    "snippet": "연차휴가는 입사 1년 후 15일이 부여됩니다...",
-                },
-                {
-                    "doc_id": "chunk-002",
-                    "title": "인사규정 v2.0",
-                    "page": 6,
-                    "score": 0.85,
-                    "snippet": "연차휴가 이월은 최대 5일까지 가능합니다...",
-                },
-            ]
+            "code": 0,
+            "data": {
+                "chunks": [
+                    {
+                        "id": "chunk-001",
+                        "document_name": "인사규정 v2.0",
+                        "page_num": 5,
+                        "similarity": 0.92,
+                        "content": "연차휴가는 입사 1년 후 15일이 부여됩니다...",
+                    },
+                    {
+                        "id": "chunk-002",
+                        "document_name": "인사규정 v2.0",
+                        "page_num": 6,
+                        "similarity": 0.85,
+                        "content": "연차휴가 이월은 최대 5일까지 가능합니다...",
+                    },
+                ]
+            }
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -513,10 +520,10 @@ class TestSearchIntegration:
         assert response.results[0].source == "ragflow"
         assert response.results[1].doc_id == "chunk-002"
 
-        # Verify RAGFlow was called correctly
+        # Verify RAGFlow was called correctly (공식 API: /api/v1/retrieval)
         mock_client.post.assert_called_once()
         call_args = mock_client.post.call_args
-        assert "/v1/chunk/search" in call_args[0][0]
-        assert call_args[1]["json"]["query"] == "연차휴가 이월 규정은?"
+        assert "/api/v1/retrieval" in call_args[0][0]
+        assert call_args[1]["json"]["question"] == "연차휴가 이월 규정은?"
         assert call_args[1]["json"]["top_k"] == 5
-        assert call_args[1]["json"]["dataset"] == "kb_policy_001"  # kb_id로 변환됨
+        assert call_args[1]["json"]["dataset_ids"] == ["kb_policy_001"]  # kb_id로 변환됨

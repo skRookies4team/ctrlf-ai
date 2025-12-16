@@ -9,6 +9,7 @@ OpenAI API 호환 형식을 사용합니다.
 - GET /v1/models: 사용 가능한 모델 목록
 - GET /health: 헬스체크
 - GET /stats: 호출 통계 (테스트 검증용)
+- POST /rag/process: RAG 문서 처리 Mock (Phase 21+)
 """
 
 import logging
@@ -105,6 +106,37 @@ class StatsResponse(BaseModel):
 
 
 # =============================================================================
+# RAG Mock 모델 정의 (Phase 21+)
+# =============================================================================
+
+
+class RagAcl(BaseModel):
+    """RAG 문서 접근 제어."""
+
+    roles: Optional[List[str]] = None
+    departments: Optional[List[str]] = None
+
+
+class RagProcessRequest(BaseModel):
+    """RAG 문서 처리 요청."""
+
+    doc_id: str
+    domain: Optional[str] = None
+    file_url: Optional[str] = None
+    content: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    acl: Optional[RagAcl] = None
+
+
+class RagProcessResponse(BaseModel):
+    """RAG 문서 처리 응답."""
+
+    doc_id: str
+    success: bool
+    message: Optional[str] = None
+
+
+# =============================================================================
 # 글로벌 상태 (테스트 검증용)
 # =============================================================================
 
@@ -116,11 +148,18 @@ class ServerState:
         self.completion_call_count = 0
         self.last_model: Optional[str] = None
         self.last_messages: List[Dict[str, Any]] = []
+        # RAG Mock 상태 (Phase 21+)
+        self.rag_process_count = 0
+        self.last_rag_doc_id: Optional[str] = None
+        self.processed_documents: List[str] = []
 
     def reset(self):
         self.completion_call_count = 0
         self.last_model = None
         self.last_messages = []
+        self.rag_process_count = 0
+        self.last_rag_doc_id = None
+        self.processed_documents = []
 
 
 state = ServerState()
@@ -335,6 +374,54 @@ async def reset_stats():
     state.reset()
     logger.info("[Mock LLM] Stats reset")
     return {"status": "ok", "message": "Stats reset"}
+
+
+# =============================================================================
+# RAG Mock 엔드포인트 (Phase 21+)
+# =============================================================================
+
+
+@app.post("/rag/process", response_model=RagProcessResponse)
+async def process_rag_document(request: RagProcessRequest):
+    """
+    RAG 문서 처리 Mock 엔드포인트.
+
+    Docker Compose 통합 테스트에서 RAGFlow 없이 문서 처리를 시뮬레이션합니다.
+    """
+    # 상태 업데이트
+    state.rag_process_count += 1
+    state.last_rag_doc_id = request.doc_id
+    state.processed_documents.append(request.doc_id)
+
+    logger.info(
+        f"[Mock RAG] Processing document: doc_id={request.doc_id}, "
+        f"domain={request.domain}, file_url={request.file_url}"
+    )
+
+    # Mock 성공 응답 반환
+    return RagProcessResponse(
+        doc_id=request.doc_id,
+        success=True,
+        message=(
+            f"[MOCK] Document '{request.doc_id}' indexed successfully. "
+            f"Domain: {request.domain or 'N/A'}, "
+            f"Chunks: 5, Embeddings: 5"
+        ),
+    )
+
+
+@app.get("/rag/stats")
+async def get_rag_stats():
+    """
+    RAG Mock 통계 엔드포인트.
+
+    통합 테스트에서 RAG 처리 호출 검증에 사용합니다.
+    """
+    return {
+        "rag_process_count": state.rag_process_count,
+        "last_doc_id": state.last_rag_doc_id,
+        "processed_documents": state.processed_documents,
+    }
 
 
 if __name__ == "__main__":
