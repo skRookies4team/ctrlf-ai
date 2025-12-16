@@ -1,5 +1,5 @@
 """
-FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3)
+FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3 + Phase 19-AI-4)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
 RAG + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
@@ -14,6 +14,11 @@ Phase 19-AI-3 업데이트:
 - answer_source: TOP_DOCS / RAGFLOW 구분
 - LOW_RELEVANCE_CONTEXT 실패 규칙 추가
 - 필드별 텍스트 출력 파싱 지원
+
+Phase 19-AI-4 업데이트:
+- PII 강차단: 입력/출력에 PII 검출 시 즉시 실패
+- PII_DETECTED: 입력(canonical_question, sample_questions, top_docs.snippet)에 PII 발견
+- PII_DETECTED_OUTPUT: LLM 출력(answer_markdown, summary)에 PII 발견
 """
 
 import json
@@ -35,6 +40,8 @@ from app.models.faq import (
     FaqDraftGenerateRequest,
     FaqSourceDoc,
 )
+from app.models.intent import MaskingStage
+from app.services.pii_service import PiiService
 
 logger = get_logger(__name__)
 
@@ -143,25 +150,38 @@ class FaqDraftService:
     - 프롬프트 템플릿 개선 (근거 기반)
     - answer_source: TOP_DOCS / RAGFLOW 구분
     - LOW_RELEVANCE_CONTEXT 실패 규칙
+
+    Phase 19-AI-4 업데이트:
+    - PII 강차단: 입력/출력에 PII 검출 시 즉시 실패
     """
 
     def __init__(
         self,
         search_client: Optional[RagflowSearchClient] = None,
         llm_client: Optional[LLMClient] = None,
+        pii_service: Optional[PiiService] = None,
     ) -> None:
         self._search_client = search_client or RagflowSearchClient()
         self._llm = llm_client or LLMClient()
+        self._pii_service = pii_service or PiiService()
 
     async def generate_faq_draft(
         self,
         req: FaqDraftGenerateRequest,
     ) -> FaqDraft:
-        """FAQ 초안을 생성합니다."""
+        """FAQ 초안을 생성합니다.
+
+        Phase 19-AI-4: PII 강차단
+        - 입력에 PII 검출 시: PII_DETECTED 에러
+        - 출력에 PII 검출 시: PII_DETECTED_OUTPUT 에러
+        """
         logger.info(
             f"Generating FAQ draft: domain={req.domain}, "
             f"cluster_id={req.cluster_id}, question='{req.canonical_question[:50]}...'"
         )
+
+        # 0. Phase 19-AI-4: 입력 PII 검사
+        await self._check_input_pii(req)
 
         # 1. 문서 컨텍스트 확보 (Phase 19-AI-2)
         context_docs, used_top_docs = await self._get_context_docs(req)
@@ -194,13 +214,16 @@ class FaqDraftService:
             logger.exception(f"LLM response parsing failed: {e}")
             raise FaqGenerationError(f"LLM 응답 파싱 실패: {str(e)}")
 
-        # 5. Phase 19-AI-3: LOW_RELEVANCE_CONTEXT 체크
+        # 5. Phase 19-AI-4: 출력 PII 검사
+        await self._check_output_pii(parsed)
+
+        # 6. Phase 19-AI-3: LOW_RELEVANCE_CONTEXT 체크
         status = parsed.get("status", "SUCCESS").upper()
         if status == "LOW_RELEVANCE":
             logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
             raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
 
-        # 6. FaqDraft 생성 (Phase 19-AI-3)
+        # 7. FaqDraft 생성 (Phase 19-AI-3)
         draft = self._create_faq_draft(req, parsed, context_docs, used_top_docs)
 
         logger.info(
@@ -561,6 +584,99 @@ class FaqDraftService:
             return match.group(0).strip()
 
         return None
+
+    # =========================================================================
+    # Phase 19-AI-4: PII 강차단
+    # =========================================================================
+
+    async def _check_input_pii(self, req: FaqDraftGenerateRequest) -> None:
+        """입력 데이터에서 PII를 검사합니다.
+
+        검사 대상:
+        - canonical_question
+        - sample_questions (모든 항목)
+        - top_docs.snippet (모든 항목)
+
+        Args:
+            req: FAQ 초안 생성 요청
+
+        Raises:
+            FaqGenerationError: PII 검출 시 "PII_DETECTED" 에러
+        """
+        # 검사할 텍스트 목록 수집
+        texts_to_check: List[str] = []
+
+        # 1. canonical_question
+        if req.canonical_question:
+            texts_to_check.append(req.canonical_question)
+
+        # 2. sample_questions
+        if req.sample_questions:
+            texts_to_check.extend(req.sample_questions)
+
+        # 3. top_docs.snippet
+        if req.top_docs:
+            for doc in req.top_docs:
+                if doc.snippet:
+                    texts_to_check.append(doc.snippet)
+
+        # PII 검사 수행
+        for text in texts_to_check:
+            if not text or not text.strip():
+                continue
+
+            result = await self._pii_service.detect_and_mask(text, MaskingStage.INPUT)
+
+            if result.has_pii:
+                logger.warning(
+                    f"PII detected in input: {len(result.tags)} entities found, "
+                    f"labels={[tag.label for tag in result.tags]}"
+                )
+                raise FaqGenerationError("PII_DETECTED")
+
+        logger.debug("Input PII check passed")
+
+    async def _check_output_pii(self, parsed: Dict[str, Any]) -> None:
+        """LLM 출력 데이터에서 PII를 검사합니다.
+
+        검사 대상:
+        - answer_markdown
+        - summary
+
+        Args:
+            parsed: 파싱된 LLM 응답
+
+        Raises:
+            FaqGenerationError: PII 검출 시 "PII_DETECTED_OUTPUT" 에러
+        """
+        # 검사할 텍스트 목록 수집
+        texts_to_check: List[str] = []
+
+        # 1. answer_markdown
+        answer_markdown = parsed.get("answer_markdown", "")
+        if answer_markdown:
+            texts_to_check.append(answer_markdown)
+
+        # 2. summary
+        summary = parsed.get("summary", "")
+        if summary:
+            texts_to_check.append(summary)
+
+        # PII 검사 수행
+        for text in texts_to_check:
+            if not text or not text.strip():
+                continue
+
+            result = await self._pii_service.detect_and_mask(text, MaskingStage.OUTPUT)
+
+            if result.has_pii:
+                logger.warning(
+                    f"PII detected in output: {len(result.tags)} entities found, "
+                    f"labels={[tag.label for tag in result.tags]}"
+                )
+                raise FaqGenerationError("PII_DETECTED_OUTPUT")
+
+        logger.debug("Output PII check passed")
 
     # =========================================================================
     # 유틸리티 메서드
