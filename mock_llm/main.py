@@ -178,12 +178,27 @@ def generate_response(messages: List[ChatMessage]) -> str:
 
     # RAG 컨텍스트가 있으면 컨텍스트 기반 응답 생성
     if rag_context:
-        # 컨텍스트에서 핵심 문장 추출 (첫 500자 기준)
-        context_summary = rag_context[:500]
+        # 첫 번째 [근거 1]의 내용만 추출
+        if "- 내용:" in rag_context:
+            # 첫 번째 "- 내용:" 이후 ~ 다음 "[근거" 또는 끝까지
+            start_idx = rag_context.find("- 내용:") + len("- 내용:")
+            end_idx = rag_context.find("[근거 2]")
+            if end_idx == -1:
+                end_idx = len(rag_context)
+
+            content = rag_context[start_idx:end_idx].strip()
+            # 최대 400자, 줄바꿈을 공백으로
+            content = content[:400].replace("\n", " ").replace("\t", " ")
+            # 연속 공백 제거
+            while "  " in content:
+                content = content.replace("  ", " ")
+        else:
+            content = "관련 규정을 확인해 주세요."
 
         return (
-            f"문의하신 '{user_message[:30]}...'에 대해 답변드립니다.\n\n"
-            f"사내 규정에 따르면, {context_summary}\n\n"
+            f"'{user_message}'에 대해 안내드립니다.\n\n"
+            f"사내 규정에 따르면, {content}\n\n"
+            f"[참고 근거]\n- 사규 관련 조항\n\n"
             f"추가 문의사항이 있으시면 담당 부서로 연락해 주세요."
         )
 

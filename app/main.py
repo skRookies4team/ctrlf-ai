@@ -46,6 +46,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(settings)
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"Environment: {settings.APP_ENV}")
+    logger.info(f"AI_ENV: {settings.AI_ENV}")
+    logger.info(f"LLM_BASE_URL: {settings.llm_base_url}")
+    logger.info(f"LLM_MODEL_NAME: {settings.LLM_MODEL_NAME}")
+    logger.info(f"RAGFLOW_BASE_URL: {settings.ragflow_base_url}")
 
     # TODO: 향후 추가될 초기화 작업
     # - 데이터베이스 연결 풀 초기화

@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # LLM 서비스 URL (OpenAI API 호환 또는 자체 LLM 서버)
     LLM_BASE_URL: Optional[HttpUrl] = None
 
+    # LLM 모델명 (vLLM 등에서 필요)
+    LLM_MODEL_NAME: str = "Qwen/Qwen2.5-7B-Instruct"
+
     # ctrlf-back (Spring 백엔드) 연동 URL
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
