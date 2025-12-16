@@ -82,6 +82,12 @@ from app.models.chat import (
     ChatSource,
 )
 from app.models.intent import Domain, IntentType, MaskingStage, RouteType, UserRole
+from app.models.router_types import (
+    RouterResult,
+    RouterRouteType,
+    Tier0Intent,
+    TIER0_ROUTING_POLICY,
+)
 from app.clients.backend_data_client import BackendDataClient
 from app.clients.llm_client import LLMClient
 from app.clients.ragflow_client import RagflowClient
@@ -90,6 +96,11 @@ from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
 from app.services.intent_service import IntentService
 from app.services.pii_service import PiiService
+from app.services.router_orchestrator import (
+    OrchestrationResult,
+    RouterOrchestrator,
+)
+from app.services.video_progress_service import VideoProgressService
 
 logger = get_logger(__name__)
 
@@ -270,6 +281,36 @@ SYSTEM_PROMPT_BACKEND_API = """당신은 회사 내부 정보보호 및 사규�
 """
 
 
+# =============================================================================
+# Phase 22: Router Integration Constants
+# =============================================================================
+
+# 시스템 도움말 응답
+SYSTEM_HELP_RESPONSE = """안녕하세요! CTRL+F AI 어시스턴트입니다.
+
+제가 도와드릴 수 있는 것들:
+- **사규/정책 질문**: 회사 규정, 보안 정책 등을 안내해 드립니다.
+- **교육 관련**: 4대교육, 직무교육 내용을 설명해 드립니다.
+- **HR 정보 조회**: 연차, 근태, 복지 등 개인 정보를 확인해 드립니다.
+- **퀴즈**: 교육 퀴즈를 진행하거나 결과를 확인할 수 있습니다.
+
+궁금한 점이 있으시면 편하게 질문해 주세요!"""
+
+# UNKNOWN 라우트 응답
+UNKNOWN_ROUTE_RESPONSE = (
+    "죄송합니다. 질문을 이해하지 못했습니다. "
+    "사규, 교육, HR 정보, 퀴즈 관련 질문을 해주시면 도움을 드릴 수 있습니다."
+)
+
+# 확인 응답 파싱용 키워드
+CONFIRMATION_POSITIVE_KEYWORDS = frozenset([
+    "예", "네", "응", "ㅇㅇ", "yes", "y", "진행", "시작", "확인", "좋아", "그래", "할래"
+])
+CONFIRMATION_NEGATIVE_KEYWORDS = frozenset([
+    "아니오", "아니", "ㄴㄴ", "no", "n", "취소", "안해", "그만", "중단", "안할래"
+])
+
+
 class ChatService:
     """
     Chat service handling AI conversation logic.
@@ -310,6 +351,8 @@ class ChatService:
         ai_log_service: Optional[AILogService] = None,
         guardrail_service: Optional[GuardrailService] = None,
         backend_data_client: Optional[BackendDataClient] = None,
+        router_orchestrator: Optional[RouterOrchestrator] = None,
+        video_progress_service: Optional[VideoProgressService] = None,
     ) -> None:
         """
         Initialize ChatService.
@@ -322,6 +365,8 @@ class ChatService:
             ai_log_service: AILogService instance. If None, creates a new instance.
             guardrail_service: GuardrailService instance. If None, creates a new instance.
             backend_data_client: BackendDataClient instance. If None, creates a new instance.
+            router_orchestrator: RouterOrchestrator instance. If None, creates a new instance. (Phase 22)
+            video_progress_service: VideoProgressService instance. If None, creates a new instance. (Phase 22)
                               Pass custom services for testing or dependency injection.
         """
         self._ragflow = ragflow_client or RagflowClient()
@@ -333,6 +378,12 @@ class ChatService:
         # Phase 11: 백엔드 비즈니스 데이터 클라이언트
         self._backend_data = backend_data_client or BackendDataClient()
         self._context_formatter = BackendContextFormatter()
+
+        # Phase 22: Router Orchestrator & Video Progress Service
+        self._router_orchestrator = router_orchestrator or RouterOrchestrator(
+            llm_client=self._llm
+        )
+        self._video_progress = video_progress_service or VideoProgressService()
 
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
@@ -389,19 +440,85 @@ class ChatService:
                 f"PII detected in input: {len(pii_input.tags)} entities masked"
             )
 
+        # =====================================================================
+        # Phase 22: Router Orchestrator Integration (Optional)
+        # =====================================================================
+        # RouterOrchestrator는 LLM이 설정된 경우에만 완전하게 작동합니다.
+        # LLM이 설정되지 않은 경우, 기존 IntentService 로직을 사용합니다.
+        from app.core.config import get_settings
+        settings = get_settings()
+        use_router_orchestrator = bool(settings.llm_base_url)
+
+        orchestration_result: Optional[OrchestrationResult] = None
+
+        if use_router_orchestrator:
+            # Call orchestrator.route() to get routing decision with clarify/confirm handling
+            orchestration_result = await self._router_orchestrator.route(
+                user_query=masked_query,
+                session_id=req.session_id,
+            )
+
+            # Only use orchestrator result if it's not an LLM failure fallback
+            # (LLM failure typically results in UNKNOWN with very low confidence)
+            is_llm_fallback = (
+                orchestration_result.router_result.tier0_intent == Tier0Intent.UNKNOWN
+                and orchestration_result.router_result.confidence < 0.5
+            )
+
+            if not is_llm_fallback:
+                # Handle clarify/confirmation responses
+                if orchestration_result.needs_user_response:
+                    logger.info(
+                        f"Router requires user response: "
+                        f"intent={orchestration_result.router_result.tier0_intent.value}, "
+                        f"needs_clarify={orchestration_result.router_result.needs_clarify}, "
+                        f"requires_confirmation={orchestration_result.router_result.requires_confirmation}"
+                    )
+                    return self._create_router_response(
+                        orchestration_result=orchestration_result,
+                        start_time=start_time,
+                        has_pii=pii_input.has_pii,
+                    )
+
+                # Handle SYSTEM_HELP route type
+                if orchestration_result.router_result.route_type == RouterRouteType.ROUTE_SYSTEM_HELP:
+                    return self._create_system_help_response(start_time, pii_input.has_pii)
+
+                # Handle UNKNOWN route type (only if high confidence, not LLM fallback)
+                if (orchestration_result.router_result.route_type == RouterRouteType.ROUTE_UNKNOWN
+                    and orchestration_result.router_result.confidence >= 0.5):
+                    return self._create_unknown_route_response(start_time, pii_input.has_pii)
+
         # Step 3: Intent Classification and Routing
+        # Use IntentService for classification (always called for consistency)
         intent_result = self._intent.classify(
             req=req,
             user_query=masked_query,
         )
-        intent = intent_result.intent
-        domain = intent_result.domain or req.domain or "POLICY"
-        route = intent_result.route
 
-        logger.info(
-            f"Intent classification: intent={intent.value}, "
-            f"route={route.value}, domain={domain}"
-        )
+        # Override with router orchestrator result if available and valid
+        if (orchestration_result is not None
+            and orchestration_result.router_result.tier0_intent != Tier0Intent.UNKNOWN):
+            router_result = orchestration_result.router_result
+            intent = self._map_tier0_to_intent(router_result.tier0_intent) or intent_result.intent
+            domain = router_result.domain.value if router_result.domain else (intent_result.domain or req.domain or "POLICY")
+            route = self._map_router_route_to_route_type(router_result.route_type) or intent_result.route
+
+            logger.info(
+                f"Intent classification (Phase 22 Orchestrator): intent={intent.value}, "
+                f"route={route.value}, domain={domain}, "
+                f"tier0_intent={router_result.tier0_intent.value}"
+            )
+        else:
+            # Use IntentService result directly
+            intent = intent_result.intent
+            domain = intent_result.domain or req.domain or "POLICY"
+            route = intent_result.route
+
+            logger.info(
+                f"Intent classification: intent={intent.value}, "
+                f"route={route.value}, domain={domain}"
+            )
 
         # Step 4: RAG Search / Backend Data (based on route)
         # Phase 11: BACKEND_API, MIXED_BACKEND_RAG 실제 처리 로직 구현
@@ -1251,6 +1368,158 @@ class ChatService:
         })
 
         return messages
+
+    # =========================================================================
+    # Phase 22: Router Orchestrator Helper Methods
+    # =========================================================================
+
+    def _create_router_response(
+        self,
+        orchestration_result: OrchestrationResult,
+        start_time: float,
+        has_pii: bool,
+    ) -> ChatResponse:
+        """
+        RouterOrchestrator의 되묻기/확인 응답을 ChatResponse로 변환합니다.
+
+        Args:
+            orchestration_result: 오케스트레이션 결과
+            start_time: 요청 시작 시간
+            has_pii: PII 검출 여부
+
+        Returns:
+            ChatResponse: 되묻기/확인 응답
+        """
+        latency_ms = int((time.perf_counter() - start_time) * 1000)
+        router_result = orchestration_result.router_result
+
+        # Route 결정
+        if router_result.needs_clarify:
+            route_value = "CLARIFY"
+        elif router_result.requires_confirmation:
+            route_value = "CONFIRMATION"
+        else:
+            route_value = router_result.route_type.value
+
+        return ChatResponse(
+            answer=orchestration_result.response_message,
+            sources=[],
+            meta=ChatAnswerMeta(
+                used_model=None,
+                route=route_value,
+                intent=router_result.tier0_intent.value,
+                domain=router_result.domain.value if router_result.domain else "GENERAL",
+                masked=has_pii,
+                latency_ms=latency_ms,
+                rag_used=False,
+                rag_source_count=0,
+            ),
+        )
+
+    def _create_system_help_response(
+        self,
+        start_time: float,
+        has_pii: bool,
+    ) -> ChatResponse:
+        """
+        시스템 도움말 응답을 생성합니다.
+
+        Args:
+            start_time: 요청 시작 시간
+            has_pii: PII 검출 여부
+
+        Returns:
+            ChatResponse: 시스템 도움말 응답
+        """
+        latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+        return ChatResponse(
+            answer=SYSTEM_HELP_RESPONSE,
+            sources=[],
+            meta=ChatAnswerMeta(
+                used_model=None,
+                route=RouterRouteType.ROUTE_SYSTEM_HELP.value,
+                intent=Tier0Intent.SYSTEM_HELP.value,
+                domain="GENERAL",
+                masked=has_pii,
+                latency_ms=latency_ms,
+                rag_used=False,
+                rag_source_count=0,
+            ),
+        )
+
+    def _create_unknown_route_response(
+        self,
+        start_time: float,
+        has_pii: bool,
+    ) -> ChatResponse:
+        """
+        UNKNOWN 라우트 응답을 생성합니다.
+
+        Args:
+            start_time: 요청 시작 시간
+            has_pii: PII 검출 여부
+
+        Returns:
+            ChatResponse: UNKNOWN 응답
+        """
+        latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+        return ChatResponse(
+            answer=UNKNOWN_ROUTE_RESPONSE,
+            sources=[],
+            meta=ChatAnswerMeta(
+                used_model=None,
+                route=RouterRouteType.ROUTE_UNKNOWN.value,
+                intent=Tier0Intent.UNKNOWN.value,
+                domain="GENERAL",
+                masked=has_pii,
+                latency_ms=latency_ms,
+                rag_used=False,
+                rag_source_count=0,
+            ),
+        )
+
+    def _map_tier0_to_intent(self, tier0_intent: Tier0Intent) -> Optional[IntentType]:
+        """
+        Tier0Intent를 IntentType으로 매핑합니다.
+
+        Args:
+            tier0_intent: Tier-0 의도
+
+        Returns:
+            Optional[IntentType]: 매핑된 IntentType 또는 None
+        """
+        mapping = {
+            Tier0Intent.POLICY_QA: IntentType.POLICY_QA,
+            Tier0Intent.EDUCATION_QA: IntentType.EDUCATION_QA,
+            Tier0Intent.BACKEND_STATUS: IntentType.EDU_STATUS,  # 또는 상황에 따라 달라짐
+            Tier0Intent.GENERAL_CHAT: IntentType.GENERAL_CHAT,
+            Tier0Intent.SYSTEM_HELP: IntentType.SYSTEM_HELP,
+            Tier0Intent.UNKNOWN: IntentType.UNKNOWN,
+        }
+        return mapping.get(tier0_intent)
+
+    def _map_router_route_to_route_type(
+        self, router_route: RouterRouteType
+    ) -> Optional[RouteType]:
+        """
+        RouterRouteType을 RouteType으로 매핑합니다.
+
+        Args:
+            router_route: Router 라우트 타입
+
+        Returns:
+            Optional[RouteType]: 매핑된 RouteType 또는 None
+        """
+        mapping = {
+            RouterRouteType.RAG_INTERNAL: RouteType.RAG_INTERNAL,
+            RouterRouteType.BACKEND_API: RouteType.BACKEND_API,
+            RouterRouteType.LLM_ONLY: RouteType.LLM_ONLY,
+            RouterRouteType.ROUTE_SYSTEM_HELP: RouteType.LLM_ONLY,  # LLM_ONLY로 처리
+            RouterRouteType.ROUTE_UNKNOWN: RouteType.FALLBACK,
+        }
+        return mapping.get(router_route)
 
     # =========================================================================
     # Phase 11: BACKEND_API용 LLM 메시지 빌더
