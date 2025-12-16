@@ -86,8 +86,8 @@ class FaqDraft(BaseModel):
     source_doc_version: Optional[str] = Field(None, description="근거 문서 버전")
     source_article_label: Optional[str] = Field(None, description="근거 조항 라벨")
     source_article_path: Optional[str] = Field(None, description="근거 조항 경로")
-    answer_source: Literal["AI_RAG", "LOG_REUSE", "MIXED"] = Field(
-        ..., description="답변 출처"
+    answer_source: Literal["AI_RAG", "LOG_REUSE", "MIXED", "TOP_DOCS", "RAGFLOW"] = Field(
+        ..., description="답변 출처 (Phase 19-AI-3: TOP_DOCS/RAGFLOW 추가)"
     )
     ai_confidence: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="AI 신뢰도 (0~1)"

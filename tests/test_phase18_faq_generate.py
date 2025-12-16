@@ -205,7 +205,8 @@ class TestFaqDraftService:
         assert draft.domain == "SEC_POLICY"
         assert draft.cluster_id == "cluster-001"
         assert draft.question == "USB 반출 시 어떤 절차가 필요한가요?"
-        assert draft.answer_source == "AI_RAG"
+        # Phase 19-AI-3: top_docs 사용 시 answer_source=TOP_DOCS
+        assert draft.answer_source == "TOP_DOCS"
         assert draft.ai_confidence == 0.85
         assert draft.source_doc_id == "DOC-001"
 
@@ -256,8 +257,8 @@ class TestFaqDraftService:
         assert draft.question == "테스트 질문"
         # RAGFlow 검색 시 source 필드는 null
         assert draft.source_doc_id is None
-        # 참고 문서 정보가 answer_markdown에 추가됨
-        assert "참고 문서:" in draft.answer_markdown
+        # Phase 19-AI-3: RAGFlow 검색 시 answer_source=RAGFLOW
+        assert draft.answer_source == "RAGFLOW"
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_rag_empty_raises_error(self):
@@ -378,7 +379,8 @@ class TestFaqDraftService:
         with pytest.raises(FaqGenerationError) as exc_info:
             await service.generate_faq_draft(request)
 
-        assert "answer_markdown" in str(exc_info.value)
+        # Phase 19-AI-3: 파싱 실패 메시지
+        assert "파싱" in str(exc_info.value)
 
 
 class TestFaqDraftServiceHelpers:
@@ -388,12 +390,16 @@ class TestFaqDraftServiceHelpers:
         """answer_source 정규화 테스트"""
         service = FaqDraftService.__new__(FaqDraftService)
 
+        # Phase 19-AI-3: TOP_DOCS, RAGFLOW 추가
+        assert service._normalize_answer_source("TOP_DOCS") == "TOP_DOCS"
+        assert service._normalize_answer_source("RAGFLOW") == "RAGFLOW"
         assert service._normalize_answer_source("AI_RAG") == "AI_RAG"
         assert service._normalize_answer_source("ai_rag") == "AI_RAG"
         assert service._normalize_answer_source("LOG_REUSE") == "LOG_REUSE"
         assert service._normalize_answer_source("MIXED") == "MIXED"
-        assert service._normalize_answer_source("invalid") == "AI_RAG"
-        assert service._normalize_answer_source(None) == "AI_RAG"
+        # Phase 19-AI-3: 기본값이 RAGFLOW로 변경
+        assert service._normalize_answer_source("invalid") == "RAGFLOW"
+        assert service._normalize_answer_source(None) == "RAGFLOW"
 
     def test_normalize_confidence(self):
         """ai_confidence 정규화 테스트"""
@@ -660,11 +666,10 @@ class TestFaqIntegration:
         assert "인사고과" in draft.answer_markdown
         # Phase 19-AI-2: RAGFlow 검색 시 source 필드는 null
         assert draft.source_doc_id is None
-        assert draft.answer_source == "AI_RAG"
+        # Phase 19-AI-3: RAGFlow 검색 시 answer_source=RAGFLOW
+        assert draft.answer_source == "RAGFLOW"
         assert draft.ai_confidence == 0.92
         assert draft.created_at is not None
-        # 참고 문서 정보가 answer_markdown에 추가됨
-        assert "참고 문서:" in draft.answer_markdown
 
         # Verify RAGFlow was called
         mock_search.search_chunks.assert_called_once()
