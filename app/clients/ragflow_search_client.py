@@ -29,8 +29,41 @@ import httpx
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.utils.cache import TTLCache, make_cache_key
 
 logger = get_logger(__name__)
+
+# =============================================================================
+# Phase 20-AI-1: RAGFlow 검색 결과 캐시
+# =============================================================================
+
+_rag_cache: Optional[TTLCache[List[Dict[str, Any]]]] = None
+
+
+def get_rag_cache() -> Optional[TTLCache[List[Dict[str, Any]]]]:
+    """RAGFlow 검색 결과 캐시 인스턴스를 반환합니다."""
+    global _rag_cache
+    settings = get_settings()
+
+    if not settings.FAQ_RAG_CACHE_ENABLED:
+        return None
+
+    if _rag_cache is None:
+        _rag_cache = TTLCache[List[Dict[str, Any]]](
+            maxsize=settings.FAQ_RAG_CACHE_MAXSIZE,
+            ttl_seconds=settings.FAQ_RAG_CACHE_TTL_SECONDS,
+            name="ragflow_search",
+        )
+
+    return _rag_cache
+
+
+def clear_rag_cache() -> None:
+    """RAGFlow 검색 결과 캐시를 비웁니다 (테스트용)."""
+    global _rag_cache
+    if _rag_cache is not None:
+        _rag_cache.clear()
+        _rag_cache = None
 
 
 # =============================================================================
@@ -202,6 +235,7 @@ class RagflowSearchClient:
         query: str,
         dataset: str,
         top_k: int = 5,
+        use_cache: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         RAGFlow /v1/chunk/search 엔드포인트를 호출합니다.
@@ -210,6 +244,7 @@ class RagflowSearchClient:
             query: 검색 쿼리 텍스트
             dataset: 검색할 도메인 (예: "POLICY", "TRAINING")
             top_k: 반환할 최대 결과 수 (기본값: 5)
+            use_cache: 캐시 사용 여부 (기본값: True, Phase 20-AI-1)
 
         Returns:
             List[Dict[str, Any]]: 검색 결과 원시 리스트
@@ -231,6 +266,23 @@ class RagflowSearchClient:
         """
         # 1. dataset → kb_id 변환 (매핑 없으면 예외)
         kb_id = self._get_kb_id(dataset)
+
+        # Phase 20-AI-1: 캐시 조회
+        cache = get_rag_cache() if use_cache else None
+        cache_key = None
+
+        if cache is not None:
+            cache_key = make_cache_key({
+                "dataset": kb_id,
+                "query": query,
+                "top_k": top_k,
+            })
+            cached_result = cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(
+                    f"RAGFlow search cache hit: query='{query[:30]}...', dataset={dataset}"
+                )
+                return cached_result
 
         # 2. 요청 구성
         url = f"{self._base_url}/v1/chunk/search"
@@ -277,6 +329,13 @@ class RagflowSearchClient:
                 f"RAGFlow search returned {len(results)} results "
                 f"for query='{query[:30]}...'"
             )
+
+            # Phase 20-AI-1: 캐시 저장
+            if cache is not None and cache_key is not None:
+                cache.set(cache_key, results)
+                logger.debug(
+                    f"RAGFlow search cache set: query='{query[:30]}...', dataset={dataset}"
+                )
 
             return results
 

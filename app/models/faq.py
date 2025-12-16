@@ -108,3 +108,49 @@ class FaqDraftGenerateResponse(BaseModel):
     status: Literal["SUCCESS", "FAILED"] = Field(..., description="처리 상태")
     faq_draft: Optional[FaqDraft] = Field(None, description="생성된 FAQ 초안")
     error_message: Optional[str] = Field(None, description="에러 메시지")
+
+
+# =============================================================================
+# Phase 20-AI-2: 배치 FAQ 생성 모델
+# =============================================================================
+
+
+class FaqDraftGenerateBatchRequest(BaseModel):
+    """
+    배치 FAQ 초안 생성 요청 (Phase 20-AI-2)
+
+    다수의 FAQ 클러스터를 한 번에 생성합니다.
+
+    Attributes:
+        items: FAQ 초안 생성 요청 리스트
+        concurrency: 동시 처리 수 (선택, 기본값: 서버 설정 FAQ_BATCH_CONCURRENCY)
+    """
+
+    items: List[FaqDraftGenerateRequest] = Field(
+        ..., min_length=1, description="FAQ 초안 생성 요청 리스트"
+    )
+    concurrency: Optional[int] = Field(
+        None, ge=1, le=10, description="동시 처리 수 (1-10, 기본값: 서버 설정)"
+    )
+
+
+class FaqDraftGenerateBatchResponse(BaseModel):
+    """
+    배치 FAQ 초안 생성 응답 (Phase 20-AI-2)
+
+    요청 순서대로 각 항목의 결과를 반환합니다.
+    각 항목은 독립적으로 처리되어 한 개 실패가 전체 실패로 번지지 않습니다.
+
+    Attributes:
+        items: FAQ 초안 생성 응답 리스트 (요청 순서 유지)
+        total_count: 전체 요청 수
+        success_count: 성공한 요청 수
+        failed_count: 실패한 요청 수
+    """
+
+    items: List[FaqDraftGenerateResponse] = Field(
+        ..., description="FAQ 초안 생성 응답 리스트 (요청 순서 유지)"
+    )
+    total_count: int = Field(..., ge=0, description="전체 요청 수")
+    success_count: int = Field(..., ge=0, description="성공한 요청 수")
+    failed_count: int = Field(..., ge=0, description="실패한 요청 수")

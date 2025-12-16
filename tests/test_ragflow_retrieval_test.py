@@ -15,12 +15,14 @@ ctrlf-ragflow의 /retrieval_test API에 맞춰 수정된 RagflowClient를 검증
 """
 
 import json
+import os
 from typing import Any, Dict, List
 
 import httpx
 import pytest
 
 from app.clients.ragflow_client import RagflowClient
+from app.core.config import clear_settings_cache
 from app.models.rag import RagDocument
 
 
@@ -28,6 +30,29 @@ from app.models.rag import RagDocument
 def anyio_backend() -> str:
     """pytest-anyio backend configuration."""
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def mock_dataset_mapping():
+    """
+    테스트용 dataset mapping 설정.
+
+    .env 파일의 실제 RAGFlow dataset ID 대신 테스트용 값을 사용합니다.
+    """
+    original = os.environ.get("RAGFLOW_DATASET_MAPPING")
+    os.environ["RAGFLOW_DATASET_MAPPING"] = (
+        "policy:kb_policy_001,training:kb_training_001,"
+        "incident:kb_incident_001,education:kb_education_001"
+    )
+    clear_settings_cache()
+
+    yield
+
+    if original is not None:
+        os.environ["RAGFLOW_DATASET_MAPPING"] = original
+    else:
+        os.environ.pop("RAGFLOW_DATASET_MAPPING", None)
+    clear_settings_cache()
 
 
 @pytest.fixture(autouse=True)

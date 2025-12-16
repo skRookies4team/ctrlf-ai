@@ -9,6 +9,7 @@ RagflowSearchClient 단위 테스트 (Phase 19-AI-1)
 5. 매핑 없는 dataset 처리 (RagflowConfigError)
 """
 
+import os
 import pytest
 import httpx
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -17,7 +18,9 @@ from app.clients.ragflow_search_client import (
     RagflowSearchClient,
     RagflowSearchError,
     RagflowConfigError,
+    clear_rag_cache,
 )
+from app.core.config import clear_settings_cache
 
 
 # =============================================================================
@@ -29,6 +32,20 @@ from app.clients.ragflow_search_client import (
 def anyio_backend() -> str:
     """pytest-anyio backend configuration."""
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def reset_caches():
+    """
+    테스트 격리를 위해 settings 캐시와 RAG 캐시를 초기화합니다.
+
+    다른 테스트에서 변경된 환경변수의 영향을 받지 않도록 합니다.
+    """
+    clear_settings_cache()
+    clear_rag_cache()
+    yield
+    clear_settings_cache()
+    clear_rag_cache()
 
 
 @pytest.fixture

@@ -1,5 +1,5 @@
 """
-FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3 + Phase 19-AI-4)
+FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3 + Phase 19-AI-4 + Phase 20-AI-3/4)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
 RAG + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
@@ -19,6 +19,13 @@ Phase 19-AI-4 업데이트:
 - PII 강차단: 입력/출력에 PII 검출 시 즉시 실패
 - PII_DETECTED: 입력(canonical_question, sample_questions, top_docs.snippet)에 PII 발견
 - PII_DETECTED_OUTPUT: LLM 출력(answer_markdown, summary)에 PII 발견
+
+Phase 20-AI-3 업데이트:
+- 컨텍스트 PII 방어: RAGFlow 검색 결과 snippet에 PII 검출 시 강차단
+- PII_DETECTED_CONTEXT: RAGFlow 스니펫에서 PII 발견
+
+Phase 20-AI-4 업데이트:
+- 품질 모니터링 로그: ai_confidence 기반 경고 로그
 """
 
 import json
@@ -34,6 +41,7 @@ from app.clients.ragflow_search_client import (
     RagflowSearchError,
     RagflowConfigError,
 )
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
     FaqDraft,
@@ -226,6 +234,9 @@ class FaqDraftService:
         # 7. FaqDraft 생성 (Phase 19-AI-3)
         draft = self._create_faq_draft(req, parsed, context_docs, used_top_docs)
 
+        # 8. Phase 20-AI-4: 품질 모니터링 로그
+        self._log_quality_metrics(draft, context_docs, used_top_docs)
+
         logger.info(
             f"FAQ draft generated: id={draft.faq_draft_id}, "
             f"source={draft.answer_source}, confidence={draft.ai_confidence}"
@@ -285,6 +296,9 @@ class FaqDraftService:
         # 4. RagSearchResult로 변환
         context_docs = [RagSearchResult.from_chunk(chunk) for chunk in results]
         logger.info(f"Found {len(context_docs)} documents from RAGFlow search")
+
+        # 5. Phase 20-AI-3: 컨텍스트 PII 검사
+        await self._check_context_pii(context_docs, req.domain, req.cluster_id)
 
         return context_docs, False
 
@@ -677,6 +691,160 @@ class FaqDraftService:
                 raise FaqGenerationError("PII_DETECTED_OUTPUT")
 
         logger.debug("Output PII check passed")
+
+    # =========================================================================
+    # Phase 20-AI-3: 컨텍스트 PII 강차단
+    # =========================================================================
+
+    async def _check_context_pii(
+        self,
+        context_docs: List[RagSearchResult],
+        domain: str,
+        cluster_id: str,
+    ) -> None:
+        """RAGFlow 검색 결과 snippet에서 PII를 검사합니다.
+
+        Phase 20-AI-3: RAGFlow 스니펫에 PII가 포함되면 강차단.
+        - 검사 대상: 각 context_docs의 snippet
+        - PII 발견 시: PII_DETECTED_CONTEXT 에러
+        - 로그에 domain, cluster_id, 문서 제목 일부를 남기되 PII 원문은 로그 금지
+
+        Args:
+            context_docs: RAGFlow 검색 결과 (RagSearchResult 리스트)
+            domain: FAQ 도메인
+            cluster_id: FAQ 클러스터 ID
+
+        Raises:
+            FaqGenerationError: PII 검출 시 "PII_DETECTED_CONTEXT" 에러
+        """
+        for i, doc in enumerate(context_docs):
+            if not doc.snippet or not doc.snippet.strip():
+                continue
+
+            result = await self._pii_service.detect_and_mask(
+                doc.snippet, MaskingStage.INPUT
+            )
+
+            if result.has_pii:
+                # PII 원문은 로그하지 않고, 문서 제목/인덱스만 로그
+                doc_title_safe = (doc.title or "untitled")[:30]
+                logger.warning(
+                    f"PII detected in RAGFlow context: "
+                    f"domain={domain}, cluster_id={cluster_id}, "
+                    f"doc_index={i}, doc_title='{doc_title_safe}...', "
+                    f"pii_count={len(result.tags)}, pii_labels={[tag.label for tag in result.tags]}",
+                    extra={
+                        "event": "pii_detected_context",
+                        "domain": domain,
+                        "cluster_id": cluster_id,
+                        "doc_index": i,
+                    }
+                )
+                raise FaqGenerationError("PII_DETECTED_CONTEXT")
+
+        logger.debug(
+            f"Context PII check passed: {len(context_docs)} docs checked"
+        )
+
+    # =========================================================================
+    # Phase 20-AI-4: 품질 모니터링 로그
+    # =========================================================================
+
+    def _log_quality_metrics(
+        self,
+        draft: FaqDraft,
+        context_docs: DocContext,
+        used_top_docs: bool,
+    ) -> None:
+        """FAQ 생성 품질 메트릭을 로그에 기록합니다.
+
+        Phase 20-AI-4: ai_confidence 기반 경고 로그
+        - status=SUCCESS인데 ai_confidence < threshold -> WARN 로그
+        - 구조화 로그로 대시보드 집계 지원
+
+        Args:
+            draft: 생성된 FAQ 초안
+            context_docs: 사용된 문서 컨텍스트
+            used_top_docs: top_docs 사용 여부
+        """
+        settings = get_settings()
+        threshold = settings.FAQ_CONFIDENCE_WARN_THRESHOLD
+
+        # RAGFlow top score 추출 (가능하면)
+        ragflow_top_score = None
+        if not used_top_docs and context_docs:
+            first_doc = context_docs[0]
+            if hasattr(first_doc, "score"):
+                ragflow_top_score = first_doc.score
+
+        log_extra = {
+            "event": "faq_quality",
+            "cluster_id": draft.cluster_id,
+            "domain": draft.domain,
+            "answer_source": draft.answer_source,
+            "ai_confidence": draft.ai_confidence,
+            "status": "SUCCESS",
+            "error_message": None,
+            "ragflow_top_score": ragflow_top_score,
+        }
+
+        # ai_confidence가 낮으면 경고 로그
+        if draft.ai_confidence is not None and draft.ai_confidence < threshold:
+            logger.warning(
+                f"Low confidence FAQ generated: "
+                f"cluster_id={draft.cluster_id}, domain={draft.domain}, "
+                f"ai_confidence={draft.ai_confidence:.2f} (threshold={threshold}), "
+                f"answer_source={draft.answer_source}",
+                extra=log_extra,
+            )
+        else:
+            logger.info(
+                f"FAQ quality metrics: "
+                f"cluster_id={draft.cluster_id}, ai_confidence={draft.ai_confidence}, "
+                f"answer_source={draft.answer_source}",
+                extra=log_extra,
+            )
+
+    def _log_failed_quality_metrics(
+        self,
+        req: FaqDraftGenerateRequest,
+        error_message: str,
+    ) -> None:
+        """FAQ 생성 실패 시 품질 메트릭을 로그에 기록합니다.
+
+        Phase 20-AI-4: 실패 케이스 모니터링
+        - LOW_RELEVANCE_CONTEXT, NO_DOCS_FOUND 등 실패 케이스 추적
+
+        Args:
+            req: FAQ 초안 생성 요청
+            error_message: 에러 메시지
+        """
+        log_extra = {
+            "event": "faq_quality",
+            "cluster_id": req.cluster_id,
+            "domain": req.domain,
+            "answer_source": None,
+            "ai_confidence": None,
+            "status": "FAILED",
+            "error_message": error_message,
+            "ragflow_top_score": None,
+        }
+
+        # 특정 에러 코드에 대해 경고 레벨 로그
+        if error_message in ("LOW_RELEVANCE_CONTEXT", "NO_DOCS_FOUND"):
+            logger.warning(
+                f"FAQ generation quality issue: "
+                f"cluster_id={req.cluster_id}, domain={req.domain}, "
+                f"error={error_message}",
+                extra=log_extra,
+            )
+        else:
+            logger.info(
+                f"FAQ generation failed: "
+                f"cluster_id={req.cluster_id}, domain={req.domain}, "
+                f"error={error_message}",
+                extra=log_extra,
+            )
 
     # =========================================================================
     # 유틸리티 메서드
