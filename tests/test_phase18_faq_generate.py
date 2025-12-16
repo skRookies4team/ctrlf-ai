@@ -6,6 +6,10 @@ Phase 18: FAQ 초안 생성 API 테스트
 2. FaqDraftService 단위 테스트
 3. FastAPI 엔드포인트 통합 테스트
 4. 에러 케이스 테스트
+
+Phase 19-AI-2 업데이트:
+- rag_client → search_client (RagflowSearchClient)
+- RAG 검색 결과 없음 → NO_DOCS_FOUND 에러 발생
 """
 
 import json
@@ -23,7 +27,6 @@ from app.models.faq import (
     FaqDraftGenerateResponse,
     FaqSourceDoc,
 )
-from app.models.rag import RagDocument
 from app.services.faq_service import FaqDraftService, FaqGenerationError
 
 
@@ -145,16 +148,16 @@ class TestFaqModels:
 
 
 # =============================================================================
-# Service Tests
+# Service Tests (Phase 19-AI-2 Updated)
 # =============================================================================
 
 
 class TestFaqDraftService:
-    """FaqDraftService 테스트"""
+    """FaqDraftService 테스트 (Phase 19-AI-2 업데이트)"""
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_success_with_top_docs(self):
-        """top_docs 제공 시 RAG 호출 없이 성공 테스트"""
+        """top_docs 제공 시 RAGFlow 호출 없이 성공 테스트"""
         # Mock LLM client
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(
@@ -171,11 +174,11 @@ class TestFaqDraftService:
             })
         )
 
-        # Mock RAG client (should not be called)
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock()
+        # Mock Search client (should not be called)
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock()
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -192,8 +195,8 @@ class TestFaqDraftService:
 
         draft = await service.generate_faq_draft(request)
 
-        # RAG should not be called since top_docs provided
-        mock_rag.search.assert_not_called()
+        # RAGFlow should not be called since top_docs provided
+        mock_search.search_chunks.assert_not_called()
 
         # LLM should be called
         mock_llm.generate_chat_completion.assert_called_once()
@@ -208,7 +211,7 @@ class TestFaqDraftService:
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_with_rag_search(self):
-        """top_docs 없을 때 RAG 검색 테스트"""
+        """top_docs 없을 때 RAGFlow 검색 테스트"""
         # Mock LLM client
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(
@@ -221,58 +224,53 @@ class TestFaqDraftService:
             })
         )
 
-        # Mock RAG client
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock(
+        # Mock Search client - Phase 19-AI-2 format
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock(
             return_value=[
-                RagDocument(
-                    doc_id="RAG-DOC-001",
-                    title="검색된 문서",
-                    snippet="검색 결과 내용...",
-                    score=0.9,
-                )
+                {
+                    "document_name": "검색된 문서.pdf",
+                    "page_num": 10,
+                    "similarity": 0.9,
+                    "content": "검색 결과 내용...",
+                }
             ]
         )
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
             cluster_id="cluster-002",
             canonical_question="테스트 질문",
-            top_docs=[],  # Empty - should trigger RAG search
+            top_docs=[],  # Empty - should trigger RAGFlow search
         )
 
         draft = await service.generate_faq_draft(request)
 
-        # RAG should be called
-        mock_rag.search.assert_called_once()
+        # RAGFlow should be called
+        mock_search.search_chunks.assert_called_once()
 
         # Verify draft
         assert draft.domain == "SEC_POLICY"
         assert draft.question == "테스트 질문"
+        # RAGFlow 검색 시 source 필드는 null
+        assert draft.source_doc_id is None
+        # 참고 문서 정보가 answer_markdown에 추가됨
+        assert "참고 문서:" in draft.answer_markdown
 
     @pytest.mark.anyio
-    async def test_generate_faq_draft_rag_empty_still_success(self):
-        """RAG 0건이어도 LLM 성공 시 FAQ 생성 테스트"""
-        # Mock LLM client
+    async def test_generate_faq_draft_rag_empty_raises_error(self):
+        """RAG 0건 시 NO_DOCS_FOUND 에러 발생 (Phase 19-AI-2)"""
+        # Mock LLM client (should not be called)
         mock_llm = MagicMock()
-        mock_llm.generate_chat_completion = AsyncMock(
-            return_value=json.dumps({
-                "question": "관련 문서가 없는 질문",
-                "answer_markdown": "**일반적인 가이드를 제공합니다.**\n\n관련 규정을 찾지 못했습니다.",
-                "summary": "일반적인 가이드를 제공합니다.",
-                "source_doc_id": None,
-                "answer_source": "AI_RAG",
-                "ai_confidence": 0.5,
-            })
-        )
+        mock_llm.generate_chat_completion = AsyncMock()
 
-        # Mock RAG client - returns empty
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock(return_value=[])
+        # Mock Search client - returns empty
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock(return_value=[])
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -280,12 +278,13 @@ class TestFaqDraftService:
             canonical_question="관련 문서가 없는 질문",
         )
 
-        draft = await service.generate_faq_draft(request)
+        # Phase 19-AI-2: 검색 결과 없으면 에러 발생
+        with pytest.raises(FaqGenerationError) as exc_info:
+            await service.generate_faq_draft(request)
 
-        # Should still succeed
-        assert draft.question == "관련 문서가 없는 질문"
-        assert draft.source_doc_id is None
-        assert draft.ai_confidence == 0.5
+        assert "NO_DOCS_FOUND" in str(exc_info.value)
+        # LLM은 호출되지 않아야 함
+        mock_llm.generate_chat_completion.assert_not_called()
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_llm_failure(self):
@@ -296,10 +295,15 @@ class TestFaqDraftService:
             side_effect=Exception("LLM connection error")
         )
 
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock(return_value=[])
+        # Mock Search client - provide results to pass doc check
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock(
+            return_value=[
+                {"document_name": "test.pdf", "similarity": 0.9, "content": "test"}
+            ]
+        )
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -321,10 +325,15 @@ class TestFaqDraftService:
             return_value="이것은 유효한 JSON이 아닙니다."
         )
 
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock(return_value=[])
+        # Mock Search client
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock(
+            return_value=[
+                {"document_name": "test.pdf", "similarity": 0.9, "content": "test"}
+            ]
+        )
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -350,10 +359,15 @@ class TestFaqDraftService:
             })
         )
 
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock(return_value=[])
+        # Mock Search client
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock(
+            return_value=[
+                {"document_name": "test.pdf", "similarity": 0.9, "content": "test"}
+            ]
+        )
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -586,12 +600,12 @@ class TestFaqAPI:
 
 
 # =============================================================================
-# Integration Tests
+# Integration Tests (Phase 19-AI-2 Updated)
 # =============================================================================
 
 
 class TestFaqIntegration:
-    """FAQ 통합 테스트"""
+    """FAQ 통합 테스트 (Phase 19-AI-2 업데이트)"""
 
     @pytest.mark.anyio
     async def test_full_faq_generation_flow(self):
@@ -612,22 +626,20 @@ class TestFaqIntegration:
             })
         )
 
-        # Mock RAG
-        mock_rag = MagicMock()
-        mock_rag.search = AsyncMock(
+        # Mock Search client - Phase 19-AI-2 format
+        mock_search = MagicMock()
+        mock_search.search_chunks = AsyncMock(
             return_value=[
-                RagDocument(
-                    doc_id="EDU-DOC-001",
-                    title="필수교육 운영규정",
-                    snippet="4대 필수교육을 미이수한 경우 인사고과에 반영됩니다...",
-                    score=0.95,
-                    section_label="제4조",
-                    section_path="제2장 > 제4조",
-                )
+                {
+                    "document_name": "필수교육 운영규정.pdf",
+                    "page_num": 15,
+                    "similarity": 0.95,
+                    "content": "4대 필수교육을 미이수한 경우 인사고과에 반영됩니다...",
+                }
             ]
         )
 
-        service = FaqDraftService(rag_client=mock_rag, llm_client=mock_llm)
+        service = FaqDraftService(search_client=mock_search, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="TRAINING_QUIZ",
@@ -646,13 +658,16 @@ class TestFaqIntegration:
         assert draft.cluster_id == "edu-cluster-001"
         assert "4대 필수교육" in draft.question
         assert "인사고과" in draft.answer_markdown
-        assert draft.source_doc_id == "EDU-DOC-001"
+        # Phase 19-AI-2: RAGFlow 검색 시 source 필드는 null
+        assert draft.source_doc_id is None
         assert draft.answer_source == "AI_RAG"
         assert draft.ai_confidence == 0.92
         assert draft.created_at is not None
+        # 참고 문서 정보가 answer_markdown에 추가됨
+        assert "참고 문서:" in draft.answer_markdown
 
-        # Verify RAG was called
-        mock_rag.search.assert_called_once()
+        # Verify RAGFlow was called
+        mock_search.search_chunks.assert_called_once()
 
         # Verify LLM was called
         mock_llm.generate_chat_completion.assert_called_once()

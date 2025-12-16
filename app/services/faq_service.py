@@ -1,27 +1,69 @@
 """
-FAQ Draft Service (Phase 18)
+FAQ Draft Service (Phase 18 + Phase 19-AI-2)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
 RAG + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
+
+Phase 19-AI-2 업데이트:
+- RagflowSearchClient 연동 (/v1/chunk/search)
+- NO_DOCS_FOUND 에러 처리
+- RAGFlow 검색 결과 기반 컨텍스트 구성
 """
 
 import json
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.clients.llm_client import LLMClient
-from app.clients.ragflow_client import RagflowClient
+from app.clients.ragflow_search_client import (
+    RagflowSearchClient,
+    RagflowSearchError,
+    RagflowConfigError,
+)
 from app.core.logging import get_logger
 from app.models.faq import (
     FaqDraft,
     FaqDraftGenerateRequest,
     FaqSourceDoc,
 )
-from app.models.rag import RagDocument
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# Phase 19-AI-2: RAGFlow 검색 결과 데이터 클래스
+# =============================================================================
+
+
+@dataclass
+class RagSearchResult:
+    """RAGFlow /v1/chunk/search 응답의 개별 결과."""
+    title: Optional[str]
+    page: Optional[int]
+    score: float
+    snippet: str
+
+    @classmethod
+    def from_chunk(cls, chunk: Dict[str, Any]) -> "RagSearchResult":
+        title = chunk.get("document_name") or chunk.get("doc_name") or chunk.get("title")
+        page = chunk.get("page_num") or chunk.get("page")
+        if page is not None:
+            try:
+                page = int(page)
+            except (TypeError, ValueError):
+                page = None
+        score = chunk.get("similarity") or chunk.get("score") or 0.0
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            score = 0.0
+        snippet = chunk.get("content") or chunk.get("text") or ""
+        if len(snippet) > 500:
+            snippet = snippet[:500]
+        return cls(title=title, page=page, score=score, snippet=snippet)
 
 
 # =============================================================================
@@ -75,68 +117,50 @@ USER_PROMPT_TEMPLATE = """## 도메인
 
 class FaqGenerationError(Exception):
     """FAQ 생성 중 발생한 에러"""
-
     pass
+
+
+# Phase 19-AI-2: 문서 컨텍스트 타입
+DocContext = Union[List[FaqSourceDoc], List[RagSearchResult]]
 
 
 class FaqDraftService:
     """
     FAQ 초안 생성 서비스.
 
-    백엔드에서 전달한 FAQ 후보 클러스터 정보를 기반으로
-    RAG + LLM을 사용하여 FAQ 초안을 생성합니다.
-
-    Attributes:
-        _rag_client: RAGFlow 클라이언트
-        _llm: LLM 클라이언트
-
-    Example:
-        service = FaqDraftService()
-        draft = await service.generate_faq_draft(request)
+    Phase 19-AI-2 업데이트:
+    - RagflowSearchClient 사용 (/v1/chunk/search)
+    - NO_DOCS_FOUND 에러 처리
+    - top_docs vs RAGFlow 검색 결과 구분 처리
     """
 
     def __init__(
         self,
-        rag_client: Optional[RagflowClient] = None,
+        search_client: Optional[RagflowSearchClient] = None,
         llm_client: Optional[LLMClient] = None,
     ) -> None:
-        """
-        FaqDraftService 초기화.
-
-        Args:
-            rag_client: RAGFlow 클라이언트. None이면 새로 생성.
-            llm_client: LLM 클라이언트. None이면 새로 생성.
-        """
-        self._rag_client = rag_client or RagflowClient()
+        self._search_client = search_client or RagflowSearchClient()
         self._llm = llm_client or LLMClient()
 
     async def generate_faq_draft(
         self,
         req: FaqDraftGenerateRequest,
     ) -> FaqDraft:
-        """
-        FAQ 초안을 생성합니다.
-
-        Args:
-            req: FAQ 초안 생성 요청
-
-        Returns:
-            FaqDraft: 생성된 FAQ 초안
-
-        Raises:
-            FaqGenerationError: FAQ 생성 실패 시
-        """
+        """FAQ 초안을 생성합니다."""
         logger.info(
             f"Generating FAQ draft: domain={req.domain}, "
             f"cluster_id={req.cluster_id}, question='{req.canonical_question[:50]}...'"
         )
 
-        # 1. RAG 문서 확보
-        source_docs = await self._get_source_docs(req)
-        logger.info(f"Got {len(source_docs)} source documents")
+        # 1. 문서 컨텍스트 확보 (Phase 19-AI-2)
+        context_docs, used_top_docs = await self._get_context_docs(req)
+        logger.info(
+            f"Got {len(context_docs)} context documents "
+            f"(source: {'top_docs' if used_top_docs else 'ragflow_search'})"
+        )
 
         # 2. LLM 메시지 구성
-        messages = self._build_llm_messages(req, source_docs)
+        messages = self._build_llm_messages(req, context_docs, used_top_docs)
 
         # 3. LLM 호출
         try:
@@ -159,24 +183,8 @@ class FaqDraftService:
             logger.exception(f"LLM response parsing failed: {e}")
             raise FaqGenerationError(f"LLM 응답 파싱 실패: {str(e)}")
 
-        # 5. FaqDraft 생성
-        draft = FaqDraft(
-            faq_draft_id=f"FAQ-{req.cluster_id}-{uuid.uuid4().hex[:8]}",
-            domain=req.domain,
-            cluster_id=req.cluster_id,
-            question=parsed.get("question", req.canonical_question),
-            answer_markdown=parsed.get("answer_markdown", ""),
-            summary=parsed.get("summary"),
-            source_doc_id=parsed.get("source_doc_id"),
-            source_doc_version=parsed.get("source_doc_version"),
-            source_article_label=parsed.get("source_article_label"),
-            source_article_path=parsed.get("source_article_path"),
-            answer_source=self._normalize_answer_source(
-                parsed.get("answer_source", "AI_RAG")
-            ),
-            ai_confidence=self._normalize_confidence(parsed.get("ai_confidence")),
-            created_at=datetime.now(timezone.utc),
-        )
+        # 5. FaqDraft 생성 (Phase 19-AI-2)
+        draft = self._create_faq_draft(req, parsed, context_docs, used_top_docs)
 
         logger.info(
             f"FAQ draft generated: id={draft.faq_draft_id}, "
@@ -185,60 +193,78 @@ class FaqDraftService:
 
         return draft
 
-    async def _get_source_docs(
+    # =========================================================================
+    # Phase 19-AI-2: 문서 컨텍스트 확보
+    # =========================================================================
+
+    async def _get_context_docs(
         self,
         req: FaqDraftGenerateRequest,
-    ) -> List[FaqSourceDoc]:
+    ) -> Tuple[DocContext, bool]:
         """
-        FAQ 생성에 사용할 소스 문서를 확보합니다.
+        FAQ 생성에 사용할 문서 컨텍스트를 확보합니다.
+
+        우선순위:
+        1. request.top_docs가 비어있지 않으면 그대로 사용
+        2. request.top_docs가 비어있으면 RagflowSearchClient.search_chunks() 호출
 
         Args:
             req: FAQ 초안 생성 요청
 
         Returns:
-            List[FaqSourceDoc]: 소스 문서 리스트
+            Tuple[DocContext, bool]: (문서 컨텍스트, top_docs 사용 여부)
+
+        Raises:
+            FaqGenerationError: RAGFlow 검색 결과가 없는 경우 (NO_DOCS_FOUND)
         """
-        # req.top_docs가 있으면 그대로 사용
+        # 1. top_docs가 있으면 그대로 사용
         if req.top_docs:
             logger.info(f"Using {len(req.top_docs)} provided top_docs")
-            return req.top_docs
+            return req.top_docs, True
 
-        # 없으면 RAG 검색
-        logger.info(f"Searching RAG for: '{req.canonical_question[:50]}...'")
+        # 2. RAGFlow 검색
+        logger.info(f"Searching RAGFlow for: '{req.canonical_question[:50]}...'")
         try:
-            rag_docs = await self._rag_client.search(
+            results = await self._search_client.search_chunks(
                 query=req.canonical_question,
-                top_k=5,
                 dataset=req.domain,
+                top_k=5,
             )
-            return [self._rag_doc_to_faq_source(doc) for doc in rag_docs]
+        except RagflowConfigError as e:
+            logger.error(f"RAGFlow config error: {e}")
+            raise FaqGenerationError(f"RAGFlow 설정 오류: {str(e)}")
+        except RagflowSearchError as e:
+            logger.error(f"RAGFlow search error: {e}")
+            raise FaqGenerationError(f"RAGFlow 검색 실패: {str(e)}")
 
-        except Exception as e:
-            logger.warning(f"RAG search failed, continuing without docs: {e}")
-            return []
+        # 3. 결과가 없으면 NO_DOCS_FOUND 에러
+        if not results:
+            logger.warning(f"No documents found for query: '{req.canonical_question[:50]}...'")
+            raise FaqGenerationError("NO_DOCS_FOUND")
 
-    def _rag_doc_to_faq_source(self, doc: RagDocument) -> FaqSourceDoc:
-        """RagDocument를 FaqSourceDoc으로 변환합니다."""
-        return FaqSourceDoc(
-            doc_id=doc.doc_id,
-            doc_version=None,
-            title=doc.title,
-            snippet=doc.snippet,
-            article_label=doc.section_label,
-            article_path=doc.section_path,
-        )
+        # 4. RagSearchResult로 변환
+        context_docs = [RagSearchResult.from_chunk(chunk) for chunk in results]
+        logger.info(f"Found {len(context_docs)} documents from RAGFlow search")
+
+        return context_docs, False
+
+    # =========================================================================
+    # Phase 19-AI-2: LLM 메시지 구성
+    # =========================================================================
 
     def _build_llm_messages(
         self,
         req: FaqDraftGenerateRequest,
-        source_docs: List[FaqSourceDoc],
+        context_docs: DocContext,
+        used_top_docs: bool,
     ) -> List[dict]:
         """
         LLM 호출용 메시지를 구성합니다.
 
         Args:
             req: FAQ 초안 생성 요청
-            source_docs: 소스 문서 리스트
+            context_docs: 문서 컨텍스트 (FaqSourceDoc 또는 RagSearchResult)
+            used_top_docs: top_docs 사용 여부
 
         Returns:
             LLM 메시지 목록
@@ -252,18 +278,7 @@ class FaqDraftService:
             sample_questions_text = "(없음)"
 
         # 문서 발췌 포맷
-        if source_docs:
-            docs_lines = []
-            for i, doc in enumerate(source_docs[:3], start=1):
-                doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
-                if doc.article_label:
-                    doc_info += f" ({doc.article_label})"
-                if doc.snippet:
-                    doc_info += f"\n{doc.snippet[:500]}"
-                docs_lines.append(doc_info)
-            docs_text = "\n\n".join(docs_lines)
-        else:
-            docs_text = "(관련 문서를 찾지 못했습니다. 일반적인 가이드를 제공해 주세요.)"
+        docs_text = self._format_docs_for_prompt(context_docs, used_top_docs)
 
         # User 메시지 생성
         user_message = USER_PROMPT_TEMPLATE.format(
@@ -277,6 +292,121 @@ class FaqDraftService:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ]
+
+    def _format_docs_for_prompt(
+        self,
+        context_docs: DocContext,
+        used_top_docs: bool,
+    ) -> str:
+        """
+        문서 컨텍스트를 LLM 프롬프트용 문자열로 포맷합니다.
+
+        Args:
+            context_docs: 문서 컨텍스트
+            used_top_docs: top_docs 사용 여부
+
+        Returns:
+            포맷된 문서 문자열
+        """
+        if not context_docs:
+            return "(관련 문서를 찾지 못했습니다. 일반적인 가이드를 제공해 주세요.)"
+
+        docs_lines = []
+
+        if used_top_docs:
+            # FaqSourceDoc 포맷
+            for i, doc in enumerate(context_docs[:3], start=1):
+                doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
+                if doc.article_label:
+                    doc_info += f" ({doc.article_label})"
+                if doc.snippet:
+                    doc_info += f"\n{doc.snippet[:500]}"
+                docs_lines.append(doc_info)
+        else:
+            # RagSearchResult 포맷 (Phase 19-AI-2)
+            for i, doc in enumerate(context_docs[:3], start=1):
+                doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
+                if doc.page is not None:
+                    doc_info += f" (p.{doc.page})"
+                doc_info += f" [유사도: {doc.score:.2f}]"
+                if doc.snippet:
+                    doc_info += f"\n{doc.snippet}"
+                docs_lines.append(doc_info)
+
+        return "\n\n".join(docs_lines)
+
+    # =========================================================================
+    # Phase 19-AI-2: FaqDraft 생성
+    # =========================================================================
+
+    def _create_faq_draft(
+        self,
+        req: FaqDraftGenerateRequest,
+        parsed: dict,
+        context_docs: DocContext,
+        used_top_docs: bool,
+    ) -> FaqDraft:
+        """
+        파싱된 LLM 응답으로 FaqDraft를 생성합니다.
+
+        Phase 19-AI-2 스펙:
+        - top_docs 사용 시: source_doc_id 등 그대로 사용
+        - RAGFlow 검색 시: source 필드는 null, answer_markdown에 참고 문서 추가
+
+        Args:
+            req: FAQ 초안 생성 요청
+            parsed: 파싱된 LLM 응답
+            context_docs: 문서 컨텍스트
+            used_top_docs: top_docs 사용 여부
+
+        Returns:
+            FaqDraft: 생성된 FAQ 초안
+        """
+        answer_markdown = parsed.get("answer_markdown", "")
+
+        # RAGFlow 검색 결과 사용 시 참고 문서 정보 추가
+        if not used_top_docs and context_docs:
+            ref_lines = ["\n\n---\n**참고 문서:**"]
+            for doc in context_docs[:3]:
+                ref_line = f"- {doc.title or '제목 없음'}"
+                if doc.page is not None:
+                    ref_line += f" (p.{doc.page})"
+                ref_lines.append(ref_line)
+            answer_markdown += "\n".join(ref_lines)
+
+        # source 필드 결정
+        if used_top_docs and context_docs:
+            first_doc = context_docs[0]
+            source_doc_id = parsed.get("source_doc_id") or first_doc.doc_id
+            source_doc_version = parsed.get("source_doc_version") or first_doc.doc_version
+            source_article_label = parsed.get("source_article_label") or first_doc.article_label
+            source_article_path = parsed.get("source_article_path") or first_doc.article_path
+        else:
+            # RAGFlow 검색 결과는 source 정보 없음
+            source_doc_id = None
+            source_doc_version = None
+            source_article_label = None
+            source_article_path = None
+
+        return FaqDraft(
+            faq_draft_id=str(uuid.uuid4()),
+            cluster_id=req.cluster_id,
+            domain=req.domain,
+            question=parsed.get("question", req.canonical_question),
+            answer_markdown=answer_markdown,
+            summary=parsed.get("summary"),
+            source_doc_id=source_doc_id,
+            source_doc_version=source_doc_version,
+            source_article_label=source_article_label,
+            source_article_path=source_article_path,
+            answer_source=self._normalize_answer_source(parsed.get("answer_source")),
+            ai_confidence=self._normalize_confidence(parsed.get("ai_confidence")),
+            created_at=datetime.now(timezone.utc),
+        )
+
+    # =========================================================================
+    # LLM 응답 파싱
+    # =========================================================================
 
     def _parse_llm_response(self, llm_response: str) -> dict:
         """
@@ -333,6 +463,10 @@ class FaqDraftService:
             return match.group(0).strip()
 
         return None
+
+    # =========================================================================
+    # 유틸리티 메서드
+    # =========================================================================
 
     def _normalize_answer_source(
         self, source: Optional[str]
