@@ -105,6 +105,16 @@ class Settings(BaseSettings):
     RAGFLOW_DATASET_MAPPING: str = "policy:kb_policy_001,training:kb_training_001,incident:kb_incident_001"
 
     # =========================================================================
+    # Phase 19: 개별 KB_ID 설정 (RAGFLOW_DATASET_MAPPING 대신 사용 가능)
+    # =========================================================================
+    # 각 도메인별 RAGFlow Knowledge Base ID
+    RAGFLOW_KB_ID_POLICY: Optional[str] = None
+    RAGFLOW_KB_ID_TRAINING: Optional[str] = None
+    RAGFLOW_KB_ID_SECURITY: Optional[str] = None
+    RAGFLOW_KB_ID_INCIDENT: Optional[str] = None
+    RAGFLOW_KB_ID_EDUCATION: Optional[str] = None
+
+    # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
     # =========================================================================
     @field_validator(
