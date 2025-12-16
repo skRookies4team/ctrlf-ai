@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import chat, faq, gap_suggestions, health, ingest, quiz_generate, rag, search
+from app.api.v1 import chat, faq, gap_suggestions, health, ingest, quiz_generate, rag, search, video
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -151,3 +151,11 @@ app.include_router(quiz_generate.router, prefix="/ai", tags=["Quiz Generate"])
 app.include_router(search.router, tags=["Search"])
 app.include_router(faq.router, prefix="/ai", tags=["FAQ"])
 app.include_router(ingest.router, tags=["Ingest"])
+
+# Phase 22: Video Progress API (교육영상 상태전이 서버 검증)
+# - POST /api/video/play/start: 영상 재생 시작
+# - POST /api/video/progress: 진행률 업데이트
+# - POST /api/video/complete: 완료 요청
+# - GET /api/video/status: 상태 조회
+# - GET /api/video/quiz/check: 퀴즈 시작 가능 여부 확인
+app.include_router(video.router, tags=["Video Progress"])

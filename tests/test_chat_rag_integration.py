@@ -15,7 +15,7 @@ POLICY 도메인에 대한 RAG + LLM E2E 통합 테스트입니다.
 """
 
 from typing import List
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
@@ -509,8 +509,13 @@ async def test_chat_service_llm_only_route(
         intent_service=fake_intent,
     )
 
-    # Act
-    response = await service.handle_chat(sample_chat_request)
+    # Phase 22: RouterOrchestrator 사용 안 함 (LLM URL 빈 값)
+    # settings.llm_base_url이 비어있으면 RouterOrchestrator를 사용하지 않음
+    with patch("app.core.config.get_settings") as mock_settings:
+        mock_settings.return_value.llm_base_url = ""  # RouterOrchestrator 비활성화
+
+        # Act
+        response = await service.handle_chat(sample_chat_request)
 
     # Assert
     assert response.sources == []
