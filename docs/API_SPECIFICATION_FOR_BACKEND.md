@@ -2,7 +2,7 @@
 
 > **Base URL**: `http://{AI_GATEWAY_HOST}:{PORT}`
 > **Content-Type**: `application/json`
-> **문서 버전**: 2024-12-17
+> **문서 버전**: 2025-12-17
 > **OpenAPI 문서**: `/docs` (Swagger UI), `/redoc` (ReDoc)
 
 ---
@@ -11,14 +11,15 @@
 
 1. [헬스체크 API](#1-헬스체크-api)
 2. [채팅 API](#2-채팅-api-핵심)
-3. [RAG 검색 API](#3-rag-검색-api)
-4. [문서 인덱싱 API](#4-문서-인덱싱-api)
-5. [퀴즈 자동 생성 API](#5-퀴즈-자동-생성-api)
-6. [FAQ 초안 생성 API](#6-faq-초안-생성-api)
-7. [RAG Gap 보완 제안 API](#7-rag-gap-보완-제안-api)
-8. [영상 진행률 API](#8-영상-진행률-api-phase-22)
-9. [에러 응답 표준](#9-에러-응답-표준)
-10. [중요 연동 가이드](#10-중요-연동-가이드)
+3. [스트리밍 채팅 API](#3-스트리밍-채팅-api)
+4. [RAG 검색 API](#4-rag-검색-api)
+5. [문서 인덱싱 API](#5-문서-인덱싱-api)
+6. [퀴즈 자동 생성 API](#6-퀴즈-자동-생성-api)
+7. [FAQ 초안 생성 API](#7-faq-초안-생성-api)
+8. [RAG Gap 보완 제안 API](#8-rag-gap-보완-제안-api)
+9. [영상 진행률 API](#9-영상-진행률-api-phase-22)
+10. [에러 응답 표준](#10-에러-응답-표준)
+11. [중요 연동 가이드](#11-중요-연동-가이드)
 
 ---
 
@@ -154,9 +155,206 @@ POST /ai/chat/messages
 
 ---
 
-## 3. RAG 검색 API
+## 3. 스트리밍 채팅 API
 
-### 3.1 RAG 문서 검색
+HTTP 청크 스트리밍으로 AI 응답을 실시간 전송합니다. 백엔드(Spring)는 NDJSON을 줄 단위로 읽어서 SSE로 변환합니다.
+
+### 3.1 스트리밍 채팅 응답 생성
+
+```
+POST /ai/chat/stream
+```
+
+**Content-Type**
+- Request: `application/json`
+- Response: `application/x-ndjson`
+- Transfer-Encoding: `chunked`
+
+**Request Body**
+```json
+{
+  "request_id": "req-uuid-001",
+  "user_message": "연차휴가 규정이 어떻게 되나요?",
+  "role": "employee",
+  "session_id": "sess-uuid-001",
+  "metadata": {
+    "department": "개발팀"
+  }
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `request_id` | string | **O** | 중복 방지 / 재시도용 고유 키 (Idempotency Key) |
+| `user_message` | string | **O** | 사용자 메시지 |
+| `role` | string | X | 사용자 역할: `employee`, `creator`, `reviewer`, `admin` (기본: `employee`) |
+| `session_id` | string | X | 채팅 세션 ID |
+| `metadata` | object | X | 추가 메타데이터 |
+
+### 3.2 응답 형식 (NDJSON)
+
+**NDJSON (Newline Delimited JSON)** 형식으로 응답합니다.
+
+**중요 규칙:**
+- 한 줄 = 한 JSON
+- 각 JSON 뒤에 반드시 `\n` (줄바꿈)
+- 백엔드는 줄 단위로 파싱하여 SSE로 변환
+
+### 3.3 이벤트 타입
+
+#### 3.3.1 meta (시작)
+
+연결 직후 1회 전송. 침묵 시간을 없애고 연결 상태를 확정합니다.
+
+```json
+{"type":"meta","request_id":"req-uuid-001","model":"gpt-4o-mini","timestamp":"2025-01-01T10:00:00.000000"}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `type` | `"meta"` |
+| `request_id` | 요청 ID |
+| `model` | 사용 모델명 |
+| `timestamp` | 시작 시간 (ISO 8601) |
+
+#### 3.3.2 token (토큰 스트림)
+
+여러 번 전송. 텍스트는 **증분(delta)** 으로 전송됩니다.
+
+```json
+{"type":"token","text":"안"}
+{"type":"token","text":"녕"}
+{"type":"token","text":"하"}
+{"type":"token","text":"세"}
+{"type":"token","text":"요"}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `type` | `"token"` |
+| `text` | 토큰 텍스트 (증분, 백엔드가 이어붙임) |
+
+#### 3.3.3 done (정상 종료)
+
+정상 종료 시 1회 전송.
+
+```json
+{"type":"done","finish_reason":"stop","total_tokens":123,"elapsed_ms":4567,"ttfb_ms":200}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `type` | `"done"` |
+| `finish_reason` | 종료 사유 (`"stop"`) |
+| `total_tokens` | 총 토큰 수 (선택) |
+| `elapsed_ms` | 총 소요 시간 (ms) |
+| `ttfb_ms` | 첫 토큰까지 시간 (ms) |
+
+#### 3.3.4 error (에러)
+
+에러 시 1회 전송. **에러 후 즉시 스트림 종료.**
+
+```json
+{"type":"error","code":"LLM_TIMEOUT","message":"LLM 응답 시간 초과","request_id":"req-uuid-001"}
+```
+
+| 필드 | 설명 |
+|------|------|
+| `type` | `"error"` |
+| `code` | 에러 코드 |
+| `message` | 에러 메시지 |
+| `request_id` | 요청 ID |
+
+### 3.4 에러 코드
+
+| 코드 | 설명 |
+|------|------|
+| `LLM_TIMEOUT` | LLM 응답 시간 초과 |
+| `LLM_ERROR` | LLM 서비스 오류 |
+| `DUPLICATE_INFLIGHT` | 중복 요청 (이미 처리 중) |
+| `INVALID_REQUEST` | 잘못된 요청 |
+| `INTERNAL_ERROR` | 내부 서버 오류 |
+| `CLIENT_DISCONNECTED` | 클라이언트 연결 끊김 |
+
+### 3.5 중복 요청 방지
+
+동일한 `request_id`로 요청이 이미 처리 중이면 `DUPLICATE_INFLIGHT` 에러를 반환합니다.
+
+```json
+{"type":"error","code":"DUPLICATE_INFLIGHT","message":"이미 처리 중인 요청입니다. 잠시 후 다시 시도해주세요.","request_id":"test-001"}
+```
+
+**재시도 버튼 대응:**
+1. 프론트에서 재시도 클릭 시 **동일한 `request_id`** 전송
+2. AI 서버가 이미 처리 중이면 `DUPLICATE_INFLIGHT` 반환
+3. 백엔드는 이 에러를 받으면 "잠시 후 다시 시도" 안내
+
+**캐시 TTL:** 완료된 요청은 10분간 캐시됨
+
+### 3.6 Spring WebClient 연동 예제
+
+```java
+WebClient webClient = WebClient.create("http://ai-server:8000");
+
+Flux<String> stream = webClient.post()
+    .uri("/ai/chat/stream")
+    .contentType(MediaType.APPLICATION_JSON)
+    .bodyValue(request)
+    .retrieve()
+    .bodyToFlux(String.class)  // 줄 단위로 수신
+    .map(line -> {
+        JsonObject json = JsonParser.parseString(line).getAsJsonObject();
+        String type = json.get("type").getAsString();
+
+        switch (type) {
+            case "meta":
+                // 연결 확정
+                break;
+            case "token":
+                // SSE로 전송
+                return json.get("text").getAsString();
+            case "done":
+                // 완료 처리
+                break;
+            case "error":
+                // 에러 처리
+                throw new RuntimeException(json.get("message").getAsString());
+        }
+        return null;
+    })
+    .filter(Objects::nonNull);
+```
+
+### 3.7 curl 테스트 예제
+
+```bash
+curl -X POST http://localhost:8000/ai/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_id": "test-001",
+    "user_message": "안녕하세요",
+    "role": "employee",
+    "session_id": "sess-001"
+  }' \
+  --no-buffer
+```
+
+**기대 출력:**
+```
+{"type":"meta","request_id":"test-001","model":"gpt-4o-mini","timestamp":"2025-01-01T10:00:00.000000"}
+{"type":"token","text":"안"}
+{"type":"token","text":"녕"}
+{"type":"token","text":"하"}
+{"type":"token","text":"세"}
+{"type":"token","text":"요"}
+{"type":"done","finish_reason":"stop","total_tokens":5,"elapsed_ms":1234,"ttfb_ms":150}
+```
+
+---
+
+## 4. RAG 검색 API
+
+### 4.1 RAG 문서 검색
 
 RAGFlow를 통해 관련 문서를 검색합니다.
 
@@ -205,9 +403,9 @@ POST /search
 
 ---
 
-## 4. 문서 인덱싱 API
+## 5. 문서 인덱싱 API
 
-### 4.1 문서 인덱싱 요청
+### 5.1 문서 인덱싱 요청
 
 RAGFlow에 문서를 인덱싱합니다.
 
@@ -263,9 +461,9 @@ POST /ingest
 
 ---
 
-## 5. 퀴즈 자동 생성 API
+## 6. 퀴즈 자동 생성 API
 
-### 5.1 퀴즈 생성
+### 6.1 퀴즈 생성
 
 교육/사규 문서에서 객관식 퀴즈를 자동 생성합니다.
 
@@ -368,9 +566,9 @@ POST /ai/quiz/generate
 
 ---
 
-## 6. FAQ 초안 생성 API
+## 7. FAQ 초안 생성 API
 
-### 6.1 FAQ 초안 생성 (단건)
+### 7.1 FAQ 초안 생성 (단건)
 
 FAQ 클러스터를 기반으로 FAQ 초안을 생성합니다.
 
@@ -443,7 +641,7 @@ POST /ai/faq/generate
 }
 ```
 
-### 6.2 FAQ 초안 배치 생성
+### 7.2 FAQ 초안 배치 생성
 
 다수의 FAQ를 한 번에 생성합니다. 각 항목은 독립적으로 처리됩니다.
 
@@ -490,9 +688,9 @@ POST /ai/faq/generate/batch
 
 ---
 
-## 7. RAG Gap 보완 제안 API
+## 8. RAG Gap 보완 제안 API
 
-### 7.1 보완 제안 생성
+### 8.1 보완 제안 생성
 
 RAG Gap 질문들을 분석하여 사규/교육 보완 제안을 생성합니다.
 
@@ -552,11 +750,11 @@ POST /ai/gap/policy-edu/suggestions
 
 ---
 
-## 8. 영상 진행률 API (Phase 22)
+## 9. 영상 진행률 API (Phase 22)
 
 교육 영상 시청 진행률을 추적하고 서버에서 검증합니다.
 
-### 8.1 영상 재생 시작
+### 9.1 영상 재생 시작
 
 ```
 POST /api/video/play/start
@@ -593,7 +791,7 @@ POST /api/video/play/start
 }
 ```
 
-### 8.2 진행률 업데이트
+### 9.2 진행률 업데이트
 
 ```
 POST /api/video/progress
@@ -654,7 +852,7 @@ POST /api/video/progress
 | 역행 금지 | 진행률이 감소 | `PROGRESS_REGRESSION` |
 | 급상승 감지 | 10초 내 30% 이상 증가 | `PROGRESS_SURGE` |
 
-### 8.3 영상 완료 요청
+### 9.3 영상 완료 요청
 
 ```
 POST /api/video/complete
@@ -712,7 +910,7 @@ POST /api/video/complete
 | `SESSION_NOT_FOUND` | 세션 없음 |
 | `ALREADY_COMPLETED` | 이미 완료됨 |
 
-### 8.4 상태 조회
+### 9.4 상태 조회
 
 ```
 GET /api/video/status?user_id=EMP-12345&training_id=TRAIN-2025-001
@@ -743,7 +941,7 @@ GET /api/video/status?user_id=EMP-12345&training_id=TRAIN-2025-001
 }
 ```
 
-### 8.5 퀴즈 시작 가능 여부 확인
+### 9.5 퀴즈 시작 가능 여부 확인
 
 4대교육의 경우 영상 완료 후에만 퀴즈 시작 가능합니다.
 
@@ -772,7 +970,7 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 
 ---
 
-## 9. 에러 응답 표준
+## 10. 에러 응답 표준
 
 ### HTTP 상태 코드
 
@@ -810,15 +1008,15 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 
 ---
 
-## 10. 중요 연동 가이드
+## 11. 중요 연동 가이드
 
-### 10.1 세션 ID 관리
+### 11.1 세션 ID 관리
 
 - 백엔드에서 채팅 세션 ID(`session_id`)를 생성/관리합니다.
 - 동일 세션 내 대화 연속성을 위해 `messages` 배열에 이전 대화 이력을 포함해야 합니다.
 - AI Gateway는 세션 상태를 저장하지 않습니다 (Stateless).
 
-### 10.2 사용자 역할 (user_role)
+### 11.2 사용자 역할 (user_role)
 
 | 역할 | 설명 |
 |------|------|
@@ -827,7 +1025,7 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 | `ADMIN` | 시스템 관리자 |
 | `INCIDENT_MANAGER` | 사고 담당자 |
 
-### 10.3 도메인 (domain)
+### 11.3 도메인 (domain)
 
 | 도메인 | 설명 |
 |--------|------|
@@ -838,19 +1036,19 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 | `PII_PRIVACY` | 개인정보보호 |
 | `HR_POLICY` | 인사 정책 |
 
-### 10.4 PII 처리
+### 11.4 PII 처리
 
 - AI Gateway는 사용자 입력 및 LLM 출력에서 PII를 자동 감지/마스킹합니다.
 - 강차단(Hard Block) 정책: 주민번호, 카드번호 등 민감정보 포함 시 요청 거부
 - `meta.has_pii_input`, `meta.has_pii_output`으로 PII 감지 여부 확인 가능
 
-### 10.5 RAG Gap 로깅
+### 11.5 RAG Gap 로깅
 
 1. Chat API 응답에서 `meta.rag_gap_candidate=true` 확인
 2. 해당 질문을 별도 테이블에 저장
 3. 주기적으로 `/ai/gap/policy-edu/suggestions` 호출하여 보완 제안 생성
 
-### 10.6 영상 진행률 연동 순서
+### 11.6 영상 진행률 연동 순서
 
 ```
 1. POST /api/video/play/start  → 세션 생성
@@ -859,11 +1057,12 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 4. GET /api/video/quiz/check   → 퀴즈 시작 전 확인 (4대교육)
 ```
 
-### 10.7 타임아웃 설정 권장값
+### 11.7 타임아웃 설정 권장값
 
 | API | 권장 타임아웃 |
 |-----|---------------|
 | `/ai/chat/messages` | 30초 |
+| `/ai/chat/stream` | 60초 (첫 토큰 5초 + 스트리밍) |
 | `/search` | 10초 |
 | `/ingest` | 60초 |
 | `/ai/quiz/generate` | 60초 |
@@ -880,6 +1079,7 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 | GET | `/health` | Liveness 체크 |
 | GET | `/health/ready` | Readiness 체크 |
 | POST | `/ai/chat/messages` | AI 채팅 응답 생성 |
+| POST | `/ai/chat/stream` | 스트리밍 채팅 응답 (NDJSON) |
 | POST | `/search` | RAG 검색 |
 | POST | `/ingest` | 문서 인덱싱 |
 | POST | `/ai/quiz/generate` | 퀴즈 자동 생성 |
@@ -895,4 +1095,4 @@ GET /api/video/quiz/check?user_id=EMP-12345&training_id=TRAIN-2025-001
 ---
 
 **문의**: AI팀
-**최종 수정**: 2024-12-17
+**최종 수정**: 2025-12-17
