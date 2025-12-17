@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import chat, faq, gap_suggestions, health, ingest, quiz_generate, rag, search, video
+from app.api.v1 import chat, chat_stream, faq, gap_suggestions, health, ingest, quiz_generate, rag, search, video
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -159,3 +159,8 @@ app.include_router(ingest.router, tags=["Ingest"])
 # - GET /api/video/status: 상태 조회
 # - GET /api/video/quiz/check: 퀴즈 시작 가능 여부 확인
 app.include_router(video.router, tags=["Video Progress"])
+
+# Chat Stream API (HTTP 청크 스트리밍)
+# - POST /ai/chat/stream: 스트리밍 채팅 응답 생성 (NDJSON)
+# 백엔드(Spring)가 NDJSON을 줄 단위로 읽어서 SSE로 변환
+app.include_router(chat_stream.router, tags=["Chat Stream"])
