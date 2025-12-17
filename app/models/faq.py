@@ -8,7 +8,7 @@ FAQ 초안 생성 API의 요청/응답 DTO를 정의합니다.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -42,8 +42,6 @@ class FaqDraftGenerateRequest(BaseModel):
         canonical_question: 클러스터를 대표하는 질문
         sample_questions: 실제 직원 질문 예시들
         top_docs: 백엔드가 이미 RAG에서 뽑아온 후보 문서들 (선택)
-        answer_source_hint: 답변 생성 힌트 (AI_RAG, LOG_REUSE 등)
-        meta: 추후 확장을 위한 메타데이터
     """
 
     domain: str = Field(
@@ -60,12 +58,6 @@ class FaqDraftGenerateRequest(BaseModel):
     )
     top_docs: List[FaqSourceDoc] = Field(
         default_factory=list, description="RAG에서 뽑아온 후보 문서들"
-    )
-    answer_source_hint: Optional[str] = Field(
-        None, description="답변 생성 힌트 (AI_RAG, LOG_REUSE)"
-    )
-    meta: Optional[Dict[str, Any]] = Field(
-        None, description="추후 확장을 위한 메타데이터"
     )
 
 

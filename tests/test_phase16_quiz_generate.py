@@ -20,7 +20,6 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.models.quiz_generate import (
     Difficulty,
-    DifficultyDistribution,
     ExcludePreviousQuestion,
     GeneratedQuizOption,
     GeneratedQuizQuestion,
@@ -55,6 +54,8 @@ def sample_quiz_candidate_blocks() -> List[Dict[str, Any]]:
     return [
         {
             "blockId": "BLOCK-001",
+            "docId": "DOC-SEC-001",
+            "docVersion": "v1",
             "chapterId": "CH1",
             "learningObjectiveId": "LO-1",
             "text": "USB 메모리를 사외로 반출할 때에는 정보보호팀의 사전 승인을 받아야 한다.",
@@ -63,6 +64,8 @@ def sample_quiz_candidate_blocks() -> List[Dict[str, Any]]:
         },
         {
             "blockId": "BLOCK-002",
+            "docId": "DOC-SEC-001",
+            "docVersion": "v1",
             "chapterId": "CH1",
             "learningObjectiveId": "LO-2",
             "text": "회사 외부 클라우드 스토리지에 고객 개인정보를 업로드하는 것은 금지된다.",
@@ -70,6 +73,8 @@ def sample_quiz_candidate_blocks() -> List[Dict[str, Any]]:
         },
         {
             "blockId": "BLOCK-003",
+            "docId": "DOC-SEC-001",
+            "docVersion": "v1",
             "chapterId": "CH2",
             "learningObjectiveId": "LO-3",
             "text": "비밀번호는 8자리 이상, 영문/숫자/특수문자 조합으로 설정해야 한다.",
@@ -126,6 +131,8 @@ class TestQuizGenerateModels:
         """QuizCandidateBlock 모델 생성 테스트."""
         block = QuizCandidateBlock(
             block_id="BLOCK-001",
+            doc_id="DOC-SEC-001",
+            doc_version="v1",
             chapter_id="CH1",
             learning_objective_id="LO-1",
             text="USB 메모리를 사외로 반출할 때에는 정보보호팀의 사전 승인을 받아야 한다.",
@@ -134,6 +141,8 @@ class TestQuizGenerateModels:
         )
 
         assert block.block_id == "BLOCK-001"
+        assert block.doc_id == "DOC-SEC-001"
+        assert block.doc_version == "v1"
         assert block.chapter_id == "CH1"
         assert block.learning_objective_id == "LO-1"
         assert "USB 메모리" in block.text
@@ -143,6 +152,8 @@ class TestQuizGenerateModels:
         """QuizCandidateBlock camelCase alias 테스트."""
         data = {
             "blockId": "BLOCK-002",
+            "docId": "DOC-001",
+            "docVersion": "v2",
             "chapterId": "CH2",
             "learningObjectiveId": "LO-2",
             "text": "테스트 텍스트",
@@ -152,56 +163,39 @@ class TestQuizGenerateModels:
         block = QuizCandidateBlock(**data)
 
         assert block.block_id == "BLOCK-002"
+        assert block.doc_id == "DOC-001"
+        assert block.doc_version == "v2"
         assert block.chapter_id == "CH2"
         assert block.article_path == "제1장 > 제1조"
-
-    def test_difficulty_distribution_creation(self) -> None:
-        """DifficultyDistribution 모델 생성 테스트."""
-        dist = DifficultyDistribution(easy=5, normal=3, hard=2)
-
-        assert dist.easy == 5
-        assert dist.normal == 3
-        assert dist.hard == 2
-        assert dist.total == 10
 
     def test_quiz_generate_request_creation(
         self,
         sample_quiz_candidate_blocks: List[Dict[str, Any]],
     ) -> None:
-        """QuizGenerateRequest 모델 생성 테스트."""
+        """QuizGenerateRequest 모델 생성 테스트 (간소화된 API)."""
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
 
         request = QuizGenerateRequest(
-            education_id="EDU-SEC-2025-001",
-            doc_id="DOC-SEC-001",
-            doc_version="v1",
-            attempt_no=1,
-            language="ko",
             num_questions=10,
-            difficulty_distribution=DifficultyDistribution(easy=5, normal=3, hard=2),
-            question_type=QuestionType.MCQ_SINGLE,
+            language="ko",
             max_options=4,
             quiz_candidate_blocks=blocks,
         )
 
-        assert request.education_id == "EDU-SEC-2025-001"
         assert request.num_questions == 10
+        assert request.language == "ko"
+        assert request.max_options == 4
         assert len(request.quiz_candidate_blocks) == 3
-        assert request.difficulty_distribution.total == 10
 
     def test_quiz_generate_request_camelcase(self) -> None:
-        """QuizGenerateRequest camelCase 입력 테스트."""
+        """QuizGenerateRequest camelCase 입력 테스트 (간소화된 API)."""
         data = {
-            "educationId": "EDU-001",
-            "docId": "DOC-001",
-            "docVersion": "v1",
-            "attemptNo": 2,
             "numQuestions": 5,
-            "questionType": "MCQ_SINGLE",
             "maxOptions": 4,
             "quizCandidateBlocks": [
                 {
                     "blockId": "B1",
+                    "docId": "DOC-001",
                     "text": "테스트 텍스트",
                     "tags": [],
                 }
@@ -215,8 +209,6 @@ class TestQuizGenerateModels:
         }
         request = QuizGenerateRequest(**data)
 
-        assert request.education_id == "EDU-001"
-        assert request.attempt_no == 2
         assert request.num_questions == 5
         assert len(request.exclude_previous_questions) == 1
 
@@ -253,26 +245,17 @@ class TestQuizGenerateModels:
         assert len(question.options) == 2
 
     def test_quiz_generate_response_creation(self) -> None:
-        """QuizGenerateResponse 모델 생성 테스트."""
+        """QuizGenerateResponse 모델 생성 테스트 (간소화된 API)."""
         response = QuizGenerateResponse(
-            education_id="EDU-001",
-            doc_id="DOC-001",
-            doc_version="v1",
-            attempt_no=1,
             generated_count=2,
             questions=[],
         )
 
-        assert response.education_id == "EDU-001"
         assert response.generated_count == 2
 
     def test_quiz_generate_response_json_serialization(self) -> None:
-        """QuizGenerateResponse JSON 직렬화 테스트."""
+        """QuizGenerateResponse JSON 직렬화 테스트 (간소화된 API)."""
         response = QuizGenerateResponse(
-            education_id="EDU-001",
-            doc_id="DOC-001",
-            doc_version="v1",
-            attempt_no=1,
             generated_count=1,
             questions=[
                 GeneratedQuizQuestion(
@@ -283,16 +266,17 @@ class TestQuizGenerateModels:
                         GeneratedQuizOption(option_id="OPT-2", text="답2", is_correct=False),
                     ],
                     source_block_ids=["B1"],
+                    source_doc_id="DOC-001",
+                    source_doc_version="v1",
                 )
             ],
         )
 
         json_data = response.model_dump(by_alias=True)
 
-        assert "educationId" in json_data
-        assert "docId" in json_data
         assert "generatedCount" in json_data
         assert json_data["questions"][0]["questionId"] == "Q-001"
+        assert json_data["questions"][0]["sourceDocId"] == "DOC-001"
         assert json_data["questions"][0]["options"][0]["isCorrect"] is True
 
     def test_generate_question_id_format(self) -> None:
@@ -323,7 +307,7 @@ class TestQuizGenerateService:
         sample_quiz_candidate_blocks: List[Dict[str, Any]],
         sample_llm_response: str,
     ) -> None:
-        """기본 퀴즈 생성 테스트."""
+        """기본 퀴즈 생성 테스트 (간소화된 API)."""
         mock_llm = AsyncMock()
         mock_llm.generate_chat_completion.return_value = sample_llm_response
 
@@ -332,16 +316,12 @@ class TestQuizGenerateService:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
 
         response = await service.generate_quiz(request)
 
-        assert response.education_id == "EDU-001"
-        assert response.doc_id == "DOC-001"
         assert response.generated_count == 2  # LLM 응답에 2개 문항
         assert len(response.questions) == 2
 
@@ -388,8 +368,6 @@ class TestQuizGenerateService:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -412,8 +390,6 @@ class TestQuizGenerateService:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -436,8 +412,6 @@ class TestQuizGenerateService:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -448,69 +422,64 @@ class TestQuizGenerateService:
 
 
 # =============================================================================
-# 3. 난이도 분배 계산 테스트
+# 3. 난이도 분배 계산 테스트 (고정 비율: 쉬움 50%, 보통 30%, 어려움 20%)
 # =============================================================================
 
 
 class TestDifficultyDistribution:
-    """난이도 분배 계산 테스트."""
+    """난이도 분배 계산 테스트 (고정 비율)."""
 
-    def test_exact_distribution(self) -> None:
-        """정확한 분배 테스트."""
+    def test_10_questions_distribution(self) -> None:
+        """10문항 난이도 분배 테스트 (50%, 30%, 20%)."""
         service = QuizGenerateService()
 
-        dist = DifficultyDistribution(easy=5, normal=3, hard=2)
-        result = service._calculate_difficulty_distribution(10, dist)
+        result = service._calculate_difficulty_distribution(10)
 
+        # 10문항: 쉬움 5개, 보통 3개, 어려움 2개
         assert result["easy"] == 5
         assert result["normal"] == 3
         assert result["hard"] == 2
 
-    def test_proportional_redistribution(self) -> None:
-        """비율 기반 재분배 테스트."""
+    def test_20_questions_distribution(self) -> None:
+        """20문항 난이도 분배 테스트."""
         service = QuizGenerateService()
 
-        # 합이 20인데 num_questions가 10
-        dist = DifficultyDistribution(easy=10, normal=6, hard=4)
-        result = service._calculate_difficulty_distribution(10, dist)
+        result = service._calculate_difficulty_distribution(20)
 
-        # 비율: easy=50%, normal=30%, hard=20%
-        assert result["easy"] == 5  # 50% of 10
-        assert result["normal"] == 3  # 30% of 10
-        assert result["hard"] == 2  # 나머지
+        # 20문항: 쉬움 10개, 보통 6개, 어려움 4개
+        assert result["easy"] == 10
+        assert result["normal"] == 6
+        assert result["hard"] == 4
 
-    def test_default_even_distribution(self) -> None:
-        """기본 균등 분배 테스트."""
+    def test_5_questions_distribution(self) -> None:
+        """5문항 난이도 분배 테스트."""
         service = QuizGenerateService()
 
-        result = service._calculate_difficulty_distribution(9, None)
+        result = service._calculate_difficulty_distribution(5)
 
-        # 9개를 3으로 나누면 각 3개
-        assert result["easy"] == 3
-        assert result["normal"] == 3
-        assert result["hard"] == 3
-
-    def test_uneven_distribution_with_remainder(self) -> None:
-        """나머지가 있는 균등 분배 테스트."""
-        service = QuizGenerateService()
-
-        result = service._calculate_difficulty_distribution(10, None)
-
-        # 10 = 3 + 3 + 3 + 1
-        # 나머지 1은 easy에 할당
-        assert result["easy"] == 4
-        assert result["normal"] == 3
-        assert result["hard"] == 3
+        # 5문항: 쉬움 2~3개, 보통 1~2개, 어려움 1개 (반올림)
+        total = result["easy"] + result["normal"] + result["hard"]
+        assert total == 5
+        assert result["easy"] >= 2  # 50% of 5 = 2.5 → 2 or 3
 
     def test_small_number_distribution(self) -> None:
         """적은 문항 수 분배 테스트."""
         service = QuizGenerateService()
 
-        result = service._calculate_difficulty_distribution(2, None)
+        result = service._calculate_difficulty_distribution(3)
 
-        # 2개면 균등 분배 어려움
+        # 3문항도 총합이 맞아야 함
         total = result["easy"] + result["normal"] + result["hard"]
-        assert total == 2
+        assert total == 3
+
+    def test_total_always_matches(self) -> None:
+        """다양한 문항 수에서 총합이 항상 맞는지 테스트."""
+        service = QuizGenerateService()
+
+        for num in [1, 2, 3, 5, 7, 10, 15, 20, 50]:
+            result = service._calculate_difficulty_distribution(num)
+            total = result["easy"] + result["normal"] + result["hard"]
+            assert total == num, f"Failed for {num}: {result}"
 
 
 # =============================================================================
@@ -560,9 +529,6 @@ class TestDuplicatePrevention:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
-            attempt_no=2,  # 2차 응시
             num_questions=5,
             quiz_candidate_blocks=blocks,
             exclude_previous_questions=[
@@ -634,8 +600,6 @@ class TestQuestionValidation:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -673,8 +637,6 @@ class TestQuestionValidation:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -709,8 +671,6 @@ class TestQuestionValidation:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -727,7 +687,7 @@ class TestQuestionValidation:
 
 
 class TestQuizGenerateAPI:
-    """Quiz Generate API 통합 테스트."""
+    """Quiz Generate API 통합 테스트 (간소화된 API)."""
 
     def test_endpoint_exists(self, test_client: TestClient) -> None:
         """엔드포인트 존재 확인 테스트."""
@@ -735,11 +695,10 @@ class TestQuizGenerateAPI:
         response = test_client.post(
             "/ai/quiz/generate",
             json={
-                "educationId": "EDU-001",
-                "docId": "DOC-001",
                 "quizCandidateBlocks": [
                     {
                         "blockId": "B1",
+                        "docId": "DOC-001",
                         "text": "테스트 텍스트",
                     }
                 ],
@@ -755,12 +714,8 @@ class TestQuizGenerateAPI:
         test_client: TestClient,
         sample_quiz_candidate_blocks: List[Dict[str, Any]],
     ) -> None:
-        """유효한 요청 테스트 (서비스 mock)."""
+        """유효한 요청 테스트 (서비스 mock, 간소화된 API)."""
         mock_response = QuizGenerateResponse(
-            education_id="EDU-001",
-            doc_id="DOC-001",
-            doc_version="v1",
-            attempt_no=1,
             generated_count=2,
             questions=[
                 GeneratedQuizQuestion(
@@ -771,6 +726,7 @@ class TestQuizGenerateAPI:
                         GeneratedQuizOption(option_id="OPT-2", text="오답", is_correct=False),
                     ],
                     source_block_ids=["B1"],
+                    source_doc_id="DOC-SEC-001",
                 ),
                 GeneratedQuizQuestion(
                     question_id="Q-TEST-002",
@@ -780,6 +736,7 @@ class TestQuizGenerateAPI:
                         GeneratedQuizOption(option_id="OPT-2", text="오답", is_correct=False),
                     ],
                     source_block_ids=["B2"],
+                    source_doc_id="DOC-SEC-001",
                 ),
             ],
         )
@@ -792,8 +749,6 @@ class TestQuizGenerateAPI:
             response = test_client.post(
                 "/ai/quiz/generate",
                 json={
-                    "educationId": "EDU-001",
-                    "docId": "DOC-001",
                     "numQuestions": 5,
                     "quizCandidateBlocks": sample_quiz_candidate_blocks,
                 },
@@ -802,7 +757,6 @@ class TestQuizGenerateAPI:
             assert response.status_code == 200
             data = response.json()
 
-            assert data["educationId"] == "EDU-001"
             assert data["generatedCount"] == 2
             assert len(data["questions"]) == 2
 
@@ -811,34 +765,17 @@ class TestQuizGenerateAPI:
         response = test_client.post(
             "/ai/quiz/generate",
             json={
-                "educationId": "EDU-001",
-                "docId": "DOC-001",
                 "quizCandidateBlocks": [],  # 빈 배열
             },
         )
 
         assert response.status_code == 422  # Validation Error
 
-    def test_validation_error_missing_required_fields(self, test_client: TestClient) -> None:
-        """필수 필드 누락 유효성 검사 오류 테스트."""
-        response = test_client.post(
-            "/ai/quiz/generate",
-            json={
-                "educationId": "EDU-001",
-                # docId 누락
-                "quizCandidateBlocks": [{"blockId": "B1", "text": "텍스트"}],
-            },
-        )
-
-        assert response.status_code == 422
-
     def test_validation_error_invalid_num_questions(self, test_client: TestClient) -> None:
         """잘못된 문항 수 유효성 검사 오류 테스트."""
         response = test_client.post(
             "/ai/quiz/generate",
             json={
-                "educationId": "EDU-001",
-                "docId": "DOC-001",
                 "numQuestions": 0,  # 0 이하는 안됨
                 "quizCandidateBlocks": [{"blockId": "B1", "text": "텍스트"}],
             },
@@ -846,17 +783,13 @@ class TestQuizGenerateAPI:
 
         assert response.status_code == 422
 
-    def test_second_attempt_with_exclude_list(
+    def test_request_with_exclude_list(
         self,
         test_client: TestClient,
         sample_quiz_candidate_blocks: List[Dict[str, Any]],
     ) -> None:
-        """2차 응시 요청 테스트 (exclude 목록 포함)."""
+        """exclude 목록 포함 요청 테스트."""
         mock_response = QuizGenerateResponse(
-            education_id="EDU-001",
-            doc_id="DOC-001",
-            doc_version="v1",
-            attempt_no=2,
             generated_count=1,
             questions=[
                 GeneratedQuizQuestion(
@@ -867,6 +800,7 @@ class TestQuizGenerateAPI:
                         GeneratedQuizOption(option_id="OPT-2", text="오답", is_correct=False),
                     ],
                     source_block_ids=["B1"],
+                    source_doc_id="DOC-SEC-001",
                 ),
             ],
         )
@@ -879,9 +813,6 @@ class TestQuizGenerateAPI:
             response = test_client.post(
                 "/ai/quiz/generate",
                 json={
-                    "educationId": "EDU-001",
-                    "docId": "DOC-001",
-                    "attemptNo": 2,
                     "numQuestions": 5,
                     "quizCandidateBlocks": sample_quiz_candidate_blocks,
                     "excludePreviousQuestions": [
@@ -895,7 +826,7 @@ class TestQuizGenerateAPI:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["attemptNo"] == 2
+            assert data["generatedCount"] == 1
 
 
 # =============================================================================
@@ -919,8 +850,6 @@ class TestQuizGenerateErrorCases:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -944,8 +873,6 @@ class TestQuizGenerateErrorCases:
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=5,
             quiz_candidate_blocks=blocks,
         )
@@ -968,8 +895,6 @@ class TestQuizGenerateErrorCases:
             response = test_client.post(
                 "/ai/quiz/generate",
                 json={
-                    "educationId": "EDU-001",
-                    "docId": "DOC-001",
                     "quizCandidateBlocks": sample_quiz_candidate_blocks,
                 },
             )

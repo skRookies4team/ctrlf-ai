@@ -301,26 +301,29 @@ class ChatStreamService:
         base_url = str(self._settings.llm_base_url).rstrip("/")
         url = f"{base_url}/v1/chat/completions"
 
+        # messages 배열을 LLM 형식으로 변환
+        llm_messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages
+        ]
+
         payload = {
             "model": self._settings.LLM_MODEL_NAME,
-            "messages": [
-                {"role": "user", "content": request.user_message},
-            ],
+            "messages": llm_messages,
             "temperature": 0.7,
             "max_tokens": 2048,
             "stream": True,  # 스트리밍 활성화
         }
 
         # 역할 기반 시스템 프롬프트 추가
-        if request.role:
-            system_prompt = self._get_system_prompt(request.role)
-            if system_prompt:
-                payload["messages"].insert(0, {
-                    "role": "system",
-                    "content": system_prompt,
-                })
+        system_prompt = self._get_system_prompt(request.user_role)
+        if system_prompt:
+            payload["messages"].insert(0, {
+                "role": "system",
+                "content": system_prompt,
+            })
 
-        logger.info(f"Starting LLM stream: request_id={request.request_id}")
+        logger.info(f"Starting LLM stream: request_id={request.request_id}, user_id={request.user_id}")
 
         try:
             async with self._client.stream(
@@ -389,15 +392,23 @@ class ChatStreamService:
             )
             yield error_event.to_ndjson()
 
-    def _get_system_prompt(self, role: str) -> Optional[str]:
-        """역할에 따른 시스템 프롬프트 반환."""
+    def _get_system_prompt(self, user_role: str) -> Optional[str]:
+        """
+        역할에 따른 시스템 프롬프트 반환.
+
+        Args:
+            user_role: 사용자 역할 (EMPLOYEE, MANAGER, ADMIN 등 대문자)
+        """
+        # 대소문자 구분 없이 매칭
+        role_lower = user_role.lower()
         prompts = {
             "employee": "당신은 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다.",
+            "manager": "당신은 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다.",
             "creator": "당신은 CTRL+F 콘텐츠 생성 AI 어시스턴트입니다. 교육 자료, FAQ, 문서 작성을 도와줍니다.",
             "reviewer": "당신은 CTRL+F 검토 AI 어시스턴트입니다. 문서 검토 및 품질 관리를 지원합니다.",
             "admin": "당신은 CTRL+F 관리자 AI 어시스턴트입니다. 시스템 관리 및 설정 관련 질문에 답변합니다.",
         }
-        return prompts.get(role.lower())
+        return prompts.get(role_lower)
 
     def _log_metrics(self, metrics: StreamMetrics) -> None:
         """

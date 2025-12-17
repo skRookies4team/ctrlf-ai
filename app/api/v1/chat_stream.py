@@ -74,6 +74,10 @@ async def stream_with_disconnect_check(
     description="""
     HTTP 청크 스트리밍으로 AI 응답을 전송합니다.
 
+    ## 요청 형식 (ChatRequest와 동일 + request_id)
+
+    ChatRequest와 동일한 필드 구조를 사용하며, 스트리밍 전용 `request_id`가 추가됩니다.
+
     ## 응답 형식: NDJSON (Newline Delimited JSON)
 
     한 줄에 하나의 JSON 객체가 전송됩니다.
@@ -133,12 +137,15 @@ async def stream_chat(
     """
     스트리밍 채팅 응답을 생성합니다.
 
-    **Request Body:**
-    - `request_id`: 중복 방지 / 재시도용 고유 키 (필수)
-    - `user_message`: 사용자 메시지 (필수)
-    - `role`: 사용자 역할 (선택: employee, creator, reviewer, admin)
-    - `session_id`: 세션 ID (선택)
-    - `metadata`: 추가 메타데이터 (선택)
+    **Request Body (ChatRequest와 동일 + request_id):**
+    - `request_id`: 중복 방지 / 재시도용 고유 키 (필수, 스트리밍 전용)
+    - `session_id`: 채팅 세션 ID (필수)
+    - `user_id`: 사용자 ID (필수)
+    - `user_role`: 사용자 역할 - EMPLOYEE, MANAGER, ADMIN 등 (필수)
+    - `department`: 사용자 부서 (선택)
+    - `domain`: 질의 도메인 - POLICY, INCIDENT, EDUCATION 등 (선택)
+    - `channel`: 요청 채널 - WEB, MOBILE 등 (기본: WEB)
+    - `messages`: 대화 히스토리 (필수, 마지막 요소가 최신 메시지)
 
     **Response:**
     - Content-Type: application/x-ndjson
@@ -154,7 +161,7 @@ async def stream_chat(
     """
     logger.info(
         f"Stream chat request: request_id={body.request_id}, "
-        f"role={body.role}, session_id={body.session_id}"
+        f"user_id={body.user_id}, user_role={body.user_role}, session_id={body.session_id}"
     )
 
     service = get_chat_stream_service()

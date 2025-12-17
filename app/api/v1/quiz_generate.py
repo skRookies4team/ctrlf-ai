@@ -55,33 +55,33 @@ def get_quiz_generate_service() -> QuizGenerateService:
 
     ## 주요 기능
 
-    1. **1차 응시**: 새로운 퀴즈 세트 생성 (attempt_no=1)
-    2. **2차 응시**: 기존 문항 중복 방지 (attempt_no=2, exclude_previous_questions 사용)
+    1. **1차 응시**: 새로운 퀴즈 세트 생성
+    2. **2차 응시**: 기존 문항 중복 방지 (excludePreviousQuestions 사용)
+
+    ## 난이도 분배
+
+    AI 서버가 고정 비율로 자동 결정합니다:
+    - 쉬움(EASY): 50%
+    - 보통(NORMAL): 30%
+    - 어려움(HARD): 20%
 
     ## 요청 예시
 
     ```json
     {
-      "educationId": "EDU-SEC-2025-001",
-      "docId": "DOC-SEC-001",
-      "docVersion": "v1",
-      "attemptNo": 1,
       "language": "ko",
       "numQuestions": 10,
-      "difficultyDistribution": {
-        "easy": 5,
-        "normal": 3,
-        "hard": 2
-      },
-      "questionType": "MCQ_SINGLE",
       "maxOptions": 4,
       "quizCandidateBlocks": [
         {
           "blockId": "BLOCK-001",
+          "docId": "DOC-SEC-001",
+          "docVersion": "v1",
           "chapterId": "CH1",
           "learningObjectiveId": "LO-1",
           "text": "USB 메모리를 사외로 반출할 때에는 정보보호팀의 사전 승인을 받아야 한다.",
-          "tags": ["USB", "반출", "승인"]
+          "tags": ["USB", "반출", "승인"],
+          "articlePath": "제3장 > 제2조 > 제1항"
         }
       ],
       "excludePreviousQuestions": []
@@ -92,10 +92,6 @@ def get_quiz_generate_service() -> QuizGenerateService:
 
     ```json
     {
-      "educationId": "EDU-SEC-2025-001",
-      "docId": "DOC-SEC-001",
-      "docVersion": "v1",
-      "attemptNo": 1,
       "generatedCount": 10,
       "questions": [
         {
@@ -110,6 +106,9 @@ def get_quiz_generate_service() -> QuizGenerateService:
             {"optionId": "OPT-4", "text": "사후 보고", "isCorrect": false}
           ],
           "difficulty": "EASY",
+          "sourceDocId": "DOC-SEC-001",
+          "sourceDocVersion": "v1",
+          "sourceArticlePath": "제3장 > 제2조 > 제1항",
           "explanation": "USB 반출 시에는 반드시 정보보호팀의 사전 승인을 받아야 합니다."
         }
       ]
@@ -119,11 +118,6 @@ def get_quiz_generate_service() -> QuizGenerateService:
     ## TODO: 인증/권한
     - 이 엔드포인트는 내부 백엔드/관리자 전용입니다.
     - IP 제한 또는 헤더 토큰 기반 인증을 추가할 예정입니다.
-
-    ## TODO: Phase 17 예정
-    - LLM Self-check 기반 고급 QC 파이프라인
-    - RAG 재검증을 통한 정답 검증
-    - 문장 유사도(embedding) 기반 중복 제거
     """,
     responses={
         200: {
@@ -149,11 +143,9 @@ async def generate_quiz(
 
     Args:
         request: 퀴즈 생성 요청
-            - education_id: 교육/코스 식별자
-            - doc_id, doc_version: 사규/교육 문서 ID 및 버전
-            - attempt_no: 응시 차수 (1=1차 응시, 2=2차 응시 등)
             - num_questions: 생성할 문항 수
-            - difficulty_distribution: 난이도별 문항 수 분배
+            - language: 퀴즈 언어 (기본: ko)
+            - max_options: 보기 개수 (기본: 4)
             - quiz_candidate_blocks: 퀴즈 생성에 사용할 텍스트 블록 목록
             - exclude_previous_questions: 2차 응시 시 제외할 기존 문항 목록
 
@@ -163,9 +155,8 @@ async def generate_quiz(
             - questions: 생성된 퀴즈 문항 목록
     """
     logger.info(
-        f"Quiz generate request: education_id={request.education_id}, "
-        f"doc_id={request.doc_id}, num_questions={request.num_questions}, "
-        f"attempt_no={request.attempt_no}, blocks_count={len(request.quiz_candidate_blocks)}"
+        f"Quiz generate request: num_questions={request.num_questions}, "
+        f"blocks_count={len(request.quiz_candidate_blocks)}"
     )
 
     try:

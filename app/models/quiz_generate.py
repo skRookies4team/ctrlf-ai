@@ -60,6 +60,16 @@ class QuizCandidateBlock(BaseModel):
         alias="blockId",
         description="블록 ID",
     )
+    doc_id: Optional[str] = Field(
+        default=None,
+        alias="docId",
+        description="출처 문서 ID",
+    )
+    doc_version: Optional[str] = Field(
+        default=None,
+        alias="docVersion",
+        description="출처 문서 버전",
+    )
     chapter_id: Optional[str] = Field(
         default=None,
         alias="chapterId",
@@ -123,34 +133,12 @@ class QuizGenerateRequest(BaseModel):
 
     교육/사규 문서에서 추출된 QUIZ_CANDIDATE 블록들을 받아
     LLM으로 객관식 퀴즈를 생성합니다.
+
+    간소화된 API:
+    - 난이도 분배는 AI 내부에서 고정 비율로 결정 (쉬움 50%, 보통 30%, 어려움 20%)
+    - 출처 정보(docId, docVersion)는 각 블록에서 관리
     """
 
-    education_id: str = Field(
-        ...,
-        alias="educationId",
-        description="교육/코스 식별자",
-    )
-    doc_id: str = Field(
-        ...,
-        alias="docId",
-        description="사규/교육 문서 ID",
-    )
-    doc_version: str = Field(
-        default="v1",
-        alias="docVersion",
-        description="문서 버전",
-    )
-    attempt_no: int = Field(
-        default=1,
-        alias="attemptNo",
-        ge=1,
-        le=10,
-        description="응시 차수 (1차, 2차 등)",
-    )
-    language: str = Field(
-        default="ko",
-        description="퀴즈 언어 (ko, en 등)",
-    )
     num_questions: int = Field(
         default=10,
         alias="numQuestions",
@@ -158,15 +146,9 @@ class QuizGenerateRequest(BaseModel):
         le=50,
         description="생성할 문항 수",
     )
-    difficulty_distribution: Optional[DifficultyDistribution] = Field(
-        default=None,
-        alias="difficultyDistribution",
-        description="난이도별 문항 수 분배 (미지정 시 균등 분배)",
-    )
-    question_type: QuestionType = Field(
-        default=QuestionType.MCQ_SINGLE,
-        alias="questionType",
-        description="문제 유형",
+    language: str = Field(
+        default="ko",
+        description="퀴즈 언어 (ko, en 등)",
     )
     max_options: int = Field(
         default=4,
@@ -305,28 +287,9 @@ class QuizGenerateResponse(BaseModel):
     퀴즈 생성 응답 DTO.
 
     LLM이 생성한 퀴즈 문항들을 구조화하여 반환합니다.
+    출처 정보는 각 문항의 sourceDocId, sourceDocVersion에서 확인합니다.
     """
 
-    education_id: str = Field(
-        ...,
-        alias="educationId",
-        description="교육/코스 식별자",
-    )
-    doc_id: str = Field(
-        ...,
-        alias="docId",
-        description="문서 ID",
-    )
-    doc_version: str = Field(
-        ...,
-        alias="docVersion",
-        description="문서 버전",
-    )
-    attempt_no: int = Field(
-        ...,
-        alias="attemptNo",
-        description="응시 차수",
-    )
     generated_count: int = Field(
         ...,
         alias="generatedCount",

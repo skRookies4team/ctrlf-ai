@@ -92,8 +92,6 @@ class TestFaqModels:
         )
         assert request.sample_questions == []
         assert request.top_docs == []
-        assert request.answer_source_hint is None
-        assert request.meta is None
 
     def test_faq_draft_creation(self):
         """FaqDraft 생성 테스트"""

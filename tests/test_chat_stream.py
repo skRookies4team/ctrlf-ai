@@ -39,25 +39,55 @@ class TestStreamModels:
 
     def test_chat_stream_request_valid(self):
         """유효한 요청 생성."""
+        from app.models.chat import ChatMessage
+
         request = ChatStreamRequest(
             request_id="req-001",
-            user_message="안녕하세요",
-            role="employee",
             session_id="sess-001",
+            user_id="user-001",
+            user_role="EMPLOYEE",
+            messages=[ChatMessage(role="user", content="안녕하세요")],
         )
         assert request.request_id == "req-001"
-        assert request.user_message == "안녕하세요"
-        assert request.role == "employee"
+        assert request.session_id == "sess-001"
+        assert request.user_id == "user-001"
+        assert request.user_role == "EMPLOYEE"
+        assert len(request.messages) == 1
+        assert request.messages[0].content == "안녕하세요"
 
-    def test_chat_stream_request_minimal(self):
-        """최소 필드만 있는 요청."""
+    def test_chat_stream_request_with_optional_fields(self):
+        """선택 필드 포함 요청."""
+        from app.models.chat import ChatMessage
+
         request = ChatStreamRequest(
             request_id="req-002",
-            user_message="테스트",
+            session_id="sess-002",
+            user_id="user-002",
+            user_role="MANAGER",
+            department="보안팀",
+            domain="POLICY",
+            channel="MOBILE",
+            messages=[ChatMessage(role="user", content="테스트")],
         )
         assert request.request_id == "req-002"
-        assert request.role == "employee"  # 기본값
-        assert request.session_id is None
+        assert request.department == "보안팀"
+        assert request.domain == "POLICY"
+        assert request.channel == "MOBILE"
+
+    def test_chat_stream_request_defaults(self):
+        """기본값 테스트."""
+        from app.models.chat import ChatMessage
+
+        request = ChatStreamRequest(
+            request_id="req-003",
+            session_id="sess-003",
+            user_id="user-003",
+            user_role="EMPLOYEE",
+            messages=[ChatMessage(role="user", content="질문")],
+        )
+        assert request.department is None
+        assert request.domain is None
+        assert request.channel == "WEB"  # 기본값
 
     def test_stream_meta_event_to_ndjson(self):
         """meta 이벤트 NDJSON 변환."""
@@ -205,6 +235,18 @@ class TestInFlightTracker:
 class TestChatStreamService:
     """스트리밍 서비스 테스트."""
 
+    def _create_request(self, request_id: str) -> ChatStreamRequest:
+        """테스트용 요청 생성 헬퍼."""
+        from app.models.chat import ChatMessage
+
+        return ChatStreamRequest(
+            request_id=request_id,
+            session_id="sess-001",
+            user_id="user-001",
+            user_role="EMPLOYEE",
+            messages=[ChatMessage(role="user", content="테스트")],
+        )
+
     @pytest.mark.asyncio
     async def test_stream_chat_duplicate_inflight(self):
         """중복 요청 시 DUPLICATE_INFLIGHT 에러."""
@@ -212,10 +254,7 @@ class TestChatStreamService:
         tracker.start_request("req-001")
 
         service = ChatStreamService(tracker=tracker)
-        request = ChatStreamRequest(
-            request_id="req-001",
-            user_message="테스트",
-        )
+        request = self._create_request("req-001")
 
         chunks = []
         async for chunk in service.stream_chat(request):
@@ -231,10 +270,7 @@ class TestChatStreamService:
         """meta 이벤트가 첫 번째로 전송."""
         tracker = InFlightTracker()
         service = ChatStreamService(tracker=tracker)
-        request = ChatStreamRequest(
-            request_id="req-002",
-            user_message="테스트",
-        )
+        request = self._create_request("req-002")
 
         chunks = []
         with patch.object(service, "_settings") as mock_settings:
@@ -254,10 +290,7 @@ class TestChatStreamService:
         """done 이벤트가 마지막으로 전송."""
         tracker = InFlightTracker()
         service = ChatStreamService(tracker=tracker)
-        request = ChatStreamRequest(
-            request_id="req-003",
-            user_message="테스트",
-        )
+        request = self._create_request("req-003")
 
         chunks = []
         with patch.object(service, "_settings") as mock_settings:
@@ -277,10 +310,7 @@ class TestChatStreamService:
         """token 이벤트 전송."""
         tracker = InFlightTracker()
         service = ChatStreamService(tracker=tracker)
-        request = ChatStreamRequest(
-            request_id="req-004",
-            user_message="테스트",
-        )
+        request = self._create_request("req-004")
 
         chunks = []
         with patch.object(service, "_settings") as mock_settings:
@@ -302,10 +332,7 @@ class TestChatStreamService:
         """모든 청크가 NDJSON 형식."""
         tracker = InFlightTracker()
         service = ChatStreamService(tracker=tracker)
-        request = ChatStreamRequest(
-            request_id="req-005",
-            user_message="테스트",
-        )
+        request = self._create_request("req-005")
 
         chunks = []
         with patch.object(service, "_settings") as mock_settings:
@@ -336,48 +363,65 @@ class TestChatStreamEndpoint:
         from app.main import app
         return TestClient(app)
 
+    def _valid_request_body(self, request_id: str = "test-001") -> dict:
+        """유효한 요청 바디 생성."""
+        return {
+            "request_id": request_id,
+            "session_id": "sess-001",
+            "user_id": "user-001",
+            "user_role": "EMPLOYEE",
+            "messages": [{"role": "user", "content": "안녕하세요"}],
+        }
+
     def test_stream_endpoint_exists(self, client):
         """엔드포인트 존재 확인."""
         response = client.post(
             "/ai/chat/stream",
-            json={
-                "request_id": "test-001",
-                "user_message": "안녕하세요",
-            },
+            json=self._valid_request_body("test-001"),
         )
         # 422가 아닌 다른 응답 (200 또는 스트리밍)
         assert response.status_code != 404
 
-    def test_stream_endpoint_validation_error(self, client):
-        """유효성 검증 실패."""
-        response = client.post(
-            "/ai/chat/stream",
-            json={
-                # request_id 누락
-                "user_message": "테스트",
-            },
-        )
+    def test_stream_endpoint_validation_error_missing_request_id(self, client):
+        """request_id 누락 시 유효성 검증 실패."""
+        body = self._valid_request_body()
+        del body["request_id"]
+        response = client.post("/ai/chat/stream", json=body)
         assert response.status_code == 422
 
-    def test_stream_endpoint_empty_message(self, client):
-        """빈 메시지 거부."""
-        response = client.post(
-            "/ai/chat/stream",
-            json={
-                "request_id": "test-002",
-                "user_message": "",
-            },
-        )
+    def test_stream_endpoint_validation_error_missing_session_id(self, client):
+        """session_id 누락 시 유효성 검증 실패."""
+        body = self._valid_request_body()
+        del body["session_id"]
+        response = client.post("/ai/chat/stream", json=body)
+        assert response.status_code == 422
+
+    def test_stream_endpoint_validation_error_missing_user_id(self, client):
+        """user_id 누락 시 유효성 검증 실패."""
+        body = self._valid_request_body()
+        del body["user_id"]
+        response = client.post("/ai/chat/stream", json=body)
+        assert response.status_code == 422
+
+    def test_stream_endpoint_validation_error_missing_user_role(self, client):
+        """user_role 누락 시 유효성 검증 실패."""
+        body = self._valid_request_body()
+        del body["user_role"]
+        response = client.post("/ai/chat/stream", json=body)
+        assert response.status_code == 422
+
+    def test_stream_endpoint_validation_error_empty_messages(self, client):
+        """빈 messages 배열 거부."""
+        body = self._valid_request_body()
+        body["messages"] = []
+        response = client.post("/ai/chat/stream", json=body)
         assert response.status_code == 422
 
     def test_stream_endpoint_content_type(self, client):
         """응답 Content-Type 확인."""
         response = client.post(
             "/ai/chat/stream",
-            json={
-                "request_id": "test-003",
-                "user_message": "테스트",
-            },
+            json=self._valid_request_body("test-003"),
         )
         assert "application/x-ndjson" in response.headers.get("content-type", "")
 
@@ -385,10 +429,7 @@ class TestChatStreamEndpoint:
         """응답 형식 확인 (NDJSON)."""
         response = client.post(
             "/ai/chat/stream",
-            json={
-                "request_id": "test-004",
-                "user_message": "테스트",
-            },
+            json=self._valid_request_body("test-004"),
         )
 
         # 응답을 줄 단위로 파싱
