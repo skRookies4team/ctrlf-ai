@@ -170,26 +170,35 @@ POST /ai/chat/stream
 - Response: `application/x-ndjson`
 - Transfer-Encoding: `chunked`
 
-**Request Body**
+**Request Body (ChatRequest와 동일 + request_id)**
+
+> ⚠️ **Phase 23 변경**: ChatRequest와 동일한 필드 구조로 통일되었습니다.
+
 ```json
 {
   "request_id": "req-uuid-001",
-  "user_message": "연차휴가 규정이 어떻게 되나요?",
-  "role": "employee",
   "session_id": "sess-uuid-001",
-  "metadata": {
-    "department": "개발팀"
-  }
+  "user_id": "EMP-12345",
+  "user_role": "EMPLOYEE",
+  "department": "개발팀",
+  "domain": "POLICY",
+  "channel": "WEB",
+  "messages": [
+    {"role": "user", "content": "연차휴가 규정이 어떻게 되나요?"}
+  ]
 }
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| `request_id` | string | **O** | 중복 방지 / 재시도용 고유 키 (Idempotency Key) |
-| `user_message` | string | **O** | 사용자 메시지 |
-| `role` | string | X | 사용자 역할: `employee`, `creator`, `reviewer`, `admin` (기본: `employee`) |
-| `session_id` | string | X | 채팅 세션 ID |
-| `metadata` | object | X | 추가 메타데이터 |
+| `request_id` | string | **O** | 중복 방지 / 재시도용 고유 키 (Idempotency Key, 스트리밍 전용) |
+| `session_id` | string | **O** | 채팅 세션 ID (백엔드 관리) |
+| `user_id` | string | **O** | 사용자 ID (사번 등) |
+| `user_role` | string | **O** | 사용자 역할: `EMPLOYEE`, `MANAGER`, `ADMIN` 등 |
+| `department` | string | X | 사용자 부서 |
+| `domain` | string | X | 질의 도메인 (`POLICY`, `INCIDENT`, `EDUCATION` 등). 미지정 시 AI가 판단 |
+| `channel` | string | X | 요청 채널 (`WEB`, `MOBILE` 등), 기본값: `WEB` |
+| `messages` | array | **O** | 대화 히스토리 (마지막 요소가 최신 메시지). 각 항목: `{"role": "user"|"assistant"|"system", "content": "..."}` |
 
 ### 3.2 응답 형식 (NDJSON)
 
@@ -332,9 +341,10 @@ curl -X POST http://localhost:8000/ai/chat/stream \
   -H "Content-Type: application/json" \
   -d '{
     "request_id": "test-001",
-    "user_message": "안녕하세요",
-    "role": "employee",
-    "session_id": "sess-001"
+    "session_id": "sess-001",
+    "user_id": "EMP-12345",
+    "user_role": "EMPLOYEE",
+    "messages": [{"role": "user", "content": "안녕하세요"}]
   }' \
   --no-buffer
 ```
@@ -474,22 +484,14 @@ POST /ai/quiz/generate
 **Request Body**
 ```json
 {
-  "educationId": "EDU-SEC-2025-001",
-  "docId": "DOC-SEC-001",
-  "docVersion": "v1",
-  "attemptNo": 1,
   "language": "ko",
   "numQuestions": 10,
-  "difficultyDistribution": {
-    "easy": 5,
-    "normal": 3,
-    "hard": 2
-  },
-  "questionType": "MCQ_SINGLE",
   "maxOptions": 4,
   "quizCandidateBlocks": [
     {
       "blockId": "BLOCK-001",
+      "docId": "DOC-SEC-001",
+      "docVersion": "v1",
       "chapterId": "CH1",
       "learningObjectiveId": "LO-1",
       "text": "USB 메모리를 사외로 반출할 때에는 정보보호팀의 사전 승인을 받아야 한다.",
@@ -503,25 +505,33 @@ POST /ai/quiz/generate
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| `educationId` | string | O | 교육/코스 ID |
-| `docId` | string | O | 사규/교육 문서 ID |
-| `docVersion` | string | X | 문서 버전 (기본: "v1") |
-| `attemptNo` | int | X | 응시 차수 (기본: 1, 최대: 10) |
 | `language` | string | X | 언어 (기본: "ko") |
 | `numQuestions` | int | X | 생성할 문항 수 (기본: 10, 최대: 50) |
-| `difficultyDistribution` | object | X | 난이도별 문항 수 분배 |
-| `questionType` | string | X | 문제 유형: `MCQ_SINGLE` |
 | `maxOptions` | int | X | 보기 개수 (기본: 4, 범위: 2-6) |
 | `quizCandidateBlocks` | array | O | 퀴즈 생성에 사용할 텍스트 블록 목록 |
 | `excludePreviousQuestions` | array | X | 2차 응시 시 제외할 기존 문항 |
 
+**quizCandidateBlocks 필드**
+
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `blockId` | string | O | 블록 ID |
+| `docId` | string | X | 출처 문서 ID |
+| `docVersion` | string | X | 출처 문서 버전 |
+| `chapterId` | string | X | 챕터/장 ID |
+| `learningObjectiveId` | string | X | 학습 목표 ID |
+| `text` | string | O | 퀴즈 생성에 사용할 텍스트 |
+| `tags` | array | X | 관련 태그 목록 |
+| `articlePath` | string | X | 조항 경로 (예: "제3장 > 제2조") |
+
+> **난이도 분배**: AI 서버가 고정 비율로 자동 결정합니다.
+> - 쉬움(EASY): 50%
+> - 보통(NORMAL): 30%
+> - 어려움(HARD): 20%
+
 **Response 200**
 ```json
 {
-  "educationId": "EDU-SEC-2025-001",
-  "docId": "DOC-SEC-001",
-  "docVersion": "v1",
-  "attemptNo": 1,
   "generatedCount": 10,
   "questions": [
     {
@@ -553,9 +563,6 @@ POST /ai/quiz/generate
 **2차 응시 (기존 문항 제외)**
 ```json
 {
-  "educationId": "EDU-SEC-2025-001",
-  "docId": "DOC-SEC-001",
-  "attemptNo": 2,
   "numQuestions": 10,
   "quizCandidateBlocks": [...],
   "excludePreviousQuestions": [
@@ -595,8 +602,7 @@ POST /ai/faq/generate
       "article_label": "제3장 제2조",
       "article_path": "제3장 > 제2조"
     }
-  ],
-  "answer_source_hint": "AI_RAG"
+  ]
 }
 ```
 
@@ -607,7 +613,6 @@ POST /ai/faq/generate
 | `canonical_question` | string | O | 클러스터 대표 질문 |
 | `sample_questions` | array | X | 실제 직원 질문 예시 |
 | `top_docs` | array | X | RAG에서 뽑은 후보 문서 (있으면 RAG 재호출 스킵) |
-| `answer_source_hint` | string | X | 답변 생성 힌트: `AI_RAG`, `LOG_REUSE` |
 
 **Response 200 (성공)**
 ```json
@@ -701,12 +706,7 @@ POST /ai/gap/policy-edu/suggestions
 **Request Body**
 ```json
 {
-  "timeRange": {
-    "from": "2025-01-01T00:00:00Z",
-    "to": "2025-12-31T23:59:59Z"
-  },
   "domain": "POLICY",
-  "groupingKey": "intent",
   "questions": [
     {
       "questionId": "log-123",
@@ -722,9 +722,7 @@ POST /ai/gap/policy-edu/suggestions
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| `timeRange` | object | X | 분석 기간 |
 | `domain` | string | X | 도메인 필터: `POLICY`, `EDU` |
-| `groupingKey` | string | X | 그룹핑 기준: `intent`, `keyword`, `role` |
 | `questions` | array | O | RAG Gap 질문 목록 |
 
 **Response 200**
@@ -765,7 +763,6 @@ POST /api/video/play/start
 {
   "user_id": "EMP-12345",
   "training_id": "TRAIN-2025-001",
-  "video_id": "VID-001",
   "total_duration": 600,
   "is_mandatory_edu": true
 }
@@ -775,7 +772,6 @@ POST /api/video/play/start
 |------|------|------|------|
 | `user_id` | string | O | 사용자 ID |
 | `training_id` | string | O | 교육/영상 ID |
-| `video_id` | string | X | 영상 ID (training_id와 같을 수 있음) |
 | `total_duration` | int | O | 영상 총 길이 (초, 0보다 커야 함) |
 | `is_mandatory_edu` | bool | X | 4대교육 여부 (기본: false) |
 

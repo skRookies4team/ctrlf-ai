@@ -212,7 +212,7 @@ class VideoProgressService:
         record = VideoProgressRecord(
             user_id=request.user_id,
             training_id=request.training_id,
-            video_id=request.video_id or request.training_id,
+            video_id=request.training_id,
             total_duration=request.total_duration,
             watched_seconds=0,
             progress_percent=0.0,

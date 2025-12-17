@@ -8,13 +8,17 @@ NDJSON 규칙:
 - 한 줄 = 한 JSON
 - JSON 사이에 반드시 \n (개행)
 - 타입: meta, token, done, error
+
+Phase 23: ChatRequest와 필드 일치 (session_id, user_id, user_role, messages 등)
 """
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+from app.models.chat import ChatMessage
 
 
 # =============================================================================
@@ -26,35 +30,55 @@ class ChatStreamRequest(BaseModel):
     """
     스트리밍 채팅 요청 모델.
 
+    ChatRequest와 동일한 필드 구조 + 스트리밍 전용 request_id.
+
     Attributes:
-        request_id: 중복 방지 / 재시도용 고유 키 (필수)
-        user_message: 사용자 메시지 (필수)
-        role: 사용자 역할 (선택)
-        session_id: 세션 ID (선택)
-        metadata: 추가 메타데이터 (선택)
+        request_id: 중복 방지 / 재시도용 고유 키 (필수, 스트리밍 전용)
+        session_id: 채팅 세션 ID (필수)
+        user_id: 사용자 ID (필수)
+        user_role: 사용자 역할 - EMPLOYEE, MANAGER, ADMIN 등 (필수)
+        department: 사용자 부서 (선택)
+        domain: 질의 도메인 - POLICY, INCIDENT, EDUCATION 등 (선택)
+        channel: 요청 채널 - WEB, MOBILE 등 (기본: WEB)
+        messages: 대화 히스토리 (마지막 요소가 최신 메시지)
     """
 
     request_id: str = Field(
         ...,
         min_length=1,
-        description="중복 방지 / 재시도용 고유 키 (Idempotency Key)",
+        description="중복 방지 / 재시도용 고유 키 (Idempotency Key, 스트리밍 전용)",
     )
-    user_message: str = Field(
+    session_id: str = Field(
         ...,
         min_length=1,
-        description="사용자 메시지",
+        description="채팅 세션 ID (백엔드 관리)",
     )
-    role: Optional[str] = Field(
-        default="employee",
-        description="사용자 역할: employee, creator, reviewer, admin 등",
+    user_id: str = Field(
+        ...,
+        min_length=1,
+        description="사용자 ID (사번 등)",
     )
-    session_id: Optional[str] = Field(
+    user_role: str = Field(
+        ...,
+        min_length=1,
+        description="사용자 역할 (EMPLOYEE, MANAGER, ADMIN 등)",
+    )
+    department: Optional[str] = Field(
         default=None,
-        description="채팅 세션 ID",
+        description="사용자 부서 (선택)",
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    domain: Optional[str] = Field(
         default=None,
-        description="추가 메타데이터",
+        description="질의 도메인 (POLICY, INCIDENT, EDUCATION 등). 미지정 시 AI가 판단.",
+    )
+    channel: str = Field(
+        default="WEB",
+        description="요청 채널 (WEB, MOBILE 등)",
+    )
+    messages: List[ChatMessage] = Field(
+        ...,
+        min_length=1,
+        description="대화 히스토리 (마지막 요소가 최신 메시지)",
     )
 
 

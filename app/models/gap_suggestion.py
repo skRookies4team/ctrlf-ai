@@ -5,27 +5,9 @@ RAG Gap 질문들을 분석하여 사규/교육 보완 제안을 생성하는 AP
 백엔드/관리자 대시보드에서 호출하여 사용.
 """
 
-from datetime import datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
-
-
-class TimeRange(BaseModel):
-    """조회 기간 범위."""
-
-    from_time: datetime = Field(
-        ...,
-        alias="from",
-        description="시작 시간 (ISO 8601 형식)",
-    )
-    to_time: datetime = Field(
-        ...,
-        alias="to",
-        description="종료 시간 (ISO 8601 형식)",
-    )
-
-    model_config = {"populate_by_name": True}
 
 
 class GapQuestion(BaseModel):
@@ -70,19 +52,9 @@ class GapSuggestionRequest(BaseModel):
     AI가 사규/교육 보완 제안을 생성합니다.
     """
 
-    time_range: Optional[TimeRange] = Field(
-        default=None,
-        alias="timeRange",
-        description="분석 대상 기간 (선택)",
-    )
     domain: Optional[str] = Field(
         default=None,
         description="대상 도메인 필터 (POLICY, EDU 등)",
-    )
-    grouping_key: Optional[str] = Field(
-        default=None,
-        alias="groupingKey",
-        description="그룹핑 기준 (intent, keyword, role 등)",
     )
     questions: List[GapQuestion] = Field(
         ...,

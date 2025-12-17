@@ -49,14 +49,12 @@ class VideoPlayStartRequest(BaseModel):
     Attributes:
         user_id: 사용자 ID
         training_id: 교육/영상 ID
-        video_id: 영상 ID (training_id와 같을 수 있음)
         total_duration: 영상 총 길이 (초)
         is_mandatory_edu: 4대교육 여부 (True면 완료 후 퀴즈 필수)
     """
 
     user_id: str = Field(..., description="사용자 ID")
     training_id: str = Field(..., description="교육/영상 ID")
-    video_id: Optional[str] = Field(None, description="영상 ID")
     total_duration: int = Field(..., gt=0, description="영상 총 길이 (초)")
     is_mandatory_edu: bool = Field(False, description="4대교육 여부")
 

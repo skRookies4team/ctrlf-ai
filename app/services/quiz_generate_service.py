@@ -20,7 +20,6 @@ from app.clients.llm_client import LLMClient
 from app.core.logging import get_logger
 from app.models.quiz_generate import (
     Difficulty,
-    DifficultyDistribution,
     ExcludePreviousQuestion,
     GeneratedQuizOption,
     GeneratedQuizQuestion,
@@ -34,6 +33,17 @@ from app.models.quiz_generate import (
     generate_option_id,
     generate_question_id,
 )
+
+# =============================================================================
+# 난이도 분배 상수 (고정 비율)
+# =============================================================================
+
+# 난이도 분배: 쉬움 50%, 보통 30%, 어려움 20%
+DIFFICULTY_RATIO = {
+    "easy": 0.5,
+    "normal": 0.3,
+    "hard": 0.2,
+}
 from app.models.quiz_qc import QuizSetQcResult
 
 logger = get_logger(__name__)
@@ -154,15 +164,12 @@ class QuizGenerateService:
             QuizGenerateResponse: 생성된 퀴즈 문항들
         """
         logger.info(
-            f"Generating quiz: education_id={request.education_id}, "
-            f"num_questions={request.num_questions}, attempt_no={request.attempt_no}"
+            f"Generating quiz: num_questions={request.num_questions}, "
+            f"blocks_count={len(request.quiz_candidate_blocks)}"
         )
 
-        # 1. 난이도 분배 계산
-        difficulty_counts = self._calculate_difficulty_distribution(
-            request.num_questions,
-            request.difficulty_distribution,
-        )
+        # 1. 난이도 분배 계산 (고정 비율: 쉬움 50%, 보통 30%, 어려움 20%)
+        difficulty_counts = self._calculate_difficulty_distribution(request.num_questions)
         logger.debug(f"Difficulty distribution: {difficulty_counts}")
 
         # 2. LLM 메시지 구성
@@ -216,10 +223,6 @@ class QuizGenerateService:
             # 백엔드/프론트에서 "이번에는 문제가 생성되지 않았다" 처리
 
             return QuizGenerateResponse(
-                education_id=request.education_id,
-                doc_id=request.doc_id,
-                doc_version=request.doc_version,
-                attempt_no=request.attempt_no,
                 generated_count=len(final_questions),
                 questions=final_questions,
             )
@@ -228,10 +231,6 @@ class QuizGenerateService:
             logger.exception(f"Failed to generate quiz: {e}")
             # 실패 시 빈 응답 반환
             return QuizGenerateResponse(
-                education_id=request.education_id,
-                doc_id=request.doc_id,
-                doc_version=request.doc_version,
-                attempt_no=request.attempt_no,
                 generated_count=0,
                 questions=[],
             )
@@ -239,57 +238,27 @@ class QuizGenerateService:
     def _calculate_difficulty_distribution(
         self,
         num_questions: int,
-        distribution: Optional[DifficultyDistribution],
     ) -> Dict[str, int]:
         """
         난이도별 문항 수를 계산합니다.
 
+        고정 비율: 쉬움 50%, 보통 30%, 어려움 20%
+
         Args:
             num_questions: 총 문항 수
-            distribution: 난이도 분배 설정
 
         Returns:
             난이도별 문항 수 딕셔너리
         """
-        if distribution and distribution.total > 0:
-            # 지정된 분배가 있는 경우
-            total = distribution.total
-            if total == num_questions:
-                # 합이 맞으면 그대로 사용
-                return {
-                    "easy": distribution.easy,
-                    "normal": distribution.normal,
-                    "hard": distribution.hard,
-                }
-            else:
-                # 합이 다르면 비율 기반으로 재계산
-                easy_ratio = distribution.easy / total
-                normal_ratio = distribution.normal / total
-                hard_ratio = distribution.hard / total
+        easy = round(num_questions * DIFFICULTY_RATIO["easy"])
+        normal = round(num_questions * DIFFICULTY_RATIO["normal"])
+        hard = num_questions - easy - normal  # 나머지는 hard에 할당 (반올림 오차 보정)
 
-                easy = round(num_questions * easy_ratio)
-                normal = round(num_questions * normal_ratio)
-                hard = num_questions - easy - normal  # 나머지는 hard에 할당
-
-                return {
-                    "easy": max(0, easy),
-                    "normal": max(0, normal),
-                    "hard": max(0, hard),
-                }
-        else:
-            # 기본: 균등 분배
-            base = num_questions // 3
-            remainder = num_questions % 3
-
-            easy = base + (1 if remainder > 0 else 0)
-            normal = base + (1 if remainder > 1 else 0)
-            hard = base
-
-            return {
-                "easy": easy,
-                "normal": normal,
-                "hard": hard,
-            }
+        return {
+            "easy": max(0, easy),
+            "normal": max(0, normal),
+            "hard": max(0, hard),
+        }
 
     def _build_llm_messages(
         self,
@@ -585,19 +554,19 @@ class QuizGenerateService:
             # 소스 블록 정보 조회
             source_block = block_map.get(llm_q.source_block_id) if llm_q.source_block_id else None
 
-            # 문항 조립
+            # 문항 조립 (출처 정보는 블록에서 가져옴)
             question = GeneratedQuizQuestion(
                 question_id=question_id,
                 status=QuestionStatus.DRAFT_AI_GENERATED,
-                question_type=request.question_type,
+                question_type=QuestionType.MCQ_SINGLE,
                 stem=llm_q.stem,
                 options=options,
                 difficulty=difficulty,
                 learning_objective_id=source_block.learning_objective_id if source_block else None,
                 chapter_id=source_block.chapter_id if source_block else None,
                 source_block_ids=[llm_q.source_block_id] if llm_q.source_block_id else [],
-                source_doc_id=request.doc_id,
-                source_doc_version=request.doc_version,
+                source_doc_id=source_block.doc_id if source_block else None,
+                source_doc_version=source_block.doc_version if source_block else None,
                 source_article_path=source_block.article_path if source_block else None,
                 tags=llm_q.tags or (source_block.tags if source_block else []),
                 explanation=llm_q.explanation,

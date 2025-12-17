@@ -22,7 +22,6 @@ from app.models.gap_suggestion import (
     GapSuggestionRequest,
     GapSuggestionResponse,
     LLMSuggestionResponse,
-    TimeRange,
 )
 from app.services.gap_suggestion_service import GapSuggestionService
 
@@ -481,22 +480,6 @@ class TestGapSuggestionsAPI:
             assert data["summary"] == "테스트 요약"
             assert len(data["suggestions"]) == 1
             assert data["suggestions"][0]["title"] == "테스트 제안"
-
-    def test_request_with_time_range(self, test_client: TestClient) -> None:
-        """timeRange 포함 요청 테스트."""
-        response = test_client.post(
-            "/ai/gap/policy-edu/suggestions",
-            json={
-                "timeRange": {
-                    "from": "2025-12-01T00:00:00",
-                    "to": "2025-12-10T23:59:59",
-                },
-                "domain": "POLICY",
-                "questions": [],
-            },
-        )
-
-        assert response.status_code == 200
 
     def test_request_validation_error(self, test_client: TestClient) -> None:
         """유효성 검사 오류 테스트."""
