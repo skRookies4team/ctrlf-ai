@@ -15,6 +15,8 @@ Phase 22 수정:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.models.intent import IntentType, RouteType
+
 
 # Phase 22 수정: Settings 모킹을 위한 헬퍼
 def get_mock_settings_with_router_enabled():
@@ -23,6 +25,21 @@ def get_mock_settings_with_router_enabled():
     mock_settings.ROUTER_ORCHESTRATOR_ENABLED = True
     mock_settings.llm_base_url = "http://mock-llm:8001"
     return mock_settings
+
+
+# Phase 22: IntentResult mock 생성 헬퍼
+def create_mock_intent_result(intent=IntentType.POLICY_QA, domain="POLICY", route=RouteType.RAG_INTERNAL, user_role="EMPLOYEE"):
+    """실제 IntentType/RouteType을 반환하는 IntentResult mock."""
+    mock_result = MagicMock()
+    mock_result.intent = intent
+    mock_result.domain = domain
+    mock_result.route = route
+    # user_role은 .value 속성을 가져야 함
+    mock_user_role = MagicMock()
+    mock_user_role.value = user_role
+    mock_result.user_role = mock_user_role
+    return mock_result
+
 
 from app.models.chat import ChatMessage, ChatRequest
 from app.models.router_types import (
@@ -110,20 +127,17 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
+    # Phase 22: app.core.config.get_settings를 패치 (import 위치)
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.services.chat_service.get_settings', return_value=mock_settings):
+         patch('app.core.config.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._llm = mock_llm
         service._pii = mock_pii
         service._ragflow = mock_ragflow
+        # 실제 IntentType/RouteType 사용
         service._intent = MagicMock()
-        service._intent.classify.return_value = MagicMock(
-            intent=MagicMock(value="POLICY_QA"),
-            domain="POLICY",
-            route=MagicMock(value="RAG_INTERNAL"),
-            user_role=MagicMock(value="EMPLOYEE"),
-        )
+        service._intent.classify.return_value = create_mock_intent_result()
         service._guardrail = MagicMock()
         service._guardrail.get_system_prompt_prefix.return_value = ""
         service._guardrail.apply_to_answer.return_value = "테스트 응답입니다."
@@ -135,6 +149,9 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
         service._backend_data.get_last_latency_ms.return_value = None
         service._context_formatter = MagicMock()
         service._video_progress = MagicMock()
+        # Milvus 관련 속성 추가
+        service._milvus_enabled = False
+        service._milvus = None
 
         # Act
         response = await service.handle_chat(mock_chat_request)
@@ -181,14 +198,20 @@ async def test_chat_returns_clarify_response(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
+    # Phase 22: app.core.config.get_settings를 패치
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.services.chat_service.get_settings', return_value=mock_settings):
+         patch('app.core.config.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
         service._llm = MagicMock()
         service._ragflow = MagicMock()
+        # 실제 IntentType/RouteType 사용
         service._intent = MagicMock()
+        service._intent.classify.return_value = create_mock_intent_result(
+            intent=IntentType.EDUCATION_QA,
+            domain="EDU",
+        )
         service._guardrail = MagicMock()
         service._ai_log = MagicMock()
         service._backend_data = MagicMock()
@@ -249,14 +272,20 @@ async def test_chat_returns_confirmation_response(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
+    # Phase 22: app.core.config.get_settings를 패치
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.services.chat_service.get_settings', return_value=mock_settings):
+         patch('app.core.config.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
         service._llm = MagicMock()
         service._ragflow = MagicMock()
+        # 실제 IntentType/RouteType 사용
         service._intent = MagicMock()
+        service._intent.classify.return_value = create_mock_intent_result(
+            intent=IntentType.GENERAL_CHAT,
+            domain="QUIZ",
+        )
         service._guardrail = MagicMock()
         service._ai_log = MagicMock()
         service._backend_data = MagicMock()
@@ -309,14 +338,20 @@ async def test_chat_returns_system_help(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
+    # Phase 22: app.core.config.get_settings를 패치
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.services.chat_service.get_settings', return_value=mock_settings):
+         patch('app.core.config.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
         service._llm = MagicMock()
         service._ragflow = MagicMock()
+        # 실제 IntentType/RouteType 사용
         service._intent = MagicMock()
+        service._intent.classify.return_value = create_mock_intent_result(
+            intent=IntentType.GENERAL_CHAT,
+            domain="GENERAL",
+        )
         service._guardrail = MagicMock()
         service._ai_log = MagicMock()
         service._backend_data = MagicMock()
@@ -371,14 +406,20 @@ async def test_chat_returns_unknown_response(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
+    # Phase 22: app.core.config.get_settings를 패치
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.services.chat_service.get_settings', return_value=mock_settings):
+         patch('app.core.config.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
         service._llm = MagicMock()
         service._ragflow = MagicMock()
+        # 실제 IntentType/RouteType 사용
         service._intent = MagicMock()
+        service._intent.classify.return_value = create_mock_intent_result(
+            intent=IntentType.UNKNOWN,
+            domain="GENERAL",
+        )
         service._guardrail = MagicMock()
         service._ai_log = MagicMock()
         service._backend_data = MagicMock()
