@@ -140,6 +140,55 @@ class Settings(BaseSettings):
     # 되묻기/확인 대기 만료 시간 (초)
     ROUTER_PENDING_TIMEOUT_SECONDS: int = 300  # 5분
 
+    # Phase 22: RouterOrchestrator 활성화 여부 (명시적 플래그)
+    # True: RouterOrchestrator를 통한 라우팅 + 되묻기/확인 처리
+    # False: 기존 IntentService 기반 분류만 사용
+    ROUTER_ORCHESTRATOR_ENABLED: bool = False
+
+    # =========================================================================
+    # Phase 24: Milvus Vector Database 설정
+    # =========================================================================
+    # Milvus 서버 연결 정보 (환경변수로 설정 필요)
+    MILVUS_HOST: str = "localhost"
+    MILVUS_PORT: int = 19530
+
+    # Milvus 컬렉션 설정
+    MILVUS_COLLECTION_NAME: str = "ragflow_chunks"
+
+    # 벡터 검색 설정
+    MILVUS_TOP_K: int = 5  # 기본 검색 결과 수
+    MILVUS_SEARCH_PARAMS: str = '{"metric_type": "COSINE", "params": {"nprobe": 10}}'
+
+    # Milvus 사용 여부 (True면 RAGFlow 대신 Milvus 사용)
+    # 기본값: False (RAGFlow 사용). 환경변수로 MILVUS_ENABLED=true 설정 시 Milvus 활성화
+    MILVUS_ENABLED: bool = False
+
+    # Embedding 모델 설정 (vLLM 서버에서 사용)
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
+    EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원
+
+    # Milvus 인증 (선택, 보안 설정된 Milvus 서버 사용 시)
+    MILVUS_USER: Optional[str] = None
+    MILVUS_PASSWORD: Optional[str] = None
+
+    # =========================================================================
+    # Phase 25: 문서 인덱싱 설정 (Internal RAG)
+    # =========================================================================
+    # 청킹 파라미터
+    CHUNK_SIZE: int = 512  # 청크 크기 (토큰 또는 문자)
+    CHUNK_OVERLAP: int = 50  # 청크 간 오버랩
+
+    # 인덱싱 재시도 설정
+    INDEX_RETRY_MAX_ATTEMPTS: int = 3  # 최대 재시도 횟수
+    INDEX_RETRY_BACKOFF_SECONDS: str = "1,2,4"  # 재시도 간격 (초, 쉼표 구분)
+
+    # 파일 다운로드 설정
+    FILE_DOWNLOAD_TIMEOUT_SEC: float = 60.0  # 파일 다운로드 타임아웃 (초)
+    FILE_MAX_SIZE_MB: int = 50  # 최대 파일 크기 (MB)
+
+    # 지원 파일 형식
+    SUPPORTED_FILE_EXTENSIONS: str = ".pdf,.txt,.docx,.doc,.hwp"
+
     # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
     # =========================================================================

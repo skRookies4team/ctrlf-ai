@@ -30,12 +30,22 @@ from pydantic import BaseModel, Field
 
 
 class VideoProgressState(str, Enum):
-    """영상 시청 상태."""
+    """영상 시청 상태.
+
+    설계 명칭: NOT_STARTED → IN_PROGRESS → COMPLETED
+    """
 
     NOT_STARTED = "NOT_STARTED"  # 시작 전
-    PLAYING = "PLAYING"  # 재생 중
-    PAUSED = "PAUSED"  # 일시 정지
+    IN_PROGRESS = "IN_PROGRESS"  # 재생 중 (설계 명칭 통일)
     COMPLETED = "COMPLETED"  # 완료됨
+
+    # 하위 호환성을 위한 alias (응답 매핑용)
+    @classmethod
+    def _missing_(cls, value: str) -> "VideoProgressState":
+        """PLAYING → IN_PROGRESS 하위 호환."""
+        if value == "PLAYING":
+            return cls.IN_PROGRESS
+        return None
 
 
 # =============================================================================
@@ -75,7 +85,7 @@ class VideoPlayStartResponse(BaseModel):
     user_id: str = Field(..., description="사용자 ID")
     training_id: str = Field(..., description="교육/영상 ID")
     state: VideoProgressState = Field(
-        default=VideoProgressState.PLAYING,
+        default=VideoProgressState.IN_PROGRESS,
         description="현재 상태",
     )
     seek_allowed: bool = Field(False, description="시크 허용 여부")
@@ -126,12 +136,13 @@ class VideoProgressUpdateResponse(BaseModel):
     last_position: int = Field(..., ge=0, description="마지막 재생 위치 (초)")
     seek_allowed: bool = Field(False, description="시크 허용 여부")
     state: VideoProgressState = Field(
-        default=VideoProgressState.PLAYING,
+        default=VideoProgressState.IN_PROGRESS,
         description="현재 상태",
     )
     updated_at: str = Field(..., description="업데이트 시간")
     accepted: bool = Field(True, description="업데이트 수락 여부")
     rejection_reason: Optional[str] = Field(None, description="거부 사유")
+    message: Optional[str] = Field(None, description="응답 메시지")
 
 
 # =============================================================================

@@ -7,10 +7,22 @@ Phase 22: ChatService와 RouterOrchestrator 통합 테스트
 3. requires_confirmation=true → confirmation_prompt 반환
 4. SYSTEM_HELP 라우트 → 시스템 도움말 응답
 5. UNKNOWN 라우트 → 되묻기 응답
+
+Phase 22 수정:
+- ROUTER_ORCHESTRATOR_ENABLED 플래그를 모킹하여 orchestrator 활성화
 """
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+
+# Phase 22 수정: Settings 모킹을 위한 헬퍼
+def get_mock_settings_with_router_enabled():
+    """ROUTER_ORCHESTRATOR_ENABLED=True인 Settings mock."""
+    mock_settings = MagicMock()
+    mock_settings.ROUTER_ORCHESTRATOR_ENABLED = True
+    mock_settings.llm_base_url = "http://mock-llm:8001"
+    return mock_settings
 
 from app.models.chat import ChatMessage, ChatRequest
 from app.models.router_types import (
@@ -95,7 +107,11 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
     mock_ragflow = MagicMock()
     mock_ragflow.search_as_sources = AsyncMock(return_value=[])
 
-    with patch.object(ChatService, '__init__', lambda x, **kwargs: None):
+    # Phase 22 수정: Settings mock 추가
+    mock_settings = get_mock_settings_with_router_enabled()
+
+    with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._llm = mock_llm
@@ -162,7 +178,11 @@ async def test_chat_returns_clarify_response(mock_chat_request):
         tags=[],
     ))
 
-    with patch.object(ChatService, '__init__', lambda x, **kwargs: None):
+    # Phase 22 수정: Settings mock 추가
+    mock_settings = get_mock_settings_with_router_enabled()
+
+    with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -226,7 +246,11 @@ async def test_chat_returns_confirmation_response(mock_chat_request):
         tags=[],
     ))
 
-    with patch.object(ChatService, '__init__', lambda x, **kwargs: None):
+    # Phase 22 수정: Settings mock 추가
+    mock_settings = get_mock_settings_with_router_enabled()
+
+    with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -282,7 +306,11 @@ async def test_chat_returns_system_help(mock_chat_request):
         tags=[],
     ))
 
-    with patch.object(ChatService, '__init__', lambda x, **kwargs: None):
+    # Phase 22 수정: Settings mock 추가
+    mock_settings = get_mock_settings_with_router_enabled()
+
+    with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -340,7 +368,11 @@ async def test_chat_returns_unknown_response(mock_chat_request):
         tags=[],
     ))
 
-    with patch.object(ChatService, '__init__', lambda x, **kwargs: None):
+    # Phase 22 수정: Settings mock 추가
+    mock_settings = get_mock_settings_with_router_enabled()
+
+    with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -353,24 +385,20 @@ async def test_chat_returns_unknown_response(mock_chat_request):
         service._context_formatter = MagicMock()
         service._video_progress = MagicMock()
 
-        # LLM URL을 설정하여 RouterOrchestrator가 사용되도록
-        with patch("app.core.config.get_settings") as mock_settings:
-            mock_settings.return_value.llm_base_url = "http://test-llm:8080"
+        request = ChatRequest(
+            session_id="test-session-005",
+            user_id="user-001",
+            user_role="EMPLOYEE",
+            messages=[ChatMessage(role="user", content="알 수 없는 질문")],
+        )
 
-            request = ChatRequest(
-                session_id="test-session-005",
-                user_id="user-001",
-                user_role="EMPLOYEE",
-                messages=[ChatMessage(role="user", content="알 수 없는 질문")],
-            )
+        # Act
+        response = await service.handle_chat(request)
 
-            # Act
-            response = await service.handle_chat(request)
-
-            # Assert
-            assert "이해하지 못했습니다" in response.answer
-            assert response.meta.route == "ROUTE_UNKNOWN"
-            assert response.meta.intent == "UNKNOWN"
+        # Assert
+        assert "이해하지 못했습니다" in response.answer
+        assert response.meta.route == "ROUTE_UNKNOWN"
+        assert response.meta.intent == "UNKNOWN"
 
 
 # =============================================================================

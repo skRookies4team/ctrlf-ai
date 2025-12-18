@@ -18,4 +18,10 @@ python-dotenv>=1.0.0
 # Testing
 pytest>=8.3.0
 pytest-anyio>=0.0.0
+pytest-asyncio>=0.24.0
 anyio>=4.6.0
+
+# Document Processing (Phase 25)
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+olefile>=0.47

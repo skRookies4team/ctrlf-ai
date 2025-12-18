@@ -1,204 +1,288 @@
-# ctrlf-ai-gateway
+# CTRL+F AI Gateway
 
 CTRL+F 프로젝트의 AI Gateway 서비스입니다.
-FastAPI 기반으로 RAGFlow 및 LLM 서비스와 연동하여 AI 기능을 제공합니다.
+FastAPI 기반으로 RAG(Retrieval-Augmented Generation), LLM, 벡터 검색 서비스와 연동하여 기업 내부 정보보호 및 사규 안내 AI 기능을 제공합니다.
+
+## 주요 기능
+
+- **AI 채팅**: 사규/정책, 교육, HR 관련 질의응답
+- **스트리밍 응답**: 실시간 토큰 스트리밍 지원
+- **RAG 검색**: Milvus/RAGFlow 기반 문서 검색
+- **FAQ 생성**: 문서 기반 FAQ 자동 생성
+- **퀴즈 생성**: 교육 콘텐츠 기반 퀴즈 자동 생성
+- **PII 마스킹**: 개인정보 자동 탐지 및 마스킹
+- **의도 분류**: 사용자 질문 의도 분류 및 라우팅
 
 ## 연동 서비스
 
-- **ctrlf-back** (Spring): 백엔드 비즈니스 로직
-- **ctrlf-ragflow**: RAG(Retrieval-Augmented Generation) 처리
-- **ctrlf-front** (React): 프론트엔드 UI
+| 서비스 | 설명 |
+|--------|------|
+| **ctrlf-back** (Spring) | 백엔드 비즈니스 로직, HR/교육 데이터 |
+| **ctrlf-front** (React) | 프론트엔드 UI |
+| **Milvus** | 벡터 데이터베이스 (Phase 24) |
+| **vLLM** | LLM 서비스 (Qwen2.5-7B-Instruct) |
+| **Embedding Server** | 임베딩 생성 (BGE-M3) |
 
 ## 디렉터리 구조
 
 ```
 ctrlf-ai/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                  # FastAPI 앱 진입점
-│   ├── api/
-│   │   ├── __init__.py
-│   │   └── v1/
-│   │       ├── __init__.py
-│   │       ├── health.py        # 헬스체크 엔드포인트
-│   │       ├── chat.py          # AI 채팅 엔드포인트
-│   │       └── rag.py           # RAG 문서 처리 엔드포인트
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py            # 설정 관리
-│   │   └── logging.py           # 로깅 설정
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── chat.py              # 채팅 관련 Pydantic 모델
-│   │   └── rag.py               # RAG 관련 Pydantic 모델
-│   └── services/
-│       ├── __init__.py
-│       ├── chat_service.py      # 채팅 비즈니스 로직
-│       └── rag_service.py       # RAG 비즈니스 로직
-├── tests/
-│   ├── __init__.py
-│   ├── test_health.py           # 헬스체크 테스트
-│   ├── test_chat_api.py         # 채팅 API 테스트
-│   └── test_rag_api.py          # RAG API 테스트
-├── .env.example                 # 환경변수 예시
+│   ├── main.py                     # FastAPI 앱 진입점
+│   ├── api/v1/                     # API 엔드포인트
+│   │   ├── chat.py                 # AI 채팅 API
+│   │   ├── chat_stream.py          # 스트리밍 채팅 API
+│   │   ├── faq.py                  # FAQ 생성 API
+│   │   ├── quiz_generate.py        # 퀴즈 생성 API
+│   │   ├── search.py               # RAG 검색 API
+│   │   ├── video.py                # 영상 진도 API
+│   │   ├── gap_suggestions.py      # RAG Gap 제안 API
+│   │   ├── ingest.py               # 문서 인제스트 API
+│   │   └── health.py               # 헬스체크 API
+│   ├── clients/                    # 외부 서비스 클라이언트
+│   │   ├── milvus_client.py        # Milvus 벡터 검색 클라이언트
+│   │   ├── llm_client.py           # LLM 서비스 클라이언트
+│   │   ├── ragflow_client.py       # RAGFlow 클라이언트
+│   │   ├── backend_data_client.py  # 백엔드 데이터 클라이언트
+│   │   └── personalization_client.py # 개인화 클라이언트
+│   ├── services/                   # 비즈니스 로직
+│   │   ├── chat_service.py         # 채팅 서비스
+│   │   ├── chat_stream_service.py  # 스트리밍 채팅 서비스
+│   │   ├── faq_service.py          # FAQ 생성 서비스
+│   │   ├── quiz_generate_service.py # 퀴즈 생성 서비스
+│   │   ├── intent_service.py       # 의도 분류 서비스
+│   │   ├── pii_service.py          # PII 마스킹 서비스
+│   │   ├── router_orchestrator.py  # 라우터 오케스트레이터
+│   │   ├── rule_router.py          # 규칙 기반 라우터
+│   │   ├── llm_router.py           # LLM 기반 라우터
+│   │   └── guardrail_service.py    # 가드레일 서비스
+│   ├── models/                     # Pydantic 모델
+│   │   ├── chat.py                 # 채팅 모델
+│   │   ├── intent.py               # 의도/라우팅 모델
+│   │   ├── router_types.py         # 라우터 타입 정의
+│   │   └── ...
+│   └── core/                       # 핵심 유틸리티
+│       ├── config.py               # 설정 관리
+│       ├── logging.py              # 로깅 설정
+│       ├── metrics.py              # 메트릭 수집
+│       └── exceptions.py           # 예외 정의
+├── tests/                          # 테스트
+├── scripts/                        # 유틸리티 스크립트
+├── docs/                           # 문서
+├── .env.example                    # 환경변수 예시
 ├── Dockerfile
-├── README.md
+├── docker-compose.yml
 └── requirements.txt
 ```
 
-## 로컬 개발 환경 설정
+## 빠른 시작
 
-### 1. Python 가상환경 생성
+### 1. 환경 설정
 
 ```bash
-# Python 3.12.7 사용
+# Python 가상환경 생성 (Python 3.12+)
 python -m venv .venv
 
 # 가상환경 활성화
+# Windows (PowerShell):
+.\.venv\Scripts\Activate.ps1
 # Linux/macOS:
 source .venv/bin/activate
 
-# Windows (PowerShell):
-.\.venv\Scripts\Activate.ps1
-
-# Windows (CMD):
-.\.venv\Scripts\activate.bat
-
-# Windows (Git Bash):
-source .venv/Scripts/activate
-```
-
-### 2. 의존성 설치
-
-```bash
+# 의존성 설치
 pip install -r requirements.txt
 ```
 
-### 3. 환경변수 설정
+### 2. 환경변수 설정
 
 ```bash
-# .env.example을 복사하여 .env 파일 생성
 cp .env.example .env
-
-# 필요에 따라 .env 파일 수정
+# .env 파일 수정
 ```
 
-### 4. 로컬 서버 실행
+필수 환경변수:
+```env
+# LLM 서버 (vLLM)
+LLM_BASE_URL=http://your-llm-server:port/v1
+
+# Milvus 벡터 DB (Phase 24)
+MILVUS_ENABLED=true
+MILVUS_HOST=your-milvus-server
+MILVUS_PORT=19530
+```
+
+### 3. 서버 실행
 
 ```bash
-# 개발 모드 (자동 리로드 활성화)
-uvicorn app.main:app --reload
-
-# 또는 포트 지정
+# 개발 모드
 uvicorn app.main:app --reload --port 8000
+
+# 프로덕션 모드
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 5. 헬스체크 확인
+### 4. 확인
 
 ```bash
-# Liveness check
+# 헬스체크
 curl http://localhost:8000/health
 
-# Readiness check
-curl http://localhost:8000/health/ready
+# API 문서
+# Swagger UI: http://localhost:8000/docs
+# ReDoc: http://localhost:8000/redoc
 ```
 
-예상 응답:
+## API 엔드포인트
+
+### 채팅 API
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/ai/chat` | AI 채팅 응답 생성 |
+| POST | `/ai/chat/stream` | 스트리밍 채팅 응답 |
+
+### FAQ/퀴즈 API
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/ai/faq/draft` | FAQ 초안 생성 |
+| POST | `/ai/faq/draft/batch` | FAQ 배치 생성 |
+| POST | `/ai/quiz/generate` | 퀴즈 생성 |
+
+### 검색 API
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/ai/search` | RAG 문서 검색 |
+
+### 헬스체크 API
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/health` | Liveness 체크 |
+| GET | `/health/ready` | Readiness 체크 |
+
+### Internal RAG API (Phase 25)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/internal/rag/index` | 문서 인덱싱 요청 |
+| POST | `/internal/rag/delete` | 문서 삭제 요청 |
+| GET | `/internal/jobs/{jobId}` | 작업 상태 조회 |
+
+## 채팅 API 상세
+
+### POST /ai/chat
+
 ```json
+// Request
 {
-  "status": "ok",
-  "app": "ctrlf-ai-gateway",
-  "version": "0.1.0",
-  "env": "local"
+  "session_id": "chat-session-123",
+  "user_id": "employee-456",
+  "user_role": "EMPLOYEE",
+  "department": "HR",
+  "domain": "POLICY",
+  "messages": [
+    {"role": "user", "content": "연차 이월 규정이 어떻게 되나요?"}
+  ]
+}
+
+// Response
+{
+  "answer": "연차 이월 규정은...",
+  "sources": [
+    {
+      "doc_id": "HR-001",
+      "title": "인사규정",
+      "snippet": "...",
+      "score": 0.95
+    }
+  ],
+  "meta": {
+    "user_role": "EMPLOYEE",
+    "route": "RAG_INTERNAL",
+    "intent": "POLICY_QA",
+    "domain": "POLICY",
+    "rag_used": true,
+    "latency_ms": 1500
+  }
 }
 ```
 
-### 6. API 문서 확인
+### POST /ai/chat/stream
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-- OpenAPI JSON: http://localhost:8000/openapi.json
+NDJSON 형식의 스트리밍 응답:
 
-## 테스트 실행
-
-```bash
-# 단위 테스트 실행 (기본, 빠름)
-pytest
-
-# 상세 출력
-pytest -v
-
-# 특정 테스트 파일 실행
-pytest tests/test_health.py
-
-# 커버리지 포함 (pytest-cov 설치 필요)
-pytest --cov=app tests/
+```json
+{"type":"meta","route":"RAG_INTERNAL","intent":"POLICY_QA"}
+{"type":"token","content":"연차"}
+{"type":"token","content":" 이월"}
+{"type":"token","content":" 규정은"}
+{"type":"done","sources":[...],"latency_ms":1500}
 ```
 
-### Docker Compose 통합 테스트 (Mock 모드)
+## Internal RAG API 상세 (Phase 25)
 
-```bash
-# Mock 서비스 시작
-docker compose --profile mock up -d
+### POST /internal/rag/index
 
-# Mock 통합 테스트 실행
-pytest -m integration -v
+문서를 다운로드하여 Milvus에 인덱싱합니다.
 
-# 서비스 종료
-docker compose --profile mock down
+```json
+// Request
+{
+  "documentId": "DOC-001",
+  "versionNo": 1,
+  "title": "인사규정 v2.0",
+  "domain": "POLICY",
+  "fileUrl": "https://storage.example.com/docs/hr-policy.pdf",
+  "requestedBy": "admin-001",
+  "jobId": "job-uuid-1234"
+}
+
+// Response (202 Accepted)
+{
+  "jobId": "job-uuid-1234",
+  "status": "queued",
+  "message": "Indexing job job-uuid-1234 has been queued"
+}
 ```
 
-### Real 환경 Smoke 테스트 (Phase 9)
+### POST /internal/rag/delete
 
-```bash
-# 환경변수 설정 (실제 서비스 URL)
-export RAGFLOW_BASE_URL_REAL=http://your-ragflow:8080
-export LLM_BASE_URL_REAL=http://your-llm:8001
-export BACKEND_BASE_URL_REAL=http://your-backend:8080
+Milvus에서 문서를 삭제합니다.
 
-# Real 모드로 AI Gateway 시작
-docker compose --profile real up -d
+```json
+// Request
+{
+  "documentId": "DOC-001",
+  "versionNo": 1  // 선택: 없으면 전체 버전 삭제
+}
 
-# Real 환경 smoke 테스트 실행
-pytest -m real_integration -v
-
-# 서비스 종료
-docker compose --profile real down
+// Response
+{
+  "status": "completed",
+  "deletedCount": 15,
+  "message": "Deleted 15 chunks for document DOC-001"
+}
 ```
 
-**주의**: Real 테스트는 실제 LLM API를 호출하므로 비용이 발생할 수 있습니다.
+### GET /internal/jobs/{jobId}
 
-## Docker 빌드 및 실행
+작업 상태를 조회합니다.
 
-### 이미지 빌드
-
-```bash
-docker build -t ctrlf-ai:0.1.0 .
-```
-
-### 컨테이너 실행
-
-```bash
-# 기본 실행
-docker run -p 8000:8000 ctrlf-ai:0.1.0
-
-# 환경변수 파일 사용
-docker run -p 8000:8000 --env-file .env ctrlf-ai:0.1.0
-
-# 백그라운드 실행
-docker run -d -p 8000:8000 --name ctrlf-ai --env-file .env ctrlf-ai:0.1.0
-
-# 로그 확인
-docker logs -f ctrlf-ai
-
-# 컨테이너 중지 및 삭제
-docker stop ctrlf-ai && docker rm ctrlf-ai
-```
-
-### 헬스체크 확인 (Docker)
-
-```bash
-curl http://localhost:8000/health
+```json
+// Response
+{
+  "jobId": "job-uuid-1234",
+  "status": "running",  // queued | running | completed | failed
+  "documentId": "DOC-001",
+  "versionNo": 1,
+  "progress": "embedding",  // downloading | extracting | chunking | embedding | upserting | cleaning
+  "chunksProcessed": 15,
+  "errorMessage": null,
+  "createdAt": "2025-01-15T10:30:00Z",
+  "updatedAt": "2025-01-15T10:30:05Z"
+}
 ```
 
 ## 환경변수
@@ -208,211 +292,137 @@ curl http://localhost:8000/health
 | 변수명 | 설명 | 기본값 |
 |--------|------|--------|
 | `APP_NAME` | 애플리케이션 이름 | `ctrlf-ai-gateway` |
-| `APP_ENV` | 실행 환경 (local/dev/prod) | `local` |
-| `APP_VERSION` | 버전 | `0.1.0` |
+| `APP_ENV` | 실행 환경 | `local` |
 | `LOG_LEVEL` | 로그 레벨 | `INFO` |
-| `CORS_ORIGINS` | 허용할 Origin (쉼표 구분) | `*` |
 
-### Mock/Real 모드 설정 (Phase 9)
+### LLM 설정
 
 | 변수명 | 설명 | 기본값 |
 |--------|------|--------|
-| `AI_ENV` | 서비스 모드 (`mock` 또는 `real`) | `mock` |
-| `RAGFLOW_BASE_URL` | RAGFlow URL (직접 지정, 최우선) | - |
-| `RAGFLOW_BASE_URL_MOCK` | Mock 모드용 RAGFlow URL | `http://ragflow:8080` |
-| `RAGFLOW_BASE_URL_REAL` | Real 모드용 RAGFlow URL | - |
-| `LLM_BASE_URL` | LLM URL (직접 지정, 최우선) | - |
-| `LLM_BASE_URL_MOCK` | Mock 모드용 LLM URL | `http://llm-internal:8001` |
-| `LLM_BASE_URL_REAL` | Real 모드용 LLM URL | - |
-| `BACKEND_BASE_URL` | Backend URL (직접 지정, 최우선) | - |
-| `BACKEND_BASE_URL_MOCK` | Mock 모드용 Backend URL | `http://backend-mock:8081` |
-| `BACKEND_BASE_URL_REAL` | Real 모드용 Backend URL | - |
-| `BACKEND_API_TOKEN` | Backend API 인증 토큰 | - |
+| `LLM_BASE_URL` | LLM 서버 URL | - |
+| `LLM_MODEL_NAME` | LLM 모델명 | `Qwen/Qwen2.5-7B-Instruct` |
+
+### Milvus 설정 (Phase 24)
+
+| 변수명 | 설명 | 기본값 |
+|--------|------|--------|
+| `MILVUS_ENABLED` | Milvus 사용 여부 | `false` |
+| `MILVUS_HOST` | Milvus 서버 호스트 | `localhost` |
+| `MILVUS_PORT` | Milvus 서버 포트 | `19530` |
+| `MILVUS_COLLECTION_NAME` | 컬렉션 이름 | `ragflow_chunks` |
+| `MILVUS_TOP_K` | 검색 결과 수 | `5` |
+| `EMBEDDING_MODEL_NAME` | 임베딩 모델 | `BAAI/bge-m3` |
+| `EMBEDDING_DIMENSION` | 임베딩 차원 | `1024` |
+
+### RAGFlow 설정
+
+| 변수명 | 설명 | 기본값 |
+|--------|------|--------|
+| `RAGFLOW_BASE_URL` | RAGFlow URL | - |
+| `RAGFLOW_API_KEY` | RAGFlow API Key | - |
+| `RAGFLOW_TIMEOUT_SEC` | 타임아웃 (초) | `10.0` |
 
 ### PII 마스킹 설정
 
 | 변수명 | 설명 | 기본값 |
 |--------|------|--------|
-| `PII_BASE_URL` | PII 마스킹 서비스 URL (선택) | - |
-| `PII_ENABLED` | PII 마스킹 활성화 여부 | `true` |
+| `PII_BASE_URL` | PII 서비스 URL | - |
+| `PII_ENABLED` | PII 마스킹 활성화 | `true` |
 
-### URL 선택 우선순위
+### 백엔드 연동
 
-1. `*_BASE_URL` (직접 지정) - 설정되어 있으면 최우선
-2. `AI_ENV=real` → `*_BASE_URL_REAL` 사용
-3. `AI_ENV=mock` (기본값) → `*_BASE_URL_MOCK` 사용
+| 변수명 | 설명 | 기본값 |
+|--------|------|--------|
+| `BACKEND_BASE_URL` | 백엔드 URL | - |
+| `BACKEND_API_TOKEN` | API 인증 토큰 | - |
 
-## API 엔드포인트
+### 라우터 설정
 
-### Health Check API
+| 변수명 | 설명 | 기본값 |
+|--------|------|--------|
+| `ROUTER_USE_LLM` | LLM 라우터 사용 | `true` |
+| `ROUTER_RULE_CONFIDENCE_THRESHOLD` | 규칙 라우터 신뢰도 임계값 | `0.85` |
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| GET | `/health` | Liveness 체크 |
-| GET | `/health/ready` | Readiness 체크 |
+## 테스트
 
-### AI API (현재 더미 응답)
-
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| POST | `/ai/chat/messages` | AI 채팅 응답 생성 |
-| POST | `/ai/rag/process` | RAG 문서 처리 요청 |
-
----
-
-## AI API 상세
-
-### POST /ai/chat/messages
-
-백엔드(ctrlf-back)에서 사용자의 질문과 대화 히스토리를 전달하면, AI 게이트웨이가 답변을 생성하여 반환합니다.
-
-**현재 상태**: 더미 응답 반환 (RAG/LLM 연동은 다음 단계에서 구현)
-
-**Request Body:**
-```json
-{
-  "session_id": "chat-session-123",
-  "user_id": "employee-456",
-  "user_role": "EMPLOYEE",
-  "department": "HR",
-  "domain": "POLICY",
-  "channel": "WEB",
-  "messages": [
-    {"role": "user", "content": "연차 이월 규정이 어떻게 되나요?"}
-  ]
-}
-```
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| session_id | string | O | 채팅 세션 ID |
-| user_id | string | O | 사용자 ID |
-| user_role | string | O | 사용자 역할 (EMPLOYEE, MANAGER, ADMIN 등) |
-| department | string | X | 사용자 소속 부서 |
-| domain | string | X | 질문 도메인 (POLICY, INCIDENT, EDUCATION 등) |
-| channel | string | X | 요청 채널 (기본값: WEB) |
-| messages | array | O | 대화 히스토리 (role: user/assistant/system) |
-
-**Response:**
-```json
-{
-  "answer": "연차 이월 규정은...",
-  "sources": [
-    {
-      "doc_id": "HR-001",
-      "title": "인사규정",
-      "page": 15,
-      "score": 0.95
-    }
-  ],
-  "meta": {
-    "used_model": "gpt-4",
-    "route": "ROUTE_RAG_INTERNAL",
-    "masked": true,
-    "latency_ms": 1500
-  }
-}
-```
-
-**테스트:**
 ```bash
-curl -X POST http://localhost:8000/ai/chat/messages \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "test-session",
-    "user_id": "user-123",
-    "user_role": "EMPLOYEE",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
+# 전체 테스트
+pytest
+
+# 상세 출력
+pytest -v
+
+# 특정 테스트
+pytest tests/test_milvus_client.py -v
+
+# 커버리지
+pytest --cov=app tests/
 ```
 
----
+## Docker
 
-### POST /ai/rag/process
+### 빌드 및 실행
 
-백엔드에서 RAG용 문서를 전달하면, AI 게이트웨이가 RAGFlow를 통해 전처리/임베딩을 수행합니다.
-
-**현재 상태**: 더미 응답 반환 (RAGFlow 연동은 다음 단계에서 구현)
-
-**Request Body:**
-```json
-{
-  "doc_id": "HR-001",
-  "file_url": "https://storage.example.com/docs/hr-policy.pdf",
-  "domain": "POLICY",
-  "acl": {
-    "roles": ["EMPLOYEE", "MANAGER"],
-    "departments": ["ALL"]
-  }
-}
-```
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| doc_id | string | O | 문서 ID |
-| file_url | string (URL) | O | 문서 파일 URL |
-| domain | string | O | 문서 도메인 (POLICY, INCIDENT, EDUCATION 등) |
-| acl | object | X | 접근 제어 설정 |
-| acl.roles | array | X | 접근 가능한 역할 목록 |
-| acl.departments | array | X | 접근 가능한 부서 목록 |
-
-**Response:**
-```json
-{
-  "doc_id": "HR-001",
-  "success": true,
-  "message": "Document successfully processed and indexed"
-}
-```
-
-**테스트:**
 ```bash
-curl -X POST http://localhost:8000/ai/rag/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "doc_id": "HR-001",
-    "file_url": "https://example.com/docs/hr-001.pdf",
-    "domain": "POLICY"
-  }'
+# 이미지 빌드
+docker build -t ctrlf-ai:latest .
+
+# 컨테이너 실행
+docker run -p 8000:8000 --env-file .env ctrlf-ai:latest
 ```
 
----
+### Docker Compose
 
-## 개발 가이드
+```bash
+# 서비스 시작
+docker compose up -d
 
-### 아키텍처 레이어
+# 로그 확인
+docker compose logs -f
+
+# 서비스 종료
+docker compose down
+```
+
+## 아키텍처
 
 ```
-API Layer (app/api/v1/)
-    ↓
-Service Layer (app/services/)
-    ↓
-External Services (RAGFlow, LLM)
+┌─────────────┐     ┌─────────────────────────────────────┐
+│  Frontend   │────▶│         AI Gateway (FastAPI)        │
+│  (React)    │     │                                     │
+└─────────────┘     │  ┌─────────────────────────────┐    │
+                    │  │     Router Orchestrator      │    │
+┌─────────────┐     │  │  (Rule Router + LLM Router)  │    │
+│  Backend    │────▶│  └─────────────────────────────┘    │
+│  (Spring)   │     │                │                    │
+└─────────────┘     │  ┌─────────────▼─────────────┐      │
+                    │  │      Chat Service          │      │
+                    │  │  (PII, Intent, RAG, LLM)   │      │
+                    │  └─────────────┬─────────────┘      │
+                    └────────────────┼────────────────────┘
+                                     │
+                    ┌────────────────┼────────────────┐
+                    ▼                ▼                ▼
+              ┌──────────┐    ┌──────────┐    ┌──────────┐
+              │  Milvus  │    │   vLLM   │    │ Embedding│
+              │ (Vector) │    │  (Chat)  │    │ (BGE-M3) │
+              └──────────┘    └──────────┘    └──────────┘
 ```
 
-- **API Layer**: HTTP 요청/응답 처리, 라우팅
-- **Service Layer**: 비즈니스 로직 (현재 더미 구현)
-- **Models**: Pydantic 스키마 정의
+## 개발 히스토리
 
-### 새 API 라우터 추가
-
-1. `app/models/`에 Pydantic 모델 정의
-2. `app/services/`에 서비스 클래스 구현
-3. `app/api/v1/`에 라우터 파일 생성
-4. `app/api/v1/__init__.py`에 import 추가
-5. `app/main.py`에서 라우터 등록
-6. `tests/`에 테스트 파일 추가
-
-### 구현 완료
-
-- [x] PII 마스킹 로직 (Phase 4)
-- [x] 의도 분류 및 라우팅 (Phase 4)
-- [x] RAGFlow 연동 (Phase 3)
-- [x] LLM 연동 (Phase 3)
-- [x] AI 로그 백엔드 전송 (Phase 5)
-- [x] Docker Compose 통합 테스트 (Phase 8)
-- [x] Mock/Real 모드 전환 (Phase 9)
-- [x] AI 로그 camelCase JSON (Phase 10)
+- **Phase 24**: Milvus 벡터 검색 통합
+- **Phase 23**: 개인화 (Sub-Intent Q1~Q20)
+- **Phase 22**: Router Orchestrator
+- **Phase 21**: Intent Router (Rule + LLM)
+- **Phase 20**: FAQ 배치/캐시 고도화
+- **Phase 19**: FAQ 생성 서비스
+- **Phase 18**: RAGFlow 검색 연동
+- **Phase 14**: RAG Gap 탐지
+- **Phase 12**: Fallback 전략
+- **Phase 11**: Backend Data 연동
+- **Phase 10**: 역할×도메인×의도 라우팅
+- **Phase 4**: PII 마스킹 + 의도 분류
 
 ## 라이선스
 
