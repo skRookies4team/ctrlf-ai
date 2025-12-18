@@ -29,6 +29,22 @@ class ScriptStatus(str, Enum):
     PENDING_REVIEW = "PENDING_REVIEW"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    PUBLISHED = "PUBLISHED"  # Phase 28: KB 적재 완료
+
+
+class KBIndexStatus(str, Enum):
+    """KB 인덱스 상태 (Phase 28)."""
+    NOT_INDEXED = "NOT_INDEXED"
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class KBDocumentStatus(str, Enum):
+    """KB 문서 상태 (Phase 28)."""
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
 
 
 class RenderJobStatus(str, Enum):
@@ -70,6 +86,11 @@ class VideoScript:
         raw_json: 스크립트 JSON (chapters/scenes/narration/caption/source_refs)
         created_by: 생성자 ID
         created_at: 생성 시각
+        kb_index_status: KB 인덱스 상태 (Phase 28)
+        kb_indexed_at: KB 인덱싱 완료 시각
+        kb_last_error: 마지막 KB 인덱싱 에러
+        kb_document_id: KB 문서 ID
+        kb_document_status: KB 문서 상태 (ACTIVE/ARCHIVED)
     """
     script_id: str
     video_id: str
@@ -77,10 +98,24 @@ class VideoScript:
     raw_json: Dict[str, Any]
     created_by: str
     created_at: datetime = field(default_factory=datetime.utcnow)
+    # Phase 28: KB 인덱스 관련 필드
+    kb_index_status: KBIndexStatus = KBIndexStatus.NOT_INDEXED
+    kb_indexed_at: Optional[datetime] = None
+    kb_last_error: Optional[str] = None
+    kb_document_id: Optional[str] = None
+    kb_document_status: KBDocumentStatus = KBDocumentStatus.ACTIVE
 
     def is_approved(self) -> bool:
         """스크립트가 승인되었는지 확인."""
-        return self.status == ScriptStatus.APPROVED
+        return self.status in (ScriptStatus.APPROVED, ScriptStatus.PUBLISHED)
+
+    def is_published(self) -> bool:
+        """스크립트가 발행되었는지 확인."""
+        return self.status == ScriptStatus.PUBLISHED
+
+    def is_kb_indexed(self) -> bool:
+        """KB에 인덱싱되었는지 확인."""
+        return self.kb_index_status == KBIndexStatus.SUCCEEDED
 
 
 @dataclass
@@ -174,6 +209,37 @@ class RenderedAssets:
     duration_sec: float
 
 
+@dataclass
+class KBChunk:
+    """KB 청크 모델 (Phase 28).
+
+    승인된 스크립트에서 생성된 청크입니다.
+    씬 단위로 1개의 청크를 생성합니다.
+
+    Attributes:
+        chunk_id: 청크 ID (script_id:chapter:scene 형태)
+        video_id: 비디오 ID
+        script_id: 스크립트 ID
+        chapter_order: 챕터 순서
+        scene_order: 씬 순서
+        chapter_title: 챕터 제목
+        scene_purpose: 씬 목적
+        content: 청크 내용 (narration + caption)
+        source_refs: 원본 참조 (doc_id, chunk_id 등)
+        metadata: 추가 메타데이터
+    """
+    chunk_id: str
+    video_id: str
+    script_id: str
+    chapter_order: int
+    scene_order: int
+    chapter_title: str
+    scene_purpose: str
+    content: str
+    source_refs: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
 # =============================================================================
 # API Request/Response Models (Pydantic)
 # =============================================================================
@@ -258,6 +324,44 @@ class ScriptResponse(BaseModel):
     raw_json: Dict[str, Any] = Field(..., description="스크립트 JSON")
     created_by: str = Field(..., description="생성자 ID")
     created_at: str = Field(..., description="생성 시각 (ISO 8601)")
+
+
+# =============================================================================
+# Phase 28: Publish API Models
+# =============================================================================
+
+
+class PublishRequest(BaseModel):
+    """발행 요청 (Phase 28).
+
+    POST /api/videos/{video_id}/publish
+    """
+    pass  # No body needed, video_id from path
+
+
+class PublishResponse(BaseModel):
+    """발행 응답 (Phase 28).
+
+    POST /api/videos/{video_id}/publish
+    """
+    video_id: str = Field(..., description="비디오 ID")
+    script_id: str = Field(..., description="스크립트 ID")
+    status: str = Field(..., description="스크립트 상태 (PUBLISHED)")
+    kb_index_status: str = Field(..., description="KB 인덱스 상태 (PENDING)")
+    message: str = Field(..., description="결과 메시지")
+
+
+class KBIndexStatusResponse(BaseModel):
+    """KB 인덱스 상태 응답 (Phase 28).
+
+    GET /api/videos/{video_id}/kb-status
+    """
+    video_id: str = Field(..., description="비디오 ID")
+    script_id: Optional[str] = Field(None, description="스크립트 ID")
+    kb_index_status: str = Field(..., description="KB 인덱스 상태")
+    kb_indexed_at: Optional[str] = Field(None, description="인덱싱 완료 시각")
+    kb_document_status: Optional[str] = Field(None, description="KB 문서 상태")
+    kb_last_error: Optional[str] = Field(None, description="마지막 에러")
 
 
 # Forward reference 해결

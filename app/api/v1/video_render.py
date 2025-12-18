@@ -1,5 +1,6 @@
 """
 Phase 27: Video Render API
+Phase 28: Publish & KB Indexing API
 
 영상 생성 파이프라인 API 엔드포인트.
 
@@ -8,12 +9,19 @@ Phase 27: Video Render API
 - GET /api/render-jobs/{job_id} : 잡 상태 조회
 - POST /api/render-jobs/{job_id}/cancel : 잡 취소
 - GET /api/videos/{video_id}/asset : 결과 비디오 조회
+- POST /api/videos/{video_id}/publish : 영상 발행 + KB 적재 (Phase 28)
+- GET /api/videos/{video_id}/kb-status : KB 인덱스 상태 조회 (Phase 28)
 
 권한:
 - 렌더 잡 생성: REVIEWER 역할만 가능
+- 발행: REVIEWER 역할만 가능
 
 Phase 26 연동:
 - EXPIRED 교육에 대해 404 반환
+
+Phase 28 정책:
+- KB 적재는 PUBLISHED 상태의 영상만 대상
+- APPROVED 스크립트 + 렌더 SUCCEEDED 후에만 발행 가능
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,16 +29,22 @@ from typing import Optional
 
 from app.core.logging import get_logger
 from app.models.video_render import (
+    KBIndexStatus,
+    KBIndexStatusResponse,
+    PublishResponse,
     RenderJobCancelResponse,
     RenderJobCreateRequest,
     RenderJobCreateResponse,
     RenderJobStatusResponse,
+    RenderJobStatus,
     ScriptCreateRequest,
     ScriptApproveRequest,
     ScriptResponse,
+    ScriptStatus,
     VideoAssetResponse,
 )
 from app.services.education_catalog_service import get_education_catalog_service
+from app.services.kb_index_service import get_kb_index_service
 from app.services.video_render_service import get_video_render_service
 from app.services.video_renderer_mvp import get_mvp_video_renderer
 
@@ -389,4 +403,177 @@ async def get_video_asset(
         subtitle_url=asset.subtitle_url,
         duration_sec=asset.duration_sec,
         created_at=asset.created_at.isoformat(),
+    )
+
+
+# =============================================================================
+# Phase 28: Publish & KB Indexing APIs
+# =============================================================================
+
+
+@router.post(
+    "/videos/{video_id}/publish",
+    response_model=PublishResponse,
+    summary="영상 발행 + KB 적재",
+    description="""
+영상을 발행하고 KB(Knowledge Base)에 적재합니다.
+
+**권한**: REVIEWER만 가능
+
+**검증**:
+- 해당 video_id에 SUCCEEDED 렌더 잡이 있어야 함 (409)
+- 최신 스크립트가 APPROVED 상태여야 함 (409)
+- 해당 교육이 EXPIRED면 404
+
+**동작**:
+1. 검증 통과 시 스크립트 상태를 PUBLISHED로 변경
+2. KB Index Job 실행 (비동기)
+3. kb_index_status=PENDING 반환
+
+**재발행 시**:
+- 이전 버전은 KB에서 삭제되어 검색 제외
+- 최신 버전 1개만 ACTIVE
+""",
+)
+async def publish_video(
+    video_id: str,
+    user_id: str = "reviewer",
+    user_role: str = "REVIEWER",
+    service=Depends(get_render_service),
+):
+    """영상 발행 + KB 적재."""
+    # REVIEWER 역할 검증
+    verify_reviewer_role(user_role)
+
+    # EXPIRED 교육 차단
+    ensure_education_not_expired(video_id)
+
+    # 1. 렌더 잡 SUCCEEDED 확인
+    succeeded_job = service._job_store.get_succeeded_by_video_id(video_id)
+    if not succeeded_job:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "RENDER_NOT_SUCCEEDED",
+                "message": f"SUCCEEDED 상태의 렌더 잡이 없습니다: video_id={video_id}",
+            },
+        )
+
+    # 2. APPROVED 스크립트 확인
+    script = service.get_script(succeeded_job.script_id)
+    if not script:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "SCRIPT_NOT_FOUND",
+                "message": f"스크립트를 찾을 수 없습니다: script_id={succeeded_job.script_id}",
+            },
+        )
+
+    if not script.is_approved():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "SCRIPT_NOT_APPROVED",
+                "message": f"스크립트가 승인되지 않았습니다: status={script.status.value}",
+            },
+        )
+
+    # 3. 스크립트 상태를 PUBLISHED로 변경
+    script.status = ScriptStatus.PUBLISHED
+    script.kb_index_status = KBIndexStatus.PENDING
+    service._script_store.save(script)
+
+    logger.info(
+        f"Video publish initiated: video_id={video_id}, script_id={script.script_id}"
+    )
+
+    # 4. KB Index Job 실행 (비동기)
+    import asyncio
+    asyncio.create_task(_run_kb_indexing(video_id, script))
+
+    return PublishResponse(
+        video_id=video_id,
+        script_id=script.script_id,
+        status=script.status.value,
+        kb_index_status=script.kb_index_status.value,
+        message="영상 발행이 시작되었습니다. KB 인덱싱이 진행 중입니다.",
+    )
+
+
+async def _run_kb_indexing(video_id: str, script) -> None:
+    """KB 인덱싱 실행 (백그라운드)."""
+    from datetime import datetime
+
+    kb_service = get_kb_index_service()
+
+    try:
+        # 인덱싱 상태 RUNNING으로 변경
+        script.kb_index_status = KBIndexStatus.RUNNING
+
+        # 인덱싱 실행
+        result = await kb_service.index_published_video(
+            video_id=video_id,
+            script=script,
+            course_type="TRAINING",
+        )
+
+        # 결과 반영
+        script.kb_index_status = result
+        if result == KBIndexStatus.SUCCEEDED:
+            script.kb_indexed_at = datetime.utcnow()
+            script.kb_last_error = None
+            logger.info(f"KB indexing succeeded: video_id={video_id}")
+        else:
+            script.kb_last_error = "Indexing failed"
+            logger.error(f"KB indexing failed: video_id={video_id}")
+
+    except Exception as e:
+        script.kb_index_status = KBIndexStatus.FAILED
+        script.kb_last_error = str(e)
+        logger.exception(f"KB indexing error: video_id={video_id}, error={e}")
+
+
+@router.get(
+    "/videos/{video_id}/kb-status",
+    response_model=KBIndexStatusResponse,
+    summary="KB 인덱스 상태 조회",
+    description="영상의 KB 인덱스 상태를 조회합니다.",
+)
+async def get_kb_index_status(
+    video_id: str,
+    service=Depends(get_render_service),
+):
+    """KB 인덱스 상태 조회."""
+    # 최신 성공 잡 조회
+    succeeded_job = service._job_store.get_succeeded_by_video_id(video_id)
+    if not succeeded_job:
+        return KBIndexStatusResponse(
+            video_id=video_id,
+            script_id=None,
+            kb_index_status=KBIndexStatus.NOT_INDEXED.value,
+            kb_indexed_at=None,
+            kb_document_status=None,
+            kb_last_error=None,
+        )
+
+    # 스크립트 조회
+    script = service.get_script(succeeded_job.script_id)
+    if not script:
+        return KBIndexStatusResponse(
+            video_id=video_id,
+            script_id=succeeded_job.script_id,
+            kb_index_status=KBIndexStatus.NOT_INDEXED.value,
+            kb_indexed_at=None,
+            kb_document_status=None,
+            kb_last_error=None,
+        )
+
+    return KBIndexStatusResponse(
+        video_id=video_id,
+        script_id=script.script_id,
+        kb_index_status=script.kb_index_status.value,
+        kb_indexed_at=script.kb_indexed_at.isoformat() if script.kb_indexed_at else None,
+        kb_document_status=script.kb_document_status.value if script.kb_document_status else None,
+        kb_last_error=script.kb_last_error,
     )
