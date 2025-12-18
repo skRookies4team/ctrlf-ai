@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video
+from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video, video_render
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -176,3 +176,13 @@ app.include_router(internal_rag.router, tags=["Internal RAG"])
 # - POST /api/admin/education/reissue: 교육 재발행 (복제 발행)
 # - GET /api/admin/education/{education_id}: 교육 메타데이터 조회
 app.include_router(admin.router, tags=["Admin"])
+
+# Phase 27: Video Render API (영상 생성 파이프라인)
+# - POST /api/scripts: 스크립트 생성
+# - POST /api/scripts/{script_id}/approve: 스크립트 승인
+# - GET /api/scripts/{script_id}: 스크립트 조회
+# - POST /api/videos/{video_id}/render-jobs: 렌더 잡 생성
+# - GET /api/render-jobs/{job_id}: 잡 상태 조회
+# - POST /api/render-jobs/{job_id}/cancel: 잡 취소
+# - GET /api/videos/{video_id}/asset: 비디오 에셋 조회
+app.include_router(video_render.router, tags=["Video Render"])
