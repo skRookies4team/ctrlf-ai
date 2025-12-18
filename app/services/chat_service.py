@@ -63,6 +63,7 @@ import asyncio
 import time
 from typing import Dict, List, Optional, Tuple
 
+from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
 from app.core.metrics import (
@@ -90,6 +91,7 @@ from app.models.router_types import (
 )
 from app.clients.backend_data_client import BackendDataClient
 from app.clients.llm_client import LLMClient
+from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
 from app.clients.ragflow_client import RagflowClient
 from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
@@ -353,6 +355,7 @@ class ChatService:
         backend_data_client: Optional[BackendDataClient] = None,
         router_orchestrator: Optional[RouterOrchestrator] = None,
         video_progress_service: Optional[VideoProgressService] = None,
+        milvus_client: Optional[MilvusSearchClient] = None,
     ) -> None:
         """
         Initialize ChatService.
@@ -367,6 +370,7 @@ class ChatService:
             backend_data_client: BackendDataClient instance. If None, creates a new instance.
             router_orchestrator: RouterOrchestrator instance. If None, creates a new instance. (Phase 22)
             video_progress_service: VideoProgressService instance. If None, creates a new instance. (Phase 22)
+            milvus_client: MilvusSearchClient instance. If None and MILVUS_ENABLED=True, creates singleton. (Phase 24)
                               Pass custom services for testing or dependency injection.
         """
         self._ragflow = ragflow_client or RagflowClient()
@@ -384,6 +388,16 @@ class ChatService:
             llm_client=self._llm
         )
         self._video_progress = video_progress_service or VideoProgressService()
+
+        # Phase 24: Milvus Vector Search Client
+        # MILVUS_ENABLED=True 설정 시 RAGFlow 대신 Milvus 사용
+        settings = get_settings()
+        self._milvus_enabled = settings.MILVUS_ENABLED
+        if self._milvus_enabled:
+            self._milvus = milvus_client or get_milvus_client()
+            logger.info("Milvus vector search enabled (Phase 24)")
+        else:
+            self._milvus = None
 
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
@@ -443,11 +457,11 @@ class ChatService:
         # =====================================================================
         # Phase 22: Router Orchestrator Integration (Optional)
         # =====================================================================
-        # RouterOrchestrator는 LLM이 설정된 경우에만 완전하게 작동합니다.
-        # LLM이 설정되지 않은 경우, 기존 IntentService 로직을 사용합니다.
+        # RouterOrchestrator 사용 여부는 명시적 플래그(ROUTER_ORCHESTRATOR_ENABLED)로 결정합니다.
+        # Phase 22 수정: bool(llm_base_url) 대신 명시적 플래그 사용
         from app.core.config import get_settings
         settings = get_settings()
-        use_router_orchestrator = bool(settings.llm_base_url)
+        use_router_orchestrator = settings.ROUTER_ORCHESTRATOR_ENABLED
 
         orchestration_result: Optional[OrchestrationResult] = None
 
@@ -1140,6 +1154,7 @@ class ChatService:
         RAG 검색을 수행하고 실패 여부를 함께 반환합니다.
 
         Phase 12: fallback 처리를 위해 실패 여부를 명시적으로 반환.
+        Phase 24: MILVUS_ENABLED=True 시 Milvus 벡터 검색 사용.
 
         Args:
             query: 검색 쿼리 (마스킹된 상태)
@@ -1151,18 +1166,32 @@ class ChatService:
             - 실패 여부: 예외 발생 시 True, 정상 (0건 포함) 시 False
         """
         try:
-            sources = await self._ragflow.search_as_sources(
-                query=query,
-                domain=domain,
-                user_role=req.user_role,
-                department=req.department,
-                top_k=5,
-            )
-            logger.info(f"RAG search returned {len(sources)} sources")
+            # Phase 24: Milvus 사용 시 Milvus 클라이언트로 검색
+            if self._milvus_enabled and self._milvus:
+                logger.info(f"Using Milvus for vector search (Phase 24)")
+                sources = await self._milvus.search_as_sources(
+                    query=query,
+                    domain=domain,
+                    user_role=req.user_role,
+                    department=req.department,
+                    top_k=5,
+                )
+            else:
+                # 기존 RAGFlow 검색
+                sources = await self._ragflow.search_as_sources(
+                    query=query,
+                    domain=domain,
+                    user_role=req.user_role,
+                    department=req.department,
+                    top_k=5,
+                )
+
+            search_backend = "Milvus" if (self._milvus_enabled and self._milvus) else "RAGFlow"
+            logger.info(f"{search_backend} search returned {len(sources)} sources")
 
             if not sources:
                 logger.warning(
-                    f"RAG search returned no results for query: {query[:50]}..."
+                    f"{search_backend} search returned no results for query: {query[:50]}..."
                 )
 
             # 0건도 정상 응답 (실패 아님)

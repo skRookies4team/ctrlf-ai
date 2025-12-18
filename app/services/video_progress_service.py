@@ -34,6 +34,7 @@ from app.models.video_progress import (
     VideoRejectionReason,
     VideoStatusResponse,
 )
+from app.services.education_catalog_service import get_education_catalog_service
 
 logger = get_logger(__name__)
 
@@ -48,9 +49,12 @@ COMPLETION_THRESHOLD_PERCENT = 95.0
 # 마지막 구간 비율 (총 시간의 5%)
 FINAL_SEGMENT_RATIO = 0.05
 
-# 급증 감지: 시간 간격(초) 동안 증가 가능한 최대 퍼센트
-SURGE_TIME_WINDOW_SECONDS = 10.0
-SURGE_MAX_INCREASE_PERCENT = 30.0
+# 마지막 구간 최소값 (초) - max(5%, 30초) 규칙의 최소값
+FINAL_SEGMENT_MIN_SECONDS = 30.0
+
+# 급증 감지: 시간-위치 기반 검증의 grace 허용치 (초)
+# delta_position <= elapsed_wall_clock + grace 이면 허용
+SURGE_GRACE_SECONDS = 5.0
 
 # 영상 완료 후 시크 허용
 SEEK_ALLOWED_ON_COMPLETE = True
@@ -151,8 +155,8 @@ class VideoProgressService:
         store: Optional[VideoProgressStore] = None,
         completion_threshold: float = COMPLETION_THRESHOLD_PERCENT,
         final_segment_ratio: float = FINAL_SEGMENT_RATIO,
-        surge_time_window: float = SURGE_TIME_WINDOW_SECONDS,
-        surge_max_increase: float = SURGE_MAX_INCREASE_PERCENT,
+        final_segment_min_seconds: float = FINAL_SEGMENT_MIN_SECONDS,
+        surge_grace_seconds: float = SURGE_GRACE_SECONDS,
     ) -> None:
         """VideoProgressService 초기화.
 
@@ -160,14 +164,14 @@ class VideoProgressService:
             store: 저장소 인스턴스
             completion_threshold: 완료 판정 임계값 (%)
             final_segment_ratio: 마지막 구간 비율
-            surge_time_window: 급증 감지 시간 간격 (초)
-            surge_max_increase: 급증 감지 최대 증가율 (%)
+            final_segment_min_seconds: 마지막 구간 최소값 (초)
+            surge_grace_seconds: 급증 감지 grace 허용치 (초)
         """
         self._store = store or get_video_progress_store()
         self._completion_threshold = completion_threshold
         self._final_segment_ratio = final_segment_ratio
-        self._surge_time_window = surge_time_window
-        self._surge_max_increase = surge_max_increase
+        self._final_segment_min_seconds = final_segment_min_seconds
+        self._surge_grace_seconds = surge_grace_seconds
 
     # =========================================================================
     # 영상 시작 (VIDEO_PLAY_START)
@@ -175,6 +179,8 @@ class VideoProgressService:
 
     def start_video(self, request: VideoPlayStartRequest) -> VideoPlayStartResponse:
         """영상 재생을 시작합니다.
+
+        Phase 22 수정: EducationCatalogService로 4대교육 서버 판정
 
         세션을 생성하고 초기 상태를 저장합니다.
 
@@ -187,6 +193,10 @@ class VideoProgressService:
         now = datetime.now(timezone.utc)
         session_id = str(uuid.uuid4())
 
+        # Phase 22: 서버 측 4대교육 판정 (클라이언트 is_mandatory_edu 불신)
+        edu_catalog = get_education_catalog_service()
+        is_mandatory_4type = edu_catalog.is_mandatory_4type(request.training_id)
+
         # 기존 레코드가 있으면 완료 상태가 아닌 경우 덮어쓰기
         existing = self._store.get(request.user_id, request.training_id)
         if existing and existing.state == VideoProgressState.COMPLETED:
@@ -195,7 +205,7 @@ class VideoProgressService:
                 f"training_id={request.training_id}"
             )
             # 완료된 영상은 재시작 허용 (시크 허용 상태로)
-            existing.state = VideoProgressState.PLAYING
+            existing.state = VideoProgressState.IN_PROGRESS
             existing.updated_at = now.isoformat()
             self._store.set(request.user_id, request.training_id, existing)
 
@@ -203,12 +213,12 @@ class VideoProgressService:
                 session_id=session_id,
                 user_id=request.user_id,
                 training_id=request.training_id,
-                state=VideoProgressState.PLAYING,
+                state=VideoProgressState.IN_PROGRESS,
                 seek_allowed=existing.seek_allowed,  # 완료 후에는 True
                 created_at=now.isoformat(),
             )
 
-        # 새 레코드 생성
+        # 새 레코드 생성 (is_mandatory_edu는 서버 판정 값 사용)
         record = VideoProgressRecord(
             user_id=request.user_id,
             training_id=request.training_id,
@@ -217,10 +227,10 @@ class VideoProgressService:
             watched_seconds=0,
             progress_percent=0.0,
             last_position=0,
-            state=VideoProgressState.PLAYING,
+            state=VideoProgressState.IN_PROGRESS,
             seek_allowed=False,  # 완료 전에는 시크 불가
             quiz_unlocked=False,
-            is_mandatory_edu=request.is_mandatory_edu,
+            is_mandatory_edu=is_mandatory_4type,  # Phase 22: 서버 판정 값
             last_final_segment_time=0,
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
@@ -241,7 +251,7 @@ class VideoProgressService:
             session_id=session_id,
             user_id=request.user_id,
             training_id=request.training_id,
-            state=VideoProgressState.PLAYING,
+            state=VideoProgressState.IN_PROGRESS,
             seek_allowed=False,
             created_at=now.isoformat(),
         )
@@ -286,10 +296,10 @@ class VideoProgressService:
                 rejection_reason=VideoRejectionReason.SESSION_NOT_FOUND.value,
             )
 
-        # 2. 이미 완료된 경우 - 업데이트 스킵
+        # 2. 이미 완료된 경우 - 업데이트 no-op (accepted=True, 상태 불변)
         if record.state == VideoProgressState.COMPLETED:
             logger.debug(
-                f"Already completed: user_id={request.user_id}, "
+                f"Already completed (no-op): user_id={request.user_id}, "
                 f"training_id={request.training_id}"
             )
             return VideoProgressUpdateResponse(
@@ -303,6 +313,7 @@ class VideoProgressService:
                 updated_at=record.updated_at,
                 accepted=True,
                 rejection_reason=None,
+                message="이미 완료된 영상입니다.",
             )
 
         # 3. 새로운 진행률 계산
@@ -329,17 +340,17 @@ class VideoProgressService:
                 rejection_reason=VideoRejectionReason.PROGRESS_REGRESSION.value,
             )
 
-        # 5. 급증 검증 (비정상 속도 거부)
+        # 5. 급증 검증 (시간-위치 기반: delta_position <= elapsed + grace)
         is_surge, surge_reason = self._check_progress_surge(
-            old_progress=record.progress_percent,
-            new_progress=new_progress,
+            old_position_seconds=record.last_position,
+            new_position_seconds=request.current_position,
             old_timestamp=record.last_update_timestamp,
             new_timestamp=current_timestamp,
         )
         if is_surge:
             logger.warning(
                 f"Progress surge detected: user_id={request.user_id}, "
-                f"old={record.progress_percent:.1f}%, new={new_progress:.1f}%, "
+                f"old_pos={record.last_position}s, new_pos={request.current_position}s, "
                 f"reason={surge_reason}"
             )
             return VideoProgressUpdateResponse(
@@ -356,12 +367,14 @@ class VideoProgressService:
             )
 
         # 6. 마지막 구간 시청 여부 업데이트
-        final_segment_start = int(record.total_duration * (1 - self._final_segment_ratio))
+        # 마지막 구간 = max(총 시간의 5%, 30초)
+        final_segment_seconds = self._get_final_segment_seconds(record.total_duration)
+        final_segment_start = int(record.total_duration - final_segment_seconds)
         if request.current_position >= final_segment_start:
             # 마지막 구간 시청 시간 누적
             time_in_final = min(
                 request.current_position - final_segment_start,
-                int(record.total_duration * self._final_segment_ratio)
+                int(final_segment_seconds)
             )
             record.last_final_segment_time = max(
                 record.last_final_segment_time,
@@ -471,30 +484,27 @@ class VideoProgressService:
             )
 
         # 5. 완료 조건 검증: 마지막 구간 시청
-        min_final_segment_time = int(
-            record.total_duration * self._final_segment_ratio * 0.5
-        )  # 마지막 구간의 50% 이상
-        if record.last_final_segment_time < min_final_segment_time:
-            # 마지막 위치가 마지막 구간에 있으면 허용
-            final_segment_start = int(
-                record.total_duration * (1 - self._final_segment_ratio)
+        # 마지막 구간 = max(총 시간의 5%, 30초)
+        final_segment_seconds = self._get_final_segment_seconds(record.total_duration)
+        final_segment_start = int(record.total_duration - final_segment_seconds)
+
+        # final_position >= total_duration - last_segment_seconds 조건으로 판정
+        if request.final_position < final_segment_start:
+            logger.info(
+                f"Final segment not watched: user_id={request.user_id}, "
+                f"final_position={request.final_position}s, "
+                f"required_start={final_segment_start}s"
             )
-            if request.final_position < final_segment_start:
-                logger.info(
-                    f"Final segment not watched: user_id={request.user_id}, "
-                    f"final_segment_time={record.last_final_segment_time}s, "
-                    f"min_required={min_final_segment_time}s"
-                )
-                return VideoCompleteResponse(
-                    user_id=request.user_id,
-                    training_id=request.training_id,
-                    completed=False,
-                    progress_percent=final_progress,
-                    quiz_unlocked=False,
-                    seek_allowed=False,
-                    completed_at=None,
-                    rejection_reason=VideoRejectionReason.FINAL_SEGMENT_NOT_WATCHED.value,
-                )
+            return VideoCompleteResponse(
+                user_id=request.user_id,
+                training_id=request.training_id,
+                completed=False,
+                progress_percent=final_progress,
+                quiz_unlocked=False,
+                seek_allowed=False,
+                completed_at=None,
+                rejection_reason=VideoRejectionReason.FINAL_SEGMENT_NOT_WATCHED.value,
+            )
 
         # 6. 완료 처리
         record.state = VideoProgressState.COMPLETED
@@ -573,7 +583,10 @@ class VideoProgressService:
     def can_start_quiz(self, user_id: str, training_id: str) -> Tuple[bool, str]:
         """퀴즈 시작 가능 여부를 확인합니다.
 
+        Phase 22 수정: EducationCatalogService로 4대교육 서버 판정
+
         4대교육의 경우 영상 완료 후에만 퀴즈 시작 가능합니다.
+        4대교육 여부는 클라이언트 입력이 아닌 서버에서 판정합니다.
 
         Args:
             user_id: 사용자 ID
@@ -582,13 +595,19 @@ class VideoProgressService:
         Returns:
             Tuple[bool, str]: (시작 가능 여부, 사유)
         """
+        # Phase 22: 서버 측 4대교육 판정 (클라이언트 is_mandatory_edu 불신)
+        edu_catalog = get_education_catalog_service()
+        is_mandatory_4type = edu_catalog.is_mandatory_4type(training_id)
+
+        # 4대교육이 아니면 퀴즈 제한 없음
+        if not is_mandatory_4type:
+            return True, "Not mandatory education (server determined)"
+
+        # 4대교육인 경우: 레코드 필수 + COMPLETED 필수
         record = self._store.get(user_id, training_id)
         if not record:
-            # 레코드 없으면 4대교육이 아닌 것으로 간주하여 허용
-            return True, "No video progress record (non-mandatory edu assumed)"
-
-        if not record.is_mandatory_edu:
-            return True, "Not mandatory education"
+            # 4대교육인데 레코드 없으면 거부 (영상 시청 필수)
+            return False, "Video progress record required for mandatory education"
 
         if record.quiz_unlocked:
             return True, "Quiz unlocked after video completion"
@@ -611,39 +630,59 @@ class VideoProgressService:
         progress = (watched_seconds / total_duration) * 100
         return min(progress, 100.0)
 
+    def _get_final_segment_seconds(self, total_duration: int) -> float:
+        """마지막 구간 초를 계산합니다.
+
+        설계: last_segment_seconds = max(total_duration * 0.05, 30.0)
+
+        Args:
+            total_duration: 영상 총 길이 (초)
+
+        Returns:
+            float: 마지막 구간 초
+        """
+        percent_based = total_duration * self._final_segment_ratio
+        return max(percent_based, self._final_segment_min_seconds)
+
     def _check_progress_surge(
         self,
-        old_progress: float,
-        new_progress: float,
+        old_position_seconds: int,
+        new_position_seconds: int,
         old_timestamp: float,
         new_timestamp: float,
     ) -> Tuple[bool, str]:
-        """급증 여부 검사.
+        """급증 여부 검사 (시간-위치 기반).
 
-        단위 시간당 증가폭이 상한을 초과하면 급증으로 판단합니다.
+        delta_position <= elapsed_wall_clock + grace 이면 허용.
+        seek가 불가한 환경에서 이 검증만으로 충분합니다.
 
         Args:
-            old_progress: 이전 진행률 (%)
-            new_progress: 새 진행률 (%)
-            old_timestamp: 이전 타임스탬프
-            new_timestamp: 새 타임스탬프
+            old_position_seconds: 이전 재생 위치 (초)
+            new_position_seconds: 새 재생 위치 (초)
+            old_timestamp: 이전 wall clock 타임스탬프
+            new_timestamp: 새 wall clock 타임스탬프
 
         Returns:
             Tuple[bool, str]: (급증 여부, 사유)
         """
-        time_diff = new_timestamp - old_timestamp
-        progress_diff = new_progress - old_progress
+        elapsed_wall_clock = new_timestamp - old_timestamp
+        delta_position = new_position_seconds - old_position_seconds
 
-        # 시간 차이가 0이면 체크 스킵
-        if time_diff <= 0:
+        # 시간 차이가 0 이하면 체크 스킵
+        if elapsed_wall_clock <= 0:
             return False, ""
 
-        # 시간 간격이 설정된 윈도우 이내일 때만 체크
-        if time_diff <= self._surge_time_window:
-            if progress_diff > self._surge_max_increase:
-                return True, (
-                    f"Progress increased {progress_diff:.1f}% in {time_diff:.1f}s "
-                    f"(max allowed: {self._surge_max_increase}% in {self._surge_time_window}s)"
-                )
+        # 위치가 감소하면 (역행) 스킵 - 별도 역행 체크에서 처리
+        if delta_position <= 0:
+            return False, ""
+
+        # 시간-위치 기반 검증: delta_position <= elapsed + grace
+        allowed_delta = elapsed_wall_clock + self._surge_grace_seconds
+
+        if delta_position > allowed_delta:
+            return True, (
+                f"Position advanced {delta_position}s but only {elapsed_wall_clock:.1f}s "
+                f"elapsed (allowed: {allowed_delta:.1f}s with {self._surge_grace_seconds}s grace)"
+            )
 
         return False, ""

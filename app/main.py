@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import chat, chat_stream, faq, gap_suggestions, health, ingest, quiz_generate, rag, search, video
+from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -164,3 +164,15 @@ app.include_router(video.router, tags=["Video Progress"])
 # - POST /ai/chat/stream: 스트리밍 채팅 응답 생성 (NDJSON)
 # 백엔드(Spring)가 NDJSON을 줄 단위로 읽어서 SSE로 변환
 app.include_router(chat_stream.router, tags=["Chat Stream"])
+
+# Phase 25: Internal RAG API (Direct Milvus Integration)
+# - POST /internal/rag/index: 문서 인덱싱 요청
+# - POST /internal/rag/delete: 문서 삭제 요청
+# - GET /internal/jobs/{job_id}: 작업 상태 조회
+# RAGFlow를 우회하고 AI 서버가 직접 Milvus에 upsert/delete 수행
+app.include_router(internal_rag.router, tags=["Internal RAG"])
+
+# Phase 26: Admin API (교육 재발행)
+# - POST /api/admin/education/reissue: 교육 재발행 (복제 발행)
+# - GET /api/admin/education/{education_id}: 교육 메타데이터 조회
+app.include_router(admin.router, tags=["Admin"])
