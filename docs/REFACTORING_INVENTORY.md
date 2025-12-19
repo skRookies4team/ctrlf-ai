@@ -238,7 +238,39 @@ Pillow                # 이미지
 
 ---
 
-## 8. 다음 단계
+## 8. 테스트 호환성 업데이트 (2025-12-19)
+
+### 8.1 Phase 39 AnswerGuardService 호환
+
+**변경 내용:**
+- Phase 39에서 `AnswerGuardService`가 도입되어 RAG 결과 없을 시 LLM 호출 전 차단
+- 기존 테스트들이 영문 fallback 메시지를 기대했으나, 새 한국어 템플릿 반환
+
+**수정된 테스트 파일:**
+| 파일 | 수정 내용 |
+|------|----------|
+| `test_service_fallback.py` | 한국어 템플릿 "승인/인덱싱된" 패턴 허용 |
+| `test_phase12_hardening.py` | `NO_RAG_EVIDENCE` 에러 타입 허용 |
+| `test_chat_http_e2e.py` | `FakeMilvusClient` 추가 (프로덕션 동일) |
+
+### 8.2 Milvus 테스트 정렬
+
+**변경 내용:**
+- Phase 24에서 `MILVUS_ENABLED=true`가 기본값으로 변경됨
+- E2E 테스트가 RagflowClient 대신 MilvusSearchClient 사용하도록 수정
+
+**추가된 테스트 헬퍼:**
+```python
+class FakeMilvusClient(MilvusSearchClient):
+    """E2E 테스트용 Milvus 목 클라이언트"""
+    def __init__(self, sources=None, should_fail=False):
+        self._fake_sources = sources or []
+        self._should_fail = should_fail
+```
+
+---
+
+## 9. 다음 단계
 
 1. **video_catalog_service.py 제거** - 미사용 확인 후 삭제
 2. **API 경로 통일** - /api/v1 vs /api/v2 정리
