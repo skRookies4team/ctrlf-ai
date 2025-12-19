@@ -30,6 +30,7 @@ from pymilvus import connections, Collection, utility
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.chat import ChatSource
+from app.utils.debug_log import dbg_retrieval_target, dbg_retrieval_top5
 
 logger = get_logger(__name__)
 
@@ -391,6 +392,7 @@ class MilvusSearchClient:
         user_role: Optional[str] = None,
         department: Optional[str] = None,
         top_k: int = 5,
+        request_id: Optional[str] = None,
     ) -> List[ChatSource]:
         """
         벡터 검색을 수행하고 ChatSource 형식으로 반환합니다.
@@ -398,6 +400,7 @@ class MilvusSearchClient:
         기존 RagflowClient.search_as_sources()와 호환되는 인터페이스입니다.
 
         Phase 29: source_type 필드 추가하여 TRAINING_SCRIPT 등 구분
+        Phase 41: RAG 디버그 로그 추가
 
         Args:
             query: 검색 쿼리 텍스트
@@ -405,10 +408,22 @@ class MilvusSearchClient:
             user_role: 사용자 역할 (현재 미사용, 향후 ACL 필터용)
             department: 부서 (현재 미사용, 향후 ACL 필터용)
             top_k: 반환할 최대 결과 수
+            request_id: 디버그용 요청 ID (Phase 41)
 
         Returns:
             List[ChatSource]: ChatSource 형식의 검색 결과
         """
+        # Phase 41: [B] retrieval_target 디버그 로그
+        if request_id:
+            dbg_retrieval_target(
+                request_id=request_id,
+                collection=self._collection_name,
+                partition=None,  # 현재 파티션 미사용
+                filter_expr=None,  # 도메인 필터는 후처리
+                top_k=top_k,
+                domain=domain,
+            )
+
         try:
             results = await self.search(query, domain=domain, top_k=top_k)
 
@@ -439,6 +454,18 @@ class MilvusSearchClient:
                     source_type=source_type,  # Phase 29
                 )
                 sources.append(source)
+
+            # Phase 41: [D] retrieval_top5 디버그 로그
+            if request_id:
+                top5_results = [
+                    {
+                        "doc_title": s.title,
+                        "chunk_id": s.doc_id,
+                        "score": s.score,
+                    }
+                    for s in sources[:5]
+                ]
+                dbg_retrieval_top5(request_id=request_id, results=top5_results)
 
             return sources
 
