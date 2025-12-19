@@ -1,5 +1,5 @@
 """
-Phase 34: Real Video Renderer
+Phase 34/37: Real Video Renderer
 
 실제 TTS, FFmpeg, Storage를 사용하는 영상 렌더러 구현.
 
@@ -13,10 +13,16 @@ Phase 34: Real Video Renderer
 - TTS_PROVIDER: mock | gtts | polly | gcp
 - STORAGE_PROVIDER: local | s3
 - RENDER_OUTPUT_DIR: 렌더링 출력 디렉토리 (기본: ./video_output)
+- VIDEO_VISUAL_STYLE: basic | animated (Phase 37)
 
 Phase 34 변경사항:
 - object_key 규칙: videos/{video_id}/{script_id}/{job_id}/video.mp4
 - StorageUploadError 예외 처리 추가
+
+Phase 37 변경사항:
+- VIDEO_VISUAL_STYLE 환경변수 지원
+- animated 모드: 씬 이미지 생성 + Ken Burns + fade 전환
+- VisualPlanExtractor, ImageAssetService 통합
 """
 
 import asyncio
@@ -38,10 +44,13 @@ from app.clients.storage_adapter import (
     get_default_storage_provider,
 )
 from app.clients.tts_provider import BaseTTSProvider, get_default_tts_provider
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.video_render import RenderedAssets, RenderJobStatus, RenderStep
+from app.services.image_asset_service import ImageAssetService, get_image_asset_service
 from app.services.video_composer import SceneInfo, VideoComposer, get_video_composer
 from app.services.video_render_service import VideoRenderer
+from app.services.visual_plan import VisualPlanExtractor, get_visual_plan_extractor
 
 logger = get_logger(__name__)
 
@@ -60,6 +69,8 @@ class RealRendererConfig:
     video_height: int = 720
     # TTS 청크 크기 (긴 텍스트 분할용)
     tts_max_chars: int = 5000
+    # Phase 37: 시각 스타일 (basic | animated)
+    visual_style: str = "basic"
 
 
 # =============================================================================
@@ -120,6 +131,8 @@ class RealVideoRenderer(VideoRenderer):
         tts_provider: Optional[BaseTTSProvider] = None,
         storage_provider: Optional[BaseStorageProvider] = None,
         video_composer: Optional[VideoComposer] = None,
+        image_service: Optional[ImageAssetService] = None,
+        plan_extractor: Optional[VisualPlanExtractor] = None,
     ):
         """렌더러 초기화.
 
@@ -128,13 +141,19 @@ class RealVideoRenderer(VideoRenderer):
             tts_provider: TTS Provider (테스트용 mock 주입)
             storage_provider: Storage Provider (테스트용 mock 주입)
             video_composer: Video Composer (테스트용 mock 주입)
+            image_service: ImageAssetService (테스트용 mock 주입, Phase 37)
+            plan_extractor: VisualPlanExtractor (테스트용 mock 주입, Phase 37)
         """
+        settings = get_settings()
         self.config = config or RealRendererConfig(
-            output_dir=os.getenv("RENDER_OUTPUT_DIR", "./video_output")
+            output_dir=os.getenv("RENDER_OUTPUT_DIR", "./video_output"),
+            visual_style=settings.VIDEO_VISUAL_STYLE,
         )
         self._tts = tts_provider
         self._storage = storage_provider
         self._composer = video_composer
+        self._image_service = image_service
+        self._plan_extractor = plan_extractor
         self._contexts: Dict[str, RealRenderJobContext] = {}
 
         # 출력 디렉토리 생성
@@ -154,10 +173,35 @@ class RealVideoRenderer(VideoRenderer):
         return self._storage
 
     def _get_composer(self) -> VideoComposer:
-        """Video Composer lazy loading."""
+        """Video Composer lazy loading.
+
+        Phase 37: visual_style 설정을 ComposerConfig에 전달.
+        """
         if self._composer is None:
-            self._composer = get_video_composer()
+            from app.services.video_composer import ComposerConfig
+            settings = get_settings()
+            config = ComposerConfig(
+                visual_style=settings.VIDEO_VISUAL_STYLE,
+                fade_duration=settings.VIDEO_FADE_DURATION,
+                kenburns_zoom=settings.VIDEO_KENBURNS_ZOOM,
+                video_width=settings.VIDEO_WIDTH,
+                video_height=settings.VIDEO_HEIGHT,
+                fps=settings.VIDEO_FPS,
+            )
+            self._composer = VideoComposer(config=config)
         return self._composer
+
+    def _get_image_service(self) -> ImageAssetService:
+        """ImageAssetService lazy loading (Phase 37)."""
+        if self._image_service is None:
+            self._image_service = get_image_asset_service()
+        return self._image_service
+
+    def _get_plan_extractor(self) -> VisualPlanExtractor:
+        """VisualPlanExtractor lazy loading (Phase 37)."""
+        if self._plan_extractor is None:
+            self._plan_extractor = get_visual_plan_extractor()
+        return self._plan_extractor
 
     async def execute_step(
         self,
@@ -316,9 +360,43 @@ class RealVideoRenderer(VideoRenderer):
         # 실제 자막 생성은 compose 단계에서 VideoComposer가 처리
 
     async def _render_slides(self, ctx: RealRenderJobContext) -> None:
-        """슬라이드 렌더링 (Composer에서 처리)."""
-        logger.info(f"Slides will be rendered during composition: {ctx.job_id}")
-        # 실제 슬라이드 렌더링은 compose 단계에서 VideoComposer가 처리
+        """슬라이드 렌더링.
+
+        Phase 37: animated 모드에서 씬 이미지 생성.
+        - basic 모드: Composer에서 단색 배경 처리
+        - animated 모드: VisualPlan → ImageAssetService → scene.image_path 설정
+        """
+        if self.config.visual_style != "animated":
+            logger.info(f"Basic mode - slides rendered during composition: {ctx.job_id}")
+            return
+
+        logger.info(f"Animated mode - generating scene images for job: {ctx.job_id}")
+
+        # Phase 37: VisualPlanExtractor로 각 씬의 시각적 계획 추출
+        extractor = self._get_plan_extractor()
+        image_service = self._get_image_service()
+
+        # 이미지 출력 디렉토리 (로컬 임시 폴더)
+        image_dir = ctx.output_dir / "scene_images"
+        image_dir.mkdir(parents=True, exist_ok=True)
+
+        # 각 씬에 대해 VisualPlan 생성 → 이미지 생성
+        for i, scene in enumerate(ctx.scenes):
+            # VisualPlan 추출
+            plan = extractor.extract(scene)
+
+            # 이미지 생성
+            image_path = image_service.generate_scene_image(
+                plan=plan,
+                output_dir=image_dir,
+                scene_index=i,
+            )
+
+            # 씬에 이미지 경로 설정
+            scene.image_path = image_path
+            logger.debug(f"Scene {scene.scene_id} image generated: {image_path}")
+
+        logger.info(f"Generated {len(ctx.scenes)} scene images for job: {ctx.job_id}")
 
     async def _compose_video(self, ctx: RealRenderJobContext) -> None:
         """영상 합성."""

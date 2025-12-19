@@ -208,7 +208,7 @@ class Settings(BaseSettings):
     # Phase 32: Video Rendering 설정
     # =========================================================================
     # TTS Provider 선택 (mock, gtts, polly, gcp)
-    TTS_PROVIDER: str = "mock"
+    TTS_PROVIDER: str = "gtts"
 
     # Storage Provider 선택 (local, s3, minio)
     STORAGE_PROVIDER: str = "local"
@@ -254,6 +254,30 @@ class Settings(BaseSettings):
 
     # 업로드 최대 용량 제한 (bytes) - 기본 100MB
     VIDEO_MAX_UPLOAD_BYTES: int = 104857600
+
+    # =========================================================================
+    # Phase 36: Presigned 업로드 안정화 설정
+    # =========================================================================
+    # 재시도 정책 (5xx, 네트워크 오류에만 적용, 4xx는 즉시 실패)
+    STORAGE_UPLOAD_RETRY_MAX: int = 3  # 최대 재시도 횟수 (총 4번 시도)
+    STORAGE_UPLOAD_RETRY_BASE_SEC: float = 1.0  # exponential backoff 기본 시간
+
+    # ETag 검증 정책 (기본: 엄격 - ETag 없으면 실패)
+    # True로 설정하면 ETag 없이도 업로드 성공으로 처리 (DEV 환경용)
+    STORAGE_ETAG_OPTIONAL: bool = False
+
+    # =========================================================================
+    # Phase 37: Video Visual Style 설정
+    # =========================================================================
+    # 영상 시각 스타일 (basic: 단색 배경+텍스트, animated: 씬 이미지+Ken Burns+fade)
+    VIDEO_VISUAL_STYLE: str = "basic"  # "basic" or "animated"
+
+    # Animated 모드 설정
+    VIDEO_WIDTH: int = 1920  # 영상 너비 (animated 모드)
+    VIDEO_HEIGHT: int = 1080  # 영상 높이 (animated 모드)
+    VIDEO_FPS: int = 30  # 프레임 레이트
+    VIDEO_FADE_DURATION: float = 0.5  # 씬 전환 fade 시간 (초)
+    VIDEO_KENBURNS_ZOOM: float = 1.1  # Ken Burns 줌 비율 (1.0 = 줌 없음)
 
     # =========================================================================
     # Validators: 빈 문자열을 None으로 변환

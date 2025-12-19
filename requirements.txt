@@ -25,3 +25,9 @@ anyio>=4.6.0
 PyMuPDF>=1.24.0
 python-docx>=1.1.0
 olefile>=0.47
+
+# TTS (Phase 32)
+gTTS>=2.5.0
+
+# Image Generation (Phase 37)
+Pillow>=10.0.0
