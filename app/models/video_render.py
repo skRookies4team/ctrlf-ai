@@ -400,3 +400,85 @@ class ScriptGenerateResponse(BaseModel):
 
 # Forward reference 해결
 RenderJobStatusResponse.model_rebuild()
+
+
+# =============================================================================
+# Phase 33: Enhanced Render Job API Models
+# =============================================================================
+
+
+class RenderJobDetailResponse(BaseModel):
+    """렌더 잡 상세 응답 (Phase 33).
+
+    GET /api/videos/{video_id}/render-jobs/{job_id}
+    """
+    job_id: str = Field(..., description="잡 ID")
+    video_id: str = Field(..., description="비디오 ID")
+    script_id: str = Field(..., description="스크립트 ID")
+    status: str = Field(..., description="잡 상태")
+    step: Optional[str] = Field(None, description="현재 진행 단계")
+    progress: int = Field(..., description="진행률 (0-100)")
+    message: str = Field(default="", description="진행 메시지")
+    error_code: Optional[str] = Field(None, description="에러 코드")
+    error_message: Optional[str] = Field(None, description="에러 메시지")
+    assets: Optional[Dict[str, Any]] = Field(None, description="에셋 정보 (SUCCEEDED 시)")
+    created_by: str = Field(default="", description="생성자 ID")
+    created_at: Optional[str] = Field(None, description="생성 시각 (ISO 8601)")
+    started_at: Optional[str] = Field(None, description="시작 시각 (ISO 8601)")
+    finished_at: Optional[str] = Field(None, description="종료 시각 (ISO 8601)")
+
+
+class RenderJobListResponse(BaseModel):
+    """렌더 잡 목록 응답 (Phase 33).
+
+    GET /api/videos/{video_id}/render-jobs
+    """
+    video_id: str = Field(..., description="비디오 ID")
+    jobs: List["RenderJobSummary"] = Field(default_factory=list, description="잡 목록")
+    total: int = Field(..., description="전체 잡 수")
+    limit: int = Field(..., description="조회 제한")
+    offset: int = Field(..., description="오프셋")
+
+
+class RenderJobSummary(BaseModel):
+    """렌더 잡 요약 (목록용)."""
+    job_id: str = Field(..., description="잡 ID")
+    status: str = Field(..., description="잡 상태")
+    progress: int = Field(..., description="진행률")
+    created_at: Optional[str] = Field(None, description="생성 시각")
+    finished_at: Optional[str] = Field(None, description="종료 시각")
+
+
+class PublishedAssetsResponse(BaseModel):
+    """발행된 에셋 응답 (Phase 33).
+
+    GET /api/videos/{video_id}/assets/published
+    """
+    video_id: str = Field(..., description="비디오 ID")
+    published: bool = Field(..., description="발행 여부")
+    video_url: Optional[str] = Field(None, description="비디오 URL")
+    subtitle_url: Optional[str] = Field(None, description="자막 URL")
+    thumbnail_url: Optional[str] = Field(None, description="썸네일 URL")
+    duration_sec: Optional[float] = Field(None, description="영상 길이 (초)")
+    published_at: Optional[str] = Field(None, description="발행 시각 (ISO 8601)")
+    script_id: Optional[str] = Field(None, description="스크립트 ID")
+    job_id: Optional[str] = Field(None, description="잡 ID")
+
+
+class RenderJobCreateResponseV2(BaseModel):
+    """렌더 잡 생성 응답 V2 (Phase 33).
+
+    POST /api/videos/{video_id}/render-jobs
+    - created=true: 새 잡 생성됨 (202)
+    - created=false: 기존 잡 반환됨 (200)
+    """
+    job_id: str = Field(..., description="잡 ID")
+    status: str = Field(..., description="잡 상태")
+    progress: int = Field(default=0, description="진행률")
+    step: Optional[str] = Field(None, description="현재 단계")
+    message: str = Field(default="", description="메시지")
+    created: bool = Field(..., description="새로 생성되었는지 여부")
+
+
+# Forward reference 해결 (Phase 33)
+RenderJobListResponse.model_rebuild()
