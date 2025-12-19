@@ -10,6 +10,8 @@ RAG 디버그 로깅 유틸리티
 4. retrieval_top5 - 검색 결과 상위 5개
 
 사용법:
+    .env 파일에 DEBUG_RAG=1 추가
+    또는
     $env:DEBUG_RAG="1"  # PowerShell
     python chat_cli.py
 
@@ -23,8 +25,17 @@ import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-# DEBUG_RAG 환경변수 체크 (기본 OFF)
-DEBUG_RAG = os.getenv("DEBUG_RAG", "0") == "1"
+# .env 파일에서 환경변수 로드 (dotenv 사용)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv 없으면 스킵
+
+
+def _is_debug_rag_enabled() -> bool:
+    """DEBUG_RAG 환경변수를 동적으로 체크합니다."""
+    return os.getenv("DEBUG_RAG", "0") == "1"
 
 
 def dbg(event: str, request_id: str, **fields: Any) -> None:
@@ -47,7 +58,7 @@ def dbg(event: str, request_id: str, **fields: Any) -> None:
             tool="RAG_INTERNAL",
             reason="키워드 '연차' 감지")
     """
-    if not DEBUG_RAG:
+    if not _is_debug_rag_enabled():
         return
 
     # 로그 데이터 구성
@@ -240,4 +251,4 @@ def is_debug_enabled() -> bool:
     Returns:
         bool: DEBUG_RAG=1이면 True
     """
-    return DEBUG_RAG
+    return _is_debug_rag_enabled()

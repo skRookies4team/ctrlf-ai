@@ -72,19 +72,3 @@ async def get_actor_user_id(
     )
 
 
-def get_optional_user_id_from_request(request: Request) -> Optional[str]:
-    """
-    Request에서 선택적으로 user_id를 추출합니다.
-
-    JWT 미들웨어가 설정한 user_id를 반환하고,
-    없으면 None을 반환합니다 (에러 발생 안 함).
-
-    Args:
-        request: FastAPI Request 객체
-
-    Returns:
-        Optional[str]: user_id 또는 None
-    """
-    if hasattr(request.state, "user_id"):
-        return request.state.user_id
-    return None
