@@ -28,6 +28,12 @@ from typing import Any, Dict, List, Optional
 from app.core.logging import get_logger
 from app.models.video_render import RenderedAssets, RenderStep
 from app.services.video_render_service import VideoRenderer
+from app.services.scene_audio_service import (
+    SceneAudioService,
+    SceneAudioResult,
+    generate_srt,
+    get_scene_audio_service,
+)
 
 logger = get_logger(__name__)
 
@@ -61,6 +67,10 @@ class RenderJobContext:
     """렌더 잡 컨텍스트.
 
     파이프라인 실행 중 중간 결과를 저장합니다.
+
+    Phase 40 업데이트:
+    - scene_audio_results: 씬별 오디오 결과 (문장 단위 TTS)
+    - captions_json: 캡션 타임라인 (JSON)
     """
     job_id: str
     script_json: Dict[str, Any]
@@ -76,9 +86,17 @@ class RenderJobContext:
     thumbnail_path: Optional[str] = None
     duration_sec: float = 0.0
 
+    # Phase 40: 씬별 오디오/캡션 결과
+    scene_audio_results: List[Any] = None  # List[SceneAudioResult]
+    captions_json: List[Dict[str, Any]] = None  # 전체 캡션 타임라인
+
     def __post_init__(self):
         if self.slides_paths is None:
             self.slides_paths = []
+        if self.scene_audio_results is None:
+            self.scene_audio_results = []
+        if self.captions_json is None:
+            self.captions_json = []
 
 
 # =============================================================================
@@ -98,10 +116,22 @@ class MVPVideoRenderer(VideoRenderer):
         service.set_renderer(renderer)
     """
 
-    def __init__(self, config: Optional[RendererConfig] = None) -> None:
-        """렌더러 초기화."""
+    def __init__(
+        self,
+        config: Optional[RendererConfig] = None,
+        scene_audio_service: Optional[SceneAudioService] = None,
+    ) -> None:
+        """렌더러 초기화.
+
+        Args:
+            config: 렌더러 설정
+            scene_audio_service: Phase 40 - 씬 오디오 서비스 (없으면 싱글톤 사용)
+        """
         self.config = config or RendererConfig()
         self._contexts: Dict[str, RenderJobContext] = {}
+
+        # Phase 40: 씬 오디오 서비스
+        self._scene_audio = scene_audio_service or get_scene_audio_service()
 
         # 출력 디렉토리 생성
         self._output_dir = Path(self.config.output_dir)
@@ -206,46 +236,162 @@ class MVPVideoRenderer(VideoRenderer):
         logger.info(f"Script validated for job: {ctx.job_id}")
 
     async def _generate_tts(self, ctx: RenderJobContext) -> None:
-        """TTS 음성 생성."""
-        logger.info(f"Generating TTS for job: {ctx.job_id}")
+        """TTS 음성 생성.
 
-        # 나레이션 텍스트 추출
-        narration_text = self._extract_narration(ctx.script_json)
+        Phase 40 업데이트:
+        - 씬별로 문장 단위 TTS 생성 + concat
+        - 오디오 길이 기반 씬 duration 확정 + 패딩
+        - 캡션 타임라인 생성 (JSON)
+        """
+        logger.info(f"Generating TTS for job: {ctx.job_id} (Phase 40: sentence-level)")
 
-        if self.config.mock_mode or not self._has_gtts:
-            # Mock 모드: 빈 오디오 파일 생성
-            audio_path = ctx.output_dir / "audio.mp3"
-            audio_path.write_bytes(b"")  # Empty file
-            ctx.tts_audio_path = str(audio_path)
-            ctx.duration_sec = 10.0  # Mock duration
-            logger.info(f"Mock TTS created: {audio_path}")
+        # 씬 정보 추출
+        scenes = self._extract_scenes(ctx.script_json)
+
+        if not scenes:
+            # 씬 없으면 단순 narration 추출
+            narration = self._extract_narration(ctx.script_json)
+            scenes = [{"scene_id": "scene-000", "narration": narration}]
+
+        # 씬 ID 보장
+        for i, scene in enumerate(scenes):
+            if "scene_id" not in scene:
+                scene["scene_id"] = f"scene-{i:03d}"
+            if "narration" not in scene:
+                # caption 또는 text를 narration으로 사용
+                scene["narration"] = scene.get("caption", scene.get("text", ""))
+
+        # Phase 40: SceneAudioService로 씬별 오디오 생성
+        scene_audio_results = await self._scene_audio.generate_scene_audios(
+            scenes=scenes,
+            output_dir=ctx.output_dir,
+        )
+
+        # 결과 저장
+        ctx.scene_audio_results = scene_audio_results
+
+        # 총 duration 계산
+        total_duration = sum(r.duration_sec for r in scene_audio_results)
+        ctx.duration_sec = total_duration
+
+        # 전체 캡션 타임라인 생성
+        all_captions = []
+        for result in scene_audio_results:
+            all_captions.extend([c.to_dict() for c in result.captions])
+        ctx.captions_json = all_captions
+
+        # 전체 오디오 concat (씬별 오디오 → 하나의 파일)
+        # 씬이 1개면 그 파일을 사용, 여러 개면 concat
+        if len(scene_audio_results) == 1:
+            ctx.tts_audio_path = scene_audio_results[0].audio_path
         else:
-            # 실제 TTS 생성
-            from gtts import gTTS
+            # FFmpeg로 전체 씬 오디오 concat
+            scene_audio_paths = [r.audio_path for r in scene_audio_results]
+            concat_path = ctx.output_dir / "audio_full.mp3"
+            success = await self._concat_scene_audios(scene_audio_paths, concat_path)
+            if success:
+                ctx.tts_audio_path = str(concat_path)
+            else:
+                # 실패 시 첫 번째 파일 사용
+                ctx.tts_audio_path = scene_audio_results[0].audio_path
 
-            tts = gTTS(text=narration_text, lang=self.config.tts_lang)
-            audio_path = ctx.output_dir / "audio.mp3"
-            tts.save(str(audio_path))
-            ctx.tts_audio_path = str(audio_path)
+        logger.info(
+            f"TTS generated (Phase 40): job={ctx.job_id}, "
+            f"scenes={len(scene_audio_results)}, "
+            f"total_duration={total_duration:.2f}s, "
+            f"captions={len(all_captions)}"
+        )
 
-            # 오디오 길이 계산
-            ctx.duration_sec = await self._get_audio_duration(str(audio_path))
-            logger.info(f"TTS generated: {audio_path}, duration={ctx.duration_sec}s")
+    async def _concat_scene_audios(
+        self, audio_paths: List[str], output_path: Path
+    ) -> bool:
+        """씬 오디오들을 하나로 합칩니다 (Phase 40).
+
+        Args:
+            audio_paths: 씬 오디오 파일 경로들
+            output_path: 출력 파일 경로
+
+        Returns:
+            bool: 성공 여부
+        """
+        import subprocess
+        import tempfile
+
+        try:
+            # concat list 파일 생성
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False
+            ) as f:
+                for path in audio_paths:
+                    if Path(path).exists():
+                        escaped_path = str(path).replace("'", "'\\''")
+                        f.write(f"file '{escaped_path}'\n")
+                list_file = f.name
+
+            # FFmpeg concat
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", list_file,
+                "-c", "copy",
+                str(output_path),
+            ]
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, timeout=120),
+            )
+
+            os.unlink(list_file)
+
+            return result.returncode == 0
+
+        except Exception as e:
+            logger.warning(f"Scene audio concat failed: {e}")
+            return False
 
     async def _generate_subtitle(self, ctx: RenderJobContext) -> None:
-        """자막 파일 생성 (SRT 포맷)."""
-        logger.info(f"Generating subtitle for job: {ctx.job_id}")
+        """자막 파일 생성 (SRT + JSON 포맷).
 
-        # 자막 텍스트 추출
-        captions = self._extract_captions(ctx.script_json)
+        Phase 40 업데이트:
+        - ctx.captions_json에서 타임라인 사용 (문장 단위 정확한 타이밍)
+        - JSON 파일 + SRT 파일 모두 생성
+        """
+        logger.info(f"Generating subtitle for job: {ctx.job_id} (Phase 40)")
 
-        # SRT 생성
-        srt_content = self._generate_srt(captions, ctx.duration_sec)
+        # Phase 40: captions_json이 있으면 사용
+        if ctx.captions_json:
+            # JSON 타임라인 저장
+            import json
+            captions_json_path = ctx.output_dir / "captions.json"
+            captions_json_path.write_text(
+                json.dumps(ctx.captions_json, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(f"Caption JSON saved: {captions_json_path}")
+
+            # SRT 생성 (CaptionEntry 리스트로 변환)
+            from app.services.scene_audio_service import CaptionEntry
+            caption_entries = [
+                CaptionEntry(start=c["start"], end=c["end"], text=c["text"])
+                for c in ctx.captions_json
+            ]
+            srt_content = generate_srt(caption_entries)
+        else:
+            # Fallback: 기존 방식 (균등 분할)
+            captions = self._extract_captions(ctx.script_json)
+            srt_content = self._generate_srt(captions, ctx.duration_sec)
+
+        # SRT 저장
         subtitle_path = ctx.output_dir / "subtitle.srt"
         subtitle_path.write_text(srt_content, encoding="utf-8")
 
         ctx.subtitle_path = str(subtitle_path)
-        logger.info(f"Subtitle generated: {subtitle_path}")
+        logger.info(
+            f"Subtitle generated (Phase 40): {subtitle_path}, "
+            f"entries={len(ctx.captions_json) if ctx.captions_json else 0}"
+        )
 
     async def _render_slides(self, ctx: RenderJobContext) -> None:
         """슬라이드 이미지 생성."""
