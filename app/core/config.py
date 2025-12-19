@@ -280,6 +280,21 @@ class Settings(BaseSettings):
     VIDEO_KENBURNS_ZOOM: float = 1.1  # Ken Burns 줌 비율 (1.0 = 줌 없음)
 
     # =========================================================================
+    # Phase 38: Script Snapshot on Job Start
+    # =========================================================================
+    # Job 시작 시 백엔드에서 render-spec을 조회하여 스냅샷으로 저장
+    # 이후 TTS/렌더/업로드는 이 스냅샷만 사용 (편집 후에도 기존 잡은 영향 없음)
+
+    # 백엔드 내부 API 인증 토큰 (X-Internal-Token 헤더)
+    BACKEND_INTERNAL_TOKEN: Optional[str] = None
+
+    # 백엔드 API 타임아웃 (초)
+    BACKEND_TIMEOUT_SEC: float = 30.0
+
+    # 씬 기본 duration (duration_sec <= 0일 때 사용)
+    SCENE_DEFAULT_DURATION_SEC: float = 5.0
+
+    # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
     # =========================================================================
     @field_validator(

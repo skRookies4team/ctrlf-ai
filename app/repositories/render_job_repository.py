@@ -43,6 +43,7 @@ class RenderJobEntity:
         error_code: 에러 코드 (nullable)
         error_message: 에러 메시지 (nullable)
         assets: 에셋 JSON (video_url, subtitle_url, thumbnail_url)
+        render_spec_json: Phase 38 - 렌더 스펙 스냅샷 (Job 시작 시 저장)
         created_by: 생성자 ID
         created_at: 생성 시각
         updated_at: 수정 시각
@@ -62,6 +63,7 @@ class RenderJobEntity:
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
         assets: Optional[Dict[str, Any]] = None,
+        render_spec_json: Optional[Dict[str, Any]] = None,
         created_by: str = "",
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
@@ -78,6 +80,7 @@ class RenderJobEntity:
         self.error_code = error_code
         self.error_message = error_message
         self.assets = assets or {}
+        self.render_spec_json = render_spec_json
         self.created_by = created_by
         self.created_at = created_at or datetime.utcnow()
         self.updated_at = updated_at or datetime.utcnow()
@@ -92,6 +95,10 @@ class RenderJobEntity:
         """종료 상태인지 확인."""
         return self.status in ("SUCCEEDED", "FAILED", "CANCELED")
 
+    def has_render_spec(self) -> bool:
+        """렌더 스펙 스냅샷이 있는지 확인 (Phase 38)."""
+        return self.render_spec_json is not None and len(self.render_spec_json) > 0
+
     def to_dict(self) -> Dict[str, Any]:
         """딕셔너리로 변환."""
         return {
@@ -105,6 +112,7 @@ class RenderJobEntity:
             "error_code": self.error_code,
             "error_message": self.error_message,
             "assets": self.assets,
+            "render_spec_json": self.render_spec_json,
             "created_by": self.created_by,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -118,7 +126,7 @@ class RenderJobEntity:
         (
             job_id, video_id, script_id, status, step,
             progress, message, error_code, error_message, assets_json,
-            created_by, created_at, updated_at, started_at, finished_at
+            render_spec_json_str, created_by, created_at, updated_at, started_at, finished_at
         ) = row
 
         return cls(
@@ -132,6 +140,7 @@ class RenderJobEntity:
             error_code=error_code,
             error_message=error_message,
             assets=json.loads(assets_json) if assets_json else {},
+            render_spec_json=json.loads(render_spec_json_str) if render_spec_json_str else None,
             created_by=created_by or "",
             created_at=datetime.fromisoformat(created_at) if created_at else None,
             updated_at=datetime.fromisoformat(updated_at) if updated_at else None,
@@ -215,6 +224,7 @@ class RenderJobRepository:
             error_code TEXT,
             error_message TEXT,
             assets TEXT,
+            render_spec_json TEXT,
             created_by TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -238,7 +248,25 @@ class RenderJobRepository:
             cursor.execute(create_index_sql)
             cursor.execute(create_status_index_sql)
 
+        # Phase 38: 기존 DB에 render_spec_json 컬럼 추가 (마이그레이션)
+        self._migrate_add_render_spec_json()
+
         logger.info(f"RenderJobRepository initialized: {self._db_path}")
+
+    def _migrate_add_render_spec_json(self) -> None:
+        """Phase 38: render_spec_json 컬럼 마이그레이션."""
+        try:
+            with self._get_cursor() as cursor:
+                # 컬럼 존재 여부 확인
+                cursor.execute("PRAGMA table_info(render_jobs)")
+                columns = [row[1] for row in cursor.fetchall()]
+                if "render_spec_json" not in columns:
+                    cursor.execute(
+                        "ALTER TABLE render_jobs ADD COLUMN render_spec_json TEXT"
+                    )
+                    logger.info("Migration: Added render_spec_json column to render_jobs")
+        except Exception as e:
+            logger.warning(f"Migration check failed (may already exist): {e}")
 
     def save(self, job: RenderJobEntity) -> None:
         """잡 저장 (upsert)."""
@@ -248,8 +276,8 @@ class RenderJobRepository:
         INSERT OR REPLACE INTO render_jobs (
             job_id, video_id, script_id, status, step,
             progress, message, error_code, error_message, assets,
-            created_by, created_at, updated_at, started_at, finished_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            render_spec_json, created_by, created_at, updated_at, started_at, finished_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         with self._get_cursor() as cursor:
@@ -264,6 +292,7 @@ class RenderJobRepository:
                 job.error_code,
                 job.error_message,
                 json.dumps(job.assets) if job.assets else None,
+                json.dumps(job.render_spec_json) if job.render_spec_json else None,
                 job.created_by,
                 job.created_at.isoformat() if job.created_at else None,
                 job.updated_at.isoformat() if job.updated_at else None,
@@ -278,7 +307,7 @@ class RenderJobRepository:
         sql = """
         SELECT job_id, video_id, script_id, status, step,
                progress, message, error_code, error_message, assets,
-               created_by, created_at, updated_at, started_at, finished_at
+               render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
         WHERE job_id = ?
         """
@@ -300,7 +329,7 @@ class RenderJobRepository:
         sql = """
         SELECT job_id, video_id, script_id, status, step,
                progress, message, error_code, error_message, assets,
-               created_by, created_at, updated_at, started_at, finished_at
+               render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
         WHERE video_id = ?
         ORDER BY created_at DESC
@@ -319,7 +348,7 @@ class RenderJobRepository:
         sql = """
         SELECT job_id, video_id, script_id, status, step,
                progress, message, error_code, error_message, assets,
-               created_by, created_at, updated_at, started_at, finished_at
+               render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
         WHERE video_id = ? AND status IN ('PENDING', 'RUNNING')
         ORDER BY created_at DESC
@@ -338,7 +367,7 @@ class RenderJobRepository:
         sql = """
         SELECT job_id, video_id, script_id, status, step,
                progress, message, error_code, error_message, assets,
-               created_by, created_at, updated_at, started_at, finished_at
+               render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
         WHERE video_id = ? AND status = 'SUCCEEDED'
         ORDER BY finished_at DESC
@@ -357,7 +386,7 @@ class RenderJobRepository:
         sql = """
         SELECT job_id, video_id, script_id, status, step,
                progress, message, error_code, error_message, assets,
-               created_by, created_at, updated_at, started_at, finished_at
+               render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
         WHERE video_id = ? AND status = 'SUCCEEDED' AND assets IS NOT NULL
         ORDER BY finished_at DESC
@@ -451,6 +480,39 @@ class RenderJobRepository:
         with self._get_cursor() as cursor:
             cursor.execute(sql, (error_code, error_message, now, now, job_id))
             return cursor.rowcount > 0
+
+    def update_render_spec(
+        self,
+        job_id: str,
+        render_spec_json: Dict[str, Any],
+    ) -> bool:
+        """Phase 38: 잡의 render_spec_json 업데이트.
+
+        Job 시작 시 백엔드에서 조회한 render-spec을 스냅샷으로 저장합니다.
+
+        Args:
+            job_id: 잡 ID
+            render_spec_json: 렌더 스펙 JSON
+
+        Returns:
+            bool: 업데이트 성공 여부
+        """
+        sql = """
+        UPDATE render_jobs
+        SET render_spec_json = ?, updated_at = ?
+        WHERE job_id = ?
+        """
+
+        with self._get_cursor() as cursor:
+            cursor.execute(sql, (
+                json.dumps(render_spec_json),
+                datetime.utcnow().isoformat(),
+                job_id,
+            ))
+            updated = cursor.rowcount > 0
+            if updated:
+                logger.info(f"Render spec saved: job_id={job_id}")
+            return updated
 
     def delete(self, job_id: str) -> bool:
         """잡 삭제."""
