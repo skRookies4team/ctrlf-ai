@@ -134,3 +134,7 @@ prompt.txt
 /DEVELOPMENT_REPORT*.md
 .claude/
 video_output/
+
+# Test output
+test_output/
+test_output_basic/
