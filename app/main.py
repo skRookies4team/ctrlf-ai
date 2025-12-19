@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video, video_render, video_render_phase33, ws_render_progress
+from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, script_editor, search, video, video_render, video_render_phase33, ws_render_progress
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -201,3 +201,8 @@ app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
 # - POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel: 잡 취소
 # - GET /api/v2/videos/{video_id}/assets/published: 발행된 에셋 조회
 app.include_router(video_render_phase33.router, tags=["Video Render V2"])
+
+# Phase 42: Script Editor API (스크립트 편집)
+# - GET /api/scripts/{script_id}/editor: 편집용 뷰 조회
+# - PATCH /api/scripts/{script_id}/editor: 씬 부분 수정
+app.include_router(script_editor.router, tags=["Script Editor"])
