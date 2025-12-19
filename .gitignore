@@ -138,3 +138,5 @@ video_output/
 # Test output
 test_output/
 test_output_basic/
+test_output_script/
+script.json
