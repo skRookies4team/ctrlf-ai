@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, script_editor, search, video, video_render, video_render_phase33, ws_render_progress
+from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, internal_rag, quiz_generate, script_editor, video, video_render, video_render_phase33, ws_render_progress
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -141,19 +141,14 @@ app.include_router(health.router, prefix="", tags=["Health"])
 
 # AI API routers
 # - POST /ai/chat/messages: AI chat response generation
-# - POST /ai/rag/process: RAG document processing
 # - POST /ai/gap/policy-edu/suggestions: RAG Gap 보완 제안 (Phase 15)
 # - POST /ai/quiz/generate: 퀴즈 자동 생성 (Phase 16)
-# - POST /search: 표준 RAG 검색 API
 # - POST /ai/faq/generate: FAQ 초안 생성 (Phase 18)
-# - POST /ingest: 문서 인덱싱 API (Phase 19)
+# NOTE: /ai/rag/process, /search, /ingest 제거됨 (Phase 25 internal_rag로 대체)
 app.include_router(chat.router, tags=["Chat"])
-app.include_router(rag.router, tags=["RAG"])
 app.include_router(gap_suggestions.router, prefix="/ai", tags=["Gap Suggestions"])
 app.include_router(quiz_generate.router, prefix="/ai", tags=["Quiz Generate"])
-app.include_router(search.router, tags=["Search"])
 app.include_router(faq.router, prefix="/ai", tags=["FAQ"])
-app.include_router(ingest.router, tags=["Ingest"])
 
 # Phase 22: Video Progress API (교육영상 상태전이 서버 검증)
 # - POST /api/video/play/start: 영상 재생 시작
