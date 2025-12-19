@@ -61,9 +61,26 @@ http://localhost:8000/docs
 
 ### CLI 도구 (권장)
 
+`chat_cli.py`는 실제 서비스(vLLM, Milvus, RAGFlow)를 사용하여 챗봇을 테스트합니다.
+
+```
+chat_cli.py → localhost:8000 (FastAPI) → 실제 서비스들
+                                         ├── vLLM (LLM 응답 생성)
+                                         ├── Milvus (벡터 검색)
+                                         └── RAGFlow (RAG 파이프라인)
+```
+
+**사용 방법:**
+
 ```bash
+# 1. 서버 실행 (터미널 1)
+uvicorn app.main:app --reload --port 8000
+
+# 2. CLI 테스트 (터미널 2)
 python chat_cli.py
 ```
+
+**실행 예시:**
 
 ```
 ==================================================
@@ -80,6 +97,8 @@ CTRL+F AI 채팅 테스트 (종료: q 또는 Ctrl+C)
 질문> q
 종료합니다.
 ```
+
+> **참고**: `.env`의 `AI_ENV=real` 설정 시 실제 서비스 연동, `AI_ENV=mock` 설정 시 Mock 응답
 
 ### curl
 
