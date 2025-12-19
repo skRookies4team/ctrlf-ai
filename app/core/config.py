@@ -216,6 +216,15 @@ class Settings(BaseSettings):
     # TTS Provider 선택 (mock, gtts, polly, gcp)
     TTS_PROVIDER: str = "gtts"
 
+    # =========================================================================
+    # Phase 40: Scene Audio 설정 (문장 단위 TTS + 캡션 타임라인)
+    # =========================================================================
+    # 씬 끝 무음 패딩 시간 (초)
+    SCENE_SILENCE_PADDING_SEC: float = 0.5
+
+    # TTS 문장 최대 길이 (초과 시 분할)
+    TTS_MAX_SENTENCE_LENGTH: int = 300
+
     # Storage Provider 선택 (local, s3, minio)
     STORAGE_PROVIDER: str = "local"
 
