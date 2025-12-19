@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video, video_render
+from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video, video_render, ws_render_progress
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -186,3 +186,7 @@ app.include_router(admin.router, tags=["Admin"])
 # - POST /api/render-jobs/{job_id}/cancel: 잡 취소
 # - GET /api/videos/{video_id}/asset: 비디오 에셋 조회
 app.include_router(video_render.router, tags=["Video Render"])
+
+# Phase 32: WebSocket Render Progress (실시간 렌더 진행률)
+# - WS /ws/videos/{video_id}/render-progress: 렌더 진행률 실시간 구독
+app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])

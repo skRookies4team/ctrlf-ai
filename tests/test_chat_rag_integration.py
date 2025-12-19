@@ -488,6 +488,7 @@ async def test_chat_service_llm_only_route(
 
     Given:
         - IntentService가 route=LLM_ONLY 반환
+        - RouterOrchestrator 비활성화
 
     Then:
         - RAG 검색이 호출되지 않음
@@ -503,16 +504,18 @@ async def test_chat_service_llm_only_route(
         route=RouteType.LLM_ONLY,
     )
 
-    service = ChatService(
-        ragflow_client=fake_ragflow,
-        llm_client=fake_llm,
-        intent_service=fake_intent,
-    )
+    # Phase 22: RouterOrchestrator 비활성화 (ROUTER_ORCHESTRATOR_ENABLED=False)
+    # IntentService의 LLM_ONLY 결과가 그대로 사용되도록 함
+    with patch("app.services.chat_service.get_settings") as mock_settings:
+        mock_settings.return_value.ROUTER_ORCHESTRATOR_ENABLED = False
+        mock_settings.return_value.llm_base_url = ""
+        mock_settings.return_value.MILVUS_ENABLED = False
 
-    # Phase 22: RouterOrchestrator 사용 안 함 (LLM URL 빈 값)
-    # settings.llm_base_url이 비어있으면 RouterOrchestrator를 사용하지 않음
-    with patch("app.core.config.get_settings") as mock_settings:
-        mock_settings.return_value.llm_base_url = ""  # RouterOrchestrator 비활성화
+        service = ChatService(
+            ragflow_client=fake_ragflow,
+            llm_client=fake_llm,
+            intent_service=fake_intent,
+        )
 
         # Act
         response = await service.handle_chat(sample_chat_request)

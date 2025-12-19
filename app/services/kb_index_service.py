@@ -1,5 +1,5 @@
 """
-Phase 28: KB Index Service
+Phase 28/29: KB Index Service
 
 승인된 교육 영상 스크립트를 KB(Knowledge Base)에 적재하는 서비스.
 
@@ -9,17 +9,25 @@ Phase 28: KB Index Service
 - 최신 버전 1개만 ACTIVE, 이전 버전은 ARCHIVED/삭제
 - EXPIRED 교육은 적재/검색 제외
 
+Phase 29 추가:
+- 토큰 기반 청킹: 긴 씬은 N 토큰 단위로 분할
+- chunk_id 규칙: script_id:chapter:scene:part
+- source_type: "TRAINING_SCRIPT"로 RAG 근거 구분
+
 주요 기능:
 - index_published_video(): 발행된 영상의 스크립트를 KB에 적재
 - build_chunks_from_script(): 스크립트 JSON → 청크 리스트 변환
 - archive_previous_version(): 이전 버전 아카이브 처리
+- _split_content_by_tokens(): 긴 내용 토큰 기반 분할 (Phase 29)
 """
 
 import asyncio
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.video_render import (
     KBChunk,
@@ -58,10 +66,22 @@ class KBIndexService:
         self._milvus = milvus_client
         self._mock_mode = milvus_client is None
 
+        # Phase 29: 토큰 분할 설정 로드
+        settings = get_settings()
+        self._max_tokens = settings.KB_CHUNK_MAX_TOKENS
+        self._min_tokens = settings.KB_CHUNK_MIN_TOKENS
+        self._tokenizer_type = settings.KB_CHUNK_TOKENIZER
+        self._chars_per_token = settings.KB_CHUNK_CHARS_PER_TOKEN
+
         if self._mock_mode:
             logger.info("KBIndexService initialized in mock mode (no Milvus client)")
         else:
             logger.info("KBIndexService initialized with Milvus client")
+
+        logger.info(
+            f"KBIndexService chunk settings: max_tokens={self._max_tokens}, "
+            f"min_tokens={self._min_tokens}, tokenizer={self._tokenizer_type}"
+        )
 
     # =========================================================================
     # Main Entry Point
@@ -213,7 +233,8 @@ class KBIndexService:
 
                 scenes = chapter.get("scenes", [])
                 for scene in scenes:
-                    chunk = self._build_chunk_from_scene(
+                    # Phase 29: 씬에서 여러 청크 생성 가능 (토큰 분할)
+                    scene_chunks = self._build_chunks_from_scene(
                         script=script,
                         chapter_order=chapter_order,
                         chapter_title=chapter_title,
@@ -222,13 +243,13 @@ class KBIndexService:
                         year=year,
                         training_id=training_id,
                     )
-                    if chunk:
-                        chunks.append(chunk)
+                    chunks.extend(scene_chunks)
         else:
             # 간단한 scenes만 있는 경우
             scenes = raw_json.get("scenes", [])
             for scene in scenes:
-                chunk = self._build_chunk_from_scene(
+                # Phase 29: 씬에서 여러 청크 생성 가능 (토큰 분할)
+                scene_chunks = self._build_chunks_from_scene(
                     script=script,
                     chapter_order=1,
                     chapter_title="Main",
@@ -237,8 +258,7 @@ class KBIndexService:
                     year=year,
                     training_id=training_id,
                 )
-                if chunk:
-                    chunks.append(chunk)
+                chunks.extend(scene_chunks)
 
         return chunks
 
@@ -252,7 +272,47 @@ class KBIndexService:
         year: Optional[int],
         training_id: Optional[str],
     ) -> Optional[KBChunk]:
-        """씬에서 청크를 생성합니다."""
+        """씬에서 단일 청크를 생성합니다 (하위 호환성 유지).
+
+        Note: 토큰 기반 분할은 _build_chunks_from_scene()을 사용하세요.
+        """
+        chunks = self._build_chunks_from_scene(
+            script=script,
+            chapter_order=chapter_order,
+            chapter_title=chapter_title,
+            scene=scene,
+            course_type=course_type,
+            year=year,
+            training_id=training_id,
+        )
+        return chunks[0] if chunks else None
+
+    def _build_chunks_from_scene(
+        self,
+        script: VideoScript,
+        chapter_order: int,
+        chapter_title: str,
+        scene: Dict[str, Any],
+        course_type: str,
+        year: Optional[int],
+        training_id: Optional[str],
+    ) -> List[KBChunk]:
+        """씬에서 청크 리스트를 생성합니다 (Phase 29: 토큰 기반 분할 지원).
+
+        긴 내용은 토큰 수 기준으로 분할하여 여러 청크를 생성합니다.
+
+        Args:
+            script: 스크립트
+            chapter_order: 챕터 순서
+            chapter_title: 챕터 제목
+            scene: 씬 데이터
+            course_type: 교육 유형
+            year: 교육 연도
+            training_id: 교육 ID
+
+        Returns:
+            List[KBChunk]: 청크 리스트 (분할된 경우 여러 개)
+        """
         scene_order = scene.get("scene_id", scene.get("order", 0))
         scene_purpose = scene.get("purpose", "")
 
@@ -273,31 +333,214 @@ class KBIndexService:
         content = "\n".join(content_parts).strip()
 
         if not content:
-            return None
-
-        # chunk_id 생성: script_id:chapter:scene
-        chunk_id = f"{script.script_id}:{chapter_order}:{scene_order}"
+            return []
 
         # source_refs 처리
         source_refs = scene.get("source_refs")
 
-        return KBChunk(
-            chunk_id=chunk_id,
-            video_id=script.video_id,
-            script_id=script.script_id,
-            chapter_order=chapter_order,
-            scene_order=scene_order,
-            chapter_title=chapter_title,
-            scene_purpose=scene_purpose,
-            content=content,
-            source_refs=source_refs,
-            metadata={
-                "course_type": course_type,
-                "year": year,
-                "training_id": training_id,
-                "domain": "TRAINING",
-            },
+        # Phase 29: 토큰 기반 분할
+        content_parts_split = self._split_content_by_tokens(content)
+
+        chunks: List[KBChunk] = []
+
+        for part_index, part_content in enumerate(content_parts_split):
+            # chunk_id 생성: 분할 여부에 따라 다른 형식
+            if len(content_parts_split) == 1:
+                # 분할 없음: script_id:chapter:scene
+                chunk_id = f"{script.script_id}:{chapter_order}:{scene_order}"
+                part_idx = None
+            else:
+                # 분할됨: script_id:chapter:scene:part
+                chunk_id = f"{script.script_id}:{chapter_order}:{scene_order}:{part_index}"
+                part_idx = part_index
+
+            chunk = KBChunk(
+                chunk_id=chunk_id,
+                video_id=script.video_id,
+                script_id=script.script_id,
+                chapter_order=chapter_order,
+                scene_order=scene_order,
+                chapter_title=chapter_title,
+                scene_purpose=scene_purpose,
+                content=part_content,
+                source_refs=source_refs,
+                metadata={
+                    "course_type": course_type,
+                    "year": year,
+                    "training_id": training_id,
+                    "domain": "TRAINING",
+                },
+                part_index=part_idx,
+                source_type="TRAINING_SCRIPT",
+            )
+            chunks.append(chunk)
+
+        return chunks
+
+    # =========================================================================
+    # Phase 29: 토큰 기반 분할
+    # =========================================================================
+
+    def _estimate_tokens(self, text: str) -> int:
+        """텍스트의 토큰 수를 추정합니다.
+
+        Args:
+            text: 텍스트
+
+        Returns:
+            int: 추정 토큰 수
+        """
+        if self._tokenizer_type == "tiktoken":
+            # tiktoken 사용 (설치되어 있을 경우)
+            try:
+                import tiktoken
+                enc = tiktoken.get_encoding("cl100k_base")
+                return len(enc.encode(text))
+            except ImportError:
+                logger.warning("tiktoken not installed, falling back to char estimation")
+                pass
+
+        # 문자 기반 근사
+        return int(len(text) / self._chars_per_token)
+
+    def _split_content_by_tokens(self, content: str) -> List[str]:
+        """내용을 토큰 수 기준으로 분할합니다.
+
+        문장 경계를 존중하여 분할합니다.
+
+        Args:
+            content: 원본 내용
+
+        Returns:
+            List[str]: 분할된 내용 리스트
+        """
+        estimated_tokens = self._estimate_tokens(content)
+
+        # 토큰 수가 최대 이하면 분할 없이 반환
+        if estimated_tokens <= self._max_tokens:
+            return [content]
+
+        # 문장 경계로 분할
+        sentences = self._split_into_sentences(content)
+
+        if not sentences:
+            return [content]
+
+        parts: List[str] = []
+        current_part: List[str] = []
+        current_tokens = 0
+
+        for sentence in sentences:
+            sentence_tokens = self._estimate_tokens(sentence)
+
+            # 단일 문장이 max_tokens를 초과하면 강제 분할
+            if sentence_tokens > self._max_tokens:
+                # 현재 파트가 있으면 먼저 저장
+                if current_part:
+                    parts.append(" ".join(current_part))
+                    current_part = []
+                    current_tokens = 0
+
+                # 긴 문장 강제 분할
+                forced_parts = self._force_split_long_text(sentence)
+                parts.extend(forced_parts)
+                continue
+
+            # 현재 파트에 추가 시 max_tokens 초과 여부 확인
+            if current_tokens + sentence_tokens > self._max_tokens:
+                # 현재 파트 저장
+                if current_part:
+                    parts.append(" ".join(current_part))
+                current_part = [sentence]
+                current_tokens = sentence_tokens
+            else:
+                current_part.append(sentence)
+                current_tokens += sentence_tokens
+
+        # 마지막 파트 저장
+        if current_part:
+            parts.append(" ".join(current_part))
+
+        # 너무 작은 파트 병합
+        merged_parts = self._merge_small_parts(parts)
+
+        logger.debug(
+            f"Split content: {estimated_tokens} tokens -> {len(merged_parts)} parts"
         )
+
+        return merged_parts if merged_parts else [content]
+
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """텍스트를 문장 단위로 분할합니다.
+
+        한국어와 영어 문장 경계를 모두 지원합니다.
+
+        Args:
+            text: 원본 텍스트
+
+        Returns:
+            List[str]: 문장 리스트
+        """
+        # 문장 구분 패턴: .!? 또는 한국어 마침표/물음표/느낌표 후 공백 또는 줄바꿈
+        pattern = r'(?<=[.!?。！？])\s+'
+        sentences = re.split(pattern, text)
+        return [s.strip() for s in sentences if s.strip()]
+
+    def _force_split_long_text(self, text: str) -> List[str]:
+        """긴 텍스트를 강제로 분할합니다.
+
+        문장 경계가 없는 매우 긴 텍스트를 처리합니다.
+
+        Args:
+            text: 긴 텍스트
+
+        Returns:
+            List[str]: 분할된 텍스트 리스트
+        """
+        # 최대 문자 수 계산 (토큰 * 문자/토큰 비율)
+        max_chars = int(self._max_tokens * self._chars_per_token)
+
+        parts = []
+        while len(text) > max_chars:
+            # 최대 위치 근처에서 공백 찾기
+            split_pos = text.rfind(" ", max_chars // 2, max_chars)
+            if split_pos == -1:
+                split_pos = max_chars
+
+            parts.append(text[:split_pos].strip())
+            text = text[split_pos:].strip()
+
+        if text:
+            parts.append(text)
+
+        return parts
+
+    def _merge_small_parts(self, parts: List[str]) -> List[str]:
+        """너무 작은 파트를 이전 파트와 병합합니다.
+
+        Args:
+            parts: 파트 리스트
+
+        Returns:
+            List[str]: 병합된 파트 리스트
+        """
+        if len(parts) <= 1:
+            return parts
+
+        merged: List[str] = []
+
+        for part in parts:
+            part_tokens = self._estimate_tokens(part)
+
+            if (merged and
+                part_tokens < self._min_tokens and
+                self._estimate_tokens(merged[-1]) + part_tokens <= self._max_tokens):
+                # 이전 파트와 병합
+                merged[-1] = merged[-1] + " " + part
+            else:
+                merged.append(part)
+
+        return merged
 
     # =========================================================================
     # Vector DB Operations

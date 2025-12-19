@@ -56,13 +56,10 @@ def reset_store():
 @pytest.fixture
 def video_service() -> VideoProgressService:
     """테스트용 VideoProgressService 인스턴스."""
-    # Phase 22 수정: surge_time_window, surge_max_increase 제거
-    # 새 파라미터: final_segment_min_seconds, surge_grace_seconds
+    # 완료 판정: 100%면 완료
     return VideoProgressService(
         store=VideoProgressStore(),
-        completion_threshold=95.0,
-        final_segment_ratio=0.05,
-        final_segment_min_seconds=30.0,  # max(5%, 30초)
+        completion_threshold=100.0,  # 100%면 완료
         surge_grace_seconds=5.0,  # 시간 기반 surge 감지
     )
 
@@ -242,13 +239,13 @@ def test_update_progress_surge_rejected(video_service: VideoProgressService):
 
 
 # =============================================================================
-# 테스트 5: 완료 조건 미충족 - 95% 미만
+# 테스트 5: 완료 조건 미충족 - 100% 미만
 # =============================================================================
 
 
 def test_complete_video_threshold_not_met(video_service: VideoProgressService):
-    """완료 - 95% 미만으로 거부."""
-    # Arrange: 영상 시작 및 80% 진행
+    """완료 - 100% 미만으로 거부."""
+    # Arrange: 영상 시작 및 95% 진행
     start_request = VideoPlayStartRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",  # Phase 22: 4대교육 prefix
@@ -260,17 +257,17 @@ def test_complete_video_threshold_not_met(video_service: VideoProgressService):
     update_request = VideoProgressUpdateRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
-        current_position=480,
-        watched_seconds=480,  # 80%
+        current_position=570,
+        watched_seconds=570,  # 95% - 100% 미만이므로 거부
     )
     video_service.update_progress(update_request)
 
-    # Act: 완료 요청 (80%만 시청)
+    # Act: 완료 요청 (95%만 시청 - 100% 미만)
     complete_request = VideoCompleteRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
-        final_position=480,
-        total_watched_seconds=480,
+        final_position=570,
+        total_watched_seconds=570,
     )
     response = video_service.complete_video(complete_request)
 
@@ -296,21 +293,21 @@ def test_complete_video_success_with_quiz_unlock(video_service: VideoProgressSer
     )
     video_service.start_video(start_request)
 
-    # 마지막 구간 시청 (마지막 5% = 30초, 570초 이후)
+    # 100% 시청
     update_request = VideoProgressUpdateRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
-        current_position=590,  # 마지막 구간
-        watched_seconds=580,  # 96.7%
+        current_position=600,
+        watched_seconds=600,  # 100%
     )
     video_service.update_progress(update_request)
 
-    # Act: 완료 요청
+    # Act: 완료 요청 (100% 시청)
     complete_request = VideoCompleteRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
         final_position=600,
-        total_watched_seconds=580,  # 96.7%
+        total_watched_seconds=600,  # 100%
     )
     response = video_service.complete_video(complete_request)
 
@@ -338,22 +335,22 @@ def test_seek_allowed_changes_on_complete(video_service: VideoProgressService):
     start_response = video_service.start_video(start_request)
     assert start_response.seek_allowed is False  # 완료 전
 
-    # 마지막 구간 시청
+    # 100% 시청
     update_request = VideoProgressUpdateRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
-        current_position=590,
-        watched_seconds=580,
+        current_position=600,
+        watched_seconds=600,  # 100%
     )
     update_response = video_service.update_progress(update_request)
-    assert update_response.seek_allowed is False  # 아직 완료 안됨
+    assert update_response.seek_allowed is False  # 아직 완료 안됨 (complete 호출 전)
 
-    # Act: 완료
+    # Act: 완료 (100% 시청)
     complete_request = VideoCompleteRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
         final_position=600,
-        total_watched_seconds=580,
+        total_watched_seconds=600,  # 100%
     )
     complete_response = video_service.complete_video(complete_request)
 
@@ -409,21 +406,21 @@ def test_quiz_start_after_complete_allowed(video_service: VideoProgressService):
     )
     video_service.start_video(start_request)
 
-    # 마지막 구간 시청
+    # 100% 시청
     update_request = VideoProgressUpdateRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
-        current_position=590,
-        watched_seconds=580,
+        current_position=600,
+        watched_seconds=600,  # 100%
     )
     video_service.update_progress(update_request)
 
-    # 완료
+    # 완료 (100% 시청)
     complete_request = VideoCompleteRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
         final_position=600,
-        total_watched_seconds=580,
+        total_watched_seconds=600,  # 100%
     )
     video_service.complete_video(complete_request)
 
@@ -518,21 +515,21 @@ def test_restart_completed_video(video_service: VideoProgressService):
     )
     video_service.start_video(start_request)
 
-    # 마지막 구간 시청
+    # 100% 시청
     update_request = VideoProgressUpdateRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
-        current_position=590,
-        watched_seconds=580,
+        current_position=600,
+        watched_seconds=600,  # 100%
     )
     video_service.update_progress(update_request)
 
-    # 완료
+    # 완료 (100% 시청)
     complete_request = VideoCompleteRequest(
         user_id="user-001",
         training_id="EDU-4TYPE-001",
         final_position=600,
-        total_watched_seconds=580,
+        total_watched_seconds=600,  # 100%
     )
     video_service.complete_video(complete_request)
 
@@ -570,54 +567,62 @@ def test_quiz_check_non_mandatory_allowed(video_service: VideoProgressService):
 
 
 # =============================================================================
-# Phase 22 추가 테스트: Last Segment 30초 > 5% (짧은 영상)
+# Phase 22 추가 테스트: 100% 완료 기준 (짧은 영상도 100% 필요)
 # =============================================================================
 
 
-def test_last_segment_30sec_floor_for_short_video():
-    """짧은 영상(200초)에서 last segment는 max(5%, 30초) = 30초."""
-    # Arrange: 30초 floor가 적용되는 서비스
+def test_100_percent_completion_for_short_video():
+    """짧은 영상(200초)도 100% 시청해야 완료."""
+    # Arrange: 100% 완료 기준 서비스
     service = VideoProgressService(
         store=VideoProgressStore(),
-        completion_threshold=95.0,
-        final_segment_ratio=0.05,  # 5%
-        final_segment_min_seconds=30.0,  # 최소 30초
+        completion_threshold=100.0,  # 100%면 완료
     )
 
-    # 200초 영상: 5% = 10초이지만, max(10, 30) = 30초가 last segment
+    # 200초 영상
     start_request = VideoPlayStartRequest(
         user_id="user-short",
         training_id="EDU-4TYPE-SHORT",
-        total_duration=200,  # 200초 (5% = 10초 < 30초)
+        total_duration=200,  # 200초
         is_mandatory_edu=True,
     )
     service.start_video(start_request)
 
-    # Act: 170초 위치 (200 - 30 = 170, last segment 시작점)
-    # 175초에서 시작해서 마지막 구간 시청
+    # Act: 95% 시청 - 100% 미만이므로 완료 불가
     update_request_1 = VideoProgressUpdateRequest(
         user_id="user-short",
         training_id="EDU-4TYPE-SHORT",
-        current_position=175,  # 마지막 구간 (200 - 30 = 170 이후)
-        watched_seconds=175,  # 87.5%
+        current_position=190,
+        watched_seconds=190,  # 95%
     )
     response_1 = service.update_progress(update_request_1)
     assert response_1.accepted is True
 
-    # 완료 요청 (95% 이상 + 마지막 구간 시청 완료)
+    # 95% 완료 시도 - 거부됨
+    complete_request_fail = VideoCompleteRequest(
+        user_id="user-short",
+        training_id="EDU-4TYPE-SHORT",
+        final_position=190,
+        total_watched_seconds=190,  # 95%
+    )
+    fail_response = service.complete_video(complete_request_fail)
+    assert fail_response.completed is False
+
+    # 100% 시청
     update_request_2 = VideoProgressUpdateRequest(
         user_id="user-short",
         training_id="EDU-4TYPE-SHORT",
-        current_position=195,  # 마지막
-        watched_seconds=192,  # 96%
+        current_position=200,
+        watched_seconds=200,  # 100%
     )
-    response_2 = service.update_progress(update_request_2)
+    service.update_progress(update_request_2)
 
+    # 100% 완료 요청 - 성공
     complete_request = VideoCompleteRequest(
         user_id="user-short",
         training_id="EDU-4TYPE-SHORT",
         final_position=200,
-        total_watched_seconds=192,
+        total_watched_seconds=200,  # 100%
     )
     complete_response = service.complete_video(complete_request)
 
@@ -644,12 +649,12 @@ def test_completed_video_update_noop_accepted():
     )
     service.start_video(start_request)
 
-    # 마지막 구간 시청 및 완료
+    # 100% 시청 및 완료
     update_request = VideoProgressUpdateRequest(
         user_id="user-comp",
         training_id="EDU-4TYPE-COMP",
-        current_position=590,
-        watched_seconds=580,
+        current_position=600,
+        watched_seconds=600,  # 100%
     )
     service.update_progress(update_request)
 
@@ -657,7 +662,7 @@ def test_completed_video_update_noop_accepted():
         user_id="user-comp",
         training_id="EDU-4TYPE-COMP",
         final_position=600,
-        total_watched_seconds=580,
+        total_watched_seconds=600,  # 100%
     )
     complete_response = service.complete_video(complete_request)
     assert complete_response.completed is True
@@ -750,3 +755,274 @@ async def test_user_id_body_fallback():
 
     # Assert
     assert result == "body-user-001"
+
+
+# =============================================================================
+# Phase 22: 배속 제어 테스트 (Playback Rate Control)
+# =============================================================================
+
+
+def test_playback_rate_mandatory_first_watch_rejected():
+    """4대교육 최초 시청 시 배속(1.0 초과) 거부 - 400 에러."""
+    from fastapi import HTTPException
+
+    # Arrange
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # Act & Assert: 4대교육 최초 시청에 2.0배속 → 400 에러
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-001",
+        training_id="EDU-4TYPE-RATE-001",  # 4대교육 prefix
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=2.0,  # 1.0 초과 배속
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.start_video(start_request)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["error"] == "PLAYBACK_RATE_NOT_ALLOWED"
+    assert exc_info.value.detail["max_playback_rate"] == 1.0
+    assert exc_info.value.detail["reason"] == "MANDATORY_FIRST_WATCH"
+
+
+def test_playback_rate_mandatory_first_watch_1x_allowed():
+    """4대교육 최초 시청 시 1.0배속은 허용."""
+    # Arrange
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # Act: 4대교육 최초 시청에 1.0배속 → 허용
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-002",
+        training_id="EDU-4TYPE-RATE-002",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=1.0,  # 1.0 배속 (허용)
+    )
+    response = service.start_video(start_request)
+
+    # Assert
+    assert response.first_watch is True
+    assert response.max_playback_rate == 1.0  # 4대교육 최초 시청은 1.0만 허용
+    assert response.playback_rate_reason is None
+
+
+def test_playback_rate_mandatory_rewatch_allowed():
+    """4대교육 재시청 시 배속 허용."""
+    # Arrange: 4대교육 최초 시청 및 완료
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # 최초 시청 시작 (1.0배속)
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-003",
+        training_id="EDU-4TYPE-RATE-003",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=1.0,
+    )
+    service.start_video(start_request)
+
+    # 100% 시청
+    update_request = VideoProgressUpdateRequest(
+        user_id="user-rate-003",
+        training_id="EDU-4TYPE-RATE-003",
+        current_position=600,
+        watched_seconds=600,
+        playback_rate=1.0,
+    )
+    service.update_progress(update_request)
+
+    # 완료
+    complete_request = VideoCompleteRequest(
+        user_id="user-rate-003",
+        training_id="EDU-4TYPE-RATE-003",
+        final_position=600,
+        total_watched_seconds=600,
+    )
+    service.complete_video(complete_request)
+
+    # Act: 재시청 시 2.0배속으로 시작 → 허용
+    restart_request = VideoPlayStartRequest(
+        user_id="user-rate-003",
+        training_id="EDU-4TYPE-RATE-003",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=2.0,  # 재시청이므로 배속 허용
+    )
+    response = service.start_video(restart_request)
+
+    # Assert
+    assert response.first_watch is False  # 재시청
+    assert response.max_playback_rate == 2.0  # 재시청은 2.0까지 허용
+    assert response.playback_rate_reason is None
+
+
+def test_playback_rate_non_mandatory_always_allowed():
+    """일반 교육은 항상 배속 허용."""
+    # Arrange
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # Act: 일반 교육에 2.0배속 → 허용
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-004",
+        training_id="GENERAL-EDU-RATE-001",  # 일반 교육 (4대교육 prefix 없음)
+        total_duration=600,
+        is_mandatory_edu=False,
+        playback_rate=2.0,
+    )
+    response = service.start_video(start_request)
+
+    # Assert
+    assert response.first_watch is True  # 최초 시청
+    assert response.max_playback_rate == 2.0  # 일반 교육은 항상 2.0 허용
+    assert response.playback_rate_reason is None
+
+
+def test_playback_rate_update_mandatory_first_watch_rejected():
+    """4대교육 최초 시청 중 progress update에서 배속 거부."""
+    # Arrange
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # 최초 시청 시작 (1.0배속)
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-005",
+        training_id="EDU-4TYPE-RATE-005",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=1.0,
+    )
+    service.start_video(start_request)
+
+    # Act: progress update에서 2.0배속 시도 → 거부
+    update_request = VideoProgressUpdateRequest(
+        user_id="user-rate-005",
+        training_id="EDU-4TYPE-RATE-005",
+        current_position=60,
+        watched_seconds=60,
+        playback_rate=2.0,  # 1.0 초과 배속 시도
+    )
+    response = service.update_progress(update_request)
+
+    # Assert
+    assert response.accepted is False
+    assert response.rejection_reason == VideoRejectionReason.PLAYBACK_RATE_NOT_ALLOWED.value
+    assert response.max_playback_rate == 1.0
+    assert response.playback_rate_enforced is False
+
+
+def test_playback_rate_update_mandatory_rewatch_allowed():
+    """4대교육 재시청 시 progress update에서 배속 허용."""
+    # Arrange: 4대교육 최초 시청 및 완료
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # 최초 시청 시작 및 완료
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-006",
+        training_id="EDU-4TYPE-RATE-006",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=1.0,
+    )
+    service.start_video(start_request)
+
+    update_request_1 = VideoProgressUpdateRequest(
+        user_id="user-rate-006",
+        training_id="EDU-4TYPE-RATE-006",
+        current_position=600,
+        watched_seconds=600,
+        playback_rate=1.0,
+    )
+    service.update_progress(update_request_1)
+
+    complete_request = VideoCompleteRequest(
+        user_id="user-rate-006",
+        training_id="EDU-4TYPE-RATE-006",
+        final_position=600,
+        total_watched_seconds=600,
+    )
+    service.complete_video(complete_request)
+
+    # 재시청 시작 (이미 완료된 영상)
+    restart_request = VideoPlayStartRequest(
+        user_id="user-rate-006",
+        training_id="EDU-4TYPE-RATE-006",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=2.0,
+    )
+    restart_response = service.start_video(restart_request)
+
+    # Assert: 재시청이므로 first_watch=False, max_playback_rate=2.0
+    assert restart_response.first_watch is False
+    assert restart_response.max_playback_rate == 2.0
+
+    # Act: 완료된 영상에 대한 추가 업데이트 (no-op으로 처리되어 accepted=True)
+    # Note: 완료된 영상은 update_progress 시 no-op으로 처리됨
+    update_request_2 = VideoProgressUpdateRequest(
+        user_id="user-rate-006",
+        training_id="EDU-4TYPE-RATE-006",
+        current_position=600,
+        watched_seconds=600,
+        playback_rate=2.0,
+    )
+    response = service.update_progress(update_request_2)
+
+    # Assert: 이미 완료된 영상은 no-op으로 accepted=True
+    # 완료 후에는 max_playback_rate=2.0 허용
+    assert response.accepted is True
+    assert response.max_playback_rate == 2.0
+
+
+def test_playback_rate_response_fields():
+    """응답에 max_playback_rate, first_watch 필드 포함 확인."""
+    # Arrange
+    service = VideoProgressService(store=VideoProgressStore())
+
+    # Act: 영상 시작
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-007",
+        training_id="EDU-4TYPE-RATE-007",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=1.0,
+    )
+    response = service.start_video(start_request)
+
+    # Assert: 응답에 필드 포함
+    assert hasattr(response, "first_watch")
+    assert hasattr(response, "max_playback_rate")
+    assert hasattr(response, "playback_rate_reason")
+    assert response.first_watch is True
+    assert response.max_playback_rate == 1.0  # 4대교육 최초 시청
+
+
+def test_playback_rate_update_response_fields():
+    """진행률 업데이트 응답에 max_playback_rate, playback_rate_enforced 필드 포함."""
+    # Arrange
+    service = VideoProgressService(store=VideoProgressStore())
+
+    start_request = VideoPlayStartRequest(
+        user_id="user-rate-008",
+        training_id="EDU-4TYPE-RATE-008",
+        total_duration=600,
+        is_mandatory_edu=True,
+        playback_rate=1.0,
+    )
+    service.start_video(start_request)
+
+    # Act: progress update
+    update_request = VideoProgressUpdateRequest(
+        user_id="user-rate-008",
+        training_id="EDU-4TYPE-RATE-008",
+        current_position=60,
+        watched_seconds=60,
+        playback_rate=1.0,
+    )
+    response = service.update_progress(update_request)
+
+    # Assert: 응답에 필드 포함
+    assert hasattr(response, "max_playback_rate")
+    assert hasattr(response, "playback_rate_enforced")
+    assert response.max_playback_rate == 1.0  # 4대교육 최초 시청
+    assert response.playback_rate_enforced is False

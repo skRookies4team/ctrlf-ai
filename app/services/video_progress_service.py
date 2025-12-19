@@ -6,8 +6,15 @@ Phase 22: 교육영상 진행률 서비스 (Video Progress Service)
 서버 검증 룰:
 1. 역행 금지: progress가 감소하면 거부
 2. 급증 제한: 단위 시간당 progress 증가폭 상한 (10초에 30% 이상 증가 시 거부)
-3. 완료 판정: 누적 시청률 >= 95% AND 마지막 구간(5%) 시청 조건 만족
+3. 완료 판정: 누적 시청률 >= 100% (100%면 완료)
 4. 시크 제한: 완료 전 seek_allowed=False, 완료 후 True
+5. 배속 제한: 4대교육 최초 시청 시 1.0배속만 허용, 재시청 또는 일반교육은 배속 허용
+
+배속 정책:
+- 배속은 기본적으로 지원 (0.5x ~ 2.0x)
+- 4대교육(필수/mandatory) 영상은 최초 시청(first_watch=true) 시 1.0배속만 허용
+- 최초 시청이 아닌 경우(재시청, first_watch=false)는 배속 허용
+- 일반 교육은 항상 배속 허용
 
 API:
 - POST /api/video/play/start: 영상 시작
@@ -43,14 +50,8 @@ logger = get_logger(__name__)
 # 검증 상수
 # =============================================================================
 
-# 완료 판정 임계값 (%)
-COMPLETION_THRESHOLD_PERCENT = 95.0
-
-# 마지막 구간 비율 (총 시간의 5%)
-FINAL_SEGMENT_RATIO = 0.05
-
-# 마지막 구간 최소값 (초) - max(5%, 30초) 규칙의 최소값
-FINAL_SEGMENT_MIN_SECONDS = 30.0
+# 완료 판정 임계값 (%) - 100%면 완료
+COMPLETION_THRESHOLD_PERCENT = 100.0
 
 # 급증 감지: 시간-위치 기반 검증의 grace 허용치 (초)
 # delta_position <= elapsed_wall_clock + grace 이면 허용
@@ -58,6 +59,11 @@ SURGE_GRACE_SECONDS = 5.0
 
 # 영상 완료 후 시크 허용
 SEEK_ALLOWED_ON_COMPLETE = True
+
+# 배속 관련 상수
+DEFAULT_PLAYBACK_RATE = 1.0  # 기본 재생 속도
+MAX_PLAYBACK_RATE_ALLOWED = 2.0  # 최대 허용 배속
+MAX_PLAYBACK_RATE_MANDATORY_FIRST_WATCH = 1.0  # 4대교육 최초 시청 시 최대 배속
 
 
 # =============================================================================
@@ -154,23 +160,17 @@ class VideoProgressService:
         self,
         store: Optional[VideoProgressStore] = None,
         completion_threshold: float = COMPLETION_THRESHOLD_PERCENT,
-        final_segment_ratio: float = FINAL_SEGMENT_RATIO,
-        final_segment_min_seconds: float = FINAL_SEGMENT_MIN_SECONDS,
         surge_grace_seconds: float = SURGE_GRACE_SECONDS,
     ) -> None:
         """VideoProgressService 초기화.
 
         Args:
             store: 저장소 인스턴스
-            completion_threshold: 완료 판정 임계값 (%)
-            final_segment_ratio: 마지막 구간 비율
-            final_segment_min_seconds: 마지막 구간 최소값 (초)
+            completion_threshold: 완료 판정 임계값 (%) - 100%면 완료
             surge_grace_seconds: 급증 감지 grace 허용치 (초)
         """
         self._store = store or get_video_progress_store()
         self._completion_threshold = completion_threshold
-        self._final_segment_ratio = final_segment_ratio
-        self._final_segment_min_seconds = final_segment_min_seconds
         self._surge_grace_seconds = surge_grace_seconds
 
     # =========================================================================
@@ -181,6 +181,7 @@ class VideoProgressService:
         """영상 재생을 시작합니다.
 
         Phase 22 수정: EducationCatalogService로 4대교육 서버 판정
+        배속 검증: 4대교육 최초 시청 시 1.0배속만 허용
 
         세션을 생성하고 초기 상태를 저장합니다.
 
@@ -189,7 +190,12 @@ class VideoProgressService:
 
         Returns:
             VideoPlayStartResponse: 시작 응답
+
+        Raises:
+            HTTPException: 4대교육 최초 시청 시 배속이 1.0 초과인 경우 400 반환
         """
+        from fastapi import HTTPException
+
         now = datetime.now(timezone.utc)
         session_id = str(uuid.uuid4())
 
@@ -197,17 +203,25 @@ class VideoProgressService:
         edu_catalog = get_education_catalog_service()
         is_mandatory_4type = edu_catalog.is_mandatory_4type(request.training_id)
 
-        # 기존 레코드가 있으면 완료 상태가 아닌 경우 덮어쓰기
+        # 기존 레코드가 있으면 완료 상태 확인 → first_watch 판단
         existing = self._store.get(request.user_id, request.training_id)
+        is_first_watch = True  # 기본값: 최초 시청
+
         if existing and existing.state == VideoProgressState.COMPLETED:
+            # 완료된 영상은 재시청 (first_watch=False)
+            is_first_watch = False
             logger.info(
-                f"Video already completed: user_id={request.user_id}, "
+                f"Video already completed (rewatch): user_id={request.user_id}, "
                 f"training_id={request.training_id}"
             )
             # 완료된 영상은 재시작 허용 (시크 허용 상태로)
             existing.state = VideoProgressState.IN_PROGRESS
             existing.updated_at = now.isoformat()
+            existing.first_watch = False  # 재시청
             self._store.set(request.user_id, request.training_id, existing)
+
+            # 재시청은 배속 허용 (max_playback_rate=2.0)
+            max_rate = MAX_PLAYBACK_RATE_ALLOWED
 
             return VideoPlayStartResponse(
                 session_id=session_id,
@@ -216,6 +230,35 @@ class VideoProgressService:
                 state=VideoProgressState.IN_PROGRESS,
                 seek_allowed=existing.seek_allowed,  # 완료 후에는 True
                 created_at=now.isoformat(),
+                first_watch=False,
+                max_playback_rate=max_rate,
+                playback_rate_reason=None,
+            )
+
+        # 기존 레코드가 있지만 완료 안된 경우도 first_watch 유지
+        if existing:
+            is_first_watch = existing.first_watch
+
+        # 배속 제한 계산
+        max_rate = self._get_max_playback_rate(is_mandatory_4type, is_first_watch)
+        playback_rate_reason = None
+
+        # 배속 검증: 4대교육 최초 시청 시 1.0 초과 배속 거부
+        if is_mandatory_4type and is_first_watch and request.playback_rate > 1.0:
+            playback_rate_reason = "MANDATORY_FIRST_WATCH"
+            logger.warning(
+                f"Playback rate not allowed: user_id={request.user_id}, "
+                f"training_id={request.training_id}, "
+                f"playback_rate={request.playback_rate}, max_allowed={max_rate}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "PLAYBACK_RATE_NOT_ALLOWED",
+                    "message": "4대교육 최초 시청 시 배속(1.0x 초과)은 허용되지 않습니다.",
+                    "max_playback_rate": max_rate,
+                    "reason": playback_rate_reason,
+                }
             )
 
         # 새 레코드 생성 (is_mandatory_edu는 서버 판정 값 사용)
@@ -231,6 +274,7 @@ class VideoProgressService:
             seek_allowed=False,  # 완료 전에는 시크 불가
             quiz_unlocked=False,
             is_mandatory_edu=is_mandatory_4type,  # Phase 22: 서버 판정 값
+            first_watch=is_first_watch,  # 최초 시청 여부
             last_final_segment_time=0,
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
@@ -244,7 +288,9 @@ class VideoProgressService:
             f"Video started: user_id={request.user_id}, "
             f"training_id={request.training_id}, "
             f"total_duration={request.total_duration}s, "
-            f"is_mandatory_edu={request.is_mandatory_edu}"
+            f"is_mandatory_edu={is_mandatory_4type}, "
+            f"first_watch={is_first_watch}, "
+            f"max_playback_rate={max_rate}"
         )
 
         return VideoPlayStartResponse(
@@ -254,6 +300,9 @@ class VideoProgressService:
             state=VideoProgressState.IN_PROGRESS,
             seek_allowed=False,
             created_at=now.isoformat(),
+            first_watch=is_first_watch,
+            max_playback_rate=max_rate,
+            playback_rate_reason=playback_rate_reason,
         )
 
     # =========================================================================
@@ -266,6 +315,7 @@ class VideoProgressService:
         """영상 진행률을 업데이트합니다.
 
         서버 검증 룰을 적용하여 비정상 요청을 거부합니다.
+        배속 검증: 4대교육 최초 시청 시 1.0 초과 배속 거부
 
         Args:
             request: 진행률 업데이트 요청
@@ -296,6 +346,9 @@ class VideoProgressService:
                 rejection_reason=VideoRejectionReason.SESSION_NOT_FOUND.value,
             )
 
+        # 배속 제한 계산
+        max_rate = self._get_max_playback_rate(record.is_mandatory_edu, record.first_watch)
+
         # 2. 이미 완료된 경우 - 업데이트 no-op (accepted=True, 상태 불변)
         if record.state == VideoProgressState.COMPLETED:
             logger.debug(
@@ -314,14 +367,39 @@ class VideoProgressService:
                 accepted=True,
                 rejection_reason=None,
                 message="이미 완료된 영상입니다.",
+                max_playback_rate=MAX_PLAYBACK_RATE_ALLOWED,  # 완료 후는 배속 허용
+                playback_rate_enforced=False,
             )
 
-        # 3. 새로운 진행률 계산
+        # 3. 배속 검증: 4대교육 최초 시청 시 1.0 초과 배속 거부
+        if record.is_mandatory_edu and record.first_watch and request.playback_rate > 1.0:
+            logger.warning(
+                f"Playback rate not allowed during progress: user_id={request.user_id}, "
+                f"training_id={request.training_id}, "
+                f"playback_rate={request.playback_rate}, max_allowed={max_rate}"
+            )
+            return VideoProgressUpdateResponse(
+                user_id=request.user_id,
+                training_id=request.training_id,
+                progress_percent=record.progress_percent,
+                watched_seconds=record.watched_seconds,
+                last_position=record.last_position,
+                seek_allowed=record.seek_allowed,
+                state=record.state,
+                updated_at=record.updated_at,
+                accepted=False,
+                rejection_reason=VideoRejectionReason.PLAYBACK_RATE_NOT_ALLOWED.value,
+                message="4대교육 최초 시청 시 배속(1.0x 초과)은 허용되지 않습니다.",
+                max_playback_rate=max_rate,
+                playback_rate_enforced=False,
+            )
+
+        # 4. 새로운 진행률 계산
         new_progress = self._calculate_progress(
             request.watched_seconds, record.total_duration
         )
 
-        # 4. 역행 검증 (진행률 감소 거부)
+        # 5. 역행 검증 (진행률 감소 거부)
         if new_progress < record.progress_percent:
             logger.warning(
                 f"Progress regression detected: user_id={request.user_id}, "
@@ -338,9 +416,11 @@ class VideoProgressService:
                 updated_at=record.updated_at,
                 accepted=False,
                 rejection_reason=VideoRejectionReason.PROGRESS_REGRESSION.value,
+                max_playback_rate=max_rate,
+                playback_rate_enforced=False,
             )
 
-        # 5. 급증 검증 (시간-위치 기반: delta_position <= elapsed + grace)
+        # 6. 급증 검증 (시간-위치 기반: delta_position <= elapsed + grace)
         is_surge, surge_reason = self._check_progress_surge(
             old_position_seconds=record.last_position,
             new_position_seconds=request.current_position,
@@ -364,21 +444,8 @@ class VideoProgressService:
                 updated_at=record.updated_at,
                 accepted=False,
                 rejection_reason=VideoRejectionReason.PROGRESS_SURGE.value,
-            )
-
-        # 6. 마지막 구간 시청 여부 업데이트
-        # 마지막 구간 = max(총 시간의 5%, 30초)
-        final_segment_seconds = self._get_final_segment_seconds(record.total_duration)
-        final_segment_start = int(record.total_duration - final_segment_seconds)
-        if request.current_position >= final_segment_start:
-            # 마지막 구간 시청 시간 누적
-            time_in_final = min(
-                request.current_position - final_segment_start,
-                int(final_segment_seconds)
-            )
-            record.last_final_segment_time = max(
-                record.last_final_segment_time,
-                time_in_final,
+                max_playback_rate=max_rate,
+                playback_rate_enforced=False,
             )
 
         # 7. 레코드 업데이트
@@ -407,6 +474,8 @@ class VideoProgressService:
             updated_at=record.updated_at,
             accepted=True,
             rejection_reason=None,
+            max_playback_rate=max_rate,
+            playback_rate_enforced=False,
         )
 
     # =========================================================================
@@ -419,8 +488,7 @@ class VideoProgressService:
         클라이언트가 complete=true를 보내도 서버에서 조건을 검증합니다.
 
         완료 조건:
-        1. 누적 시청률 >= 95%
-        2. 마지막 구간(5%) 시청 기록이 있어야 함
+        - 누적 시청률 >= 100% (100%면 완료)
 
         Args:
             request: 완료 요청
@@ -466,7 +534,7 @@ class VideoProgressService:
             request.total_watched_seconds, record.total_duration
         )
 
-        # 4. 완료 조건 검증: 누적 시청률 >= 95%
+        # 4. 완료 조건 검증: 누적 시청률 >= 100%
         if final_progress < self._completion_threshold:
             logger.info(
                 f"Completion threshold not met: user_id={request.user_id}, "
@@ -483,39 +551,17 @@ class VideoProgressService:
                 rejection_reason=VideoRejectionReason.COMPLETION_THRESHOLD_NOT_MET.value,
             )
 
-        # 5. 완료 조건 검증: 마지막 구간 시청
-        # 마지막 구간 = max(총 시간의 5%, 30초)
-        final_segment_seconds = self._get_final_segment_seconds(record.total_duration)
-        final_segment_start = int(record.total_duration - final_segment_seconds)
-
-        # final_position >= total_duration - last_segment_seconds 조건으로 판정
-        if request.final_position < final_segment_start:
-            logger.info(
-                f"Final segment not watched: user_id={request.user_id}, "
-                f"final_position={request.final_position}s, "
-                f"required_start={final_segment_start}s"
-            )
-            return VideoCompleteResponse(
-                user_id=request.user_id,
-                training_id=request.training_id,
-                completed=False,
-                progress_percent=final_progress,
-                quiz_unlocked=False,
-                seek_allowed=False,
-                completed_at=None,
-                rejection_reason=VideoRejectionReason.FINAL_SEGMENT_NOT_WATCHED.value,
-            )
-
-        # 6. 완료 처리
+        # 5. 완료 처리
         record.state = VideoProgressState.COMPLETED
         record.progress_percent = min(final_progress, 100.0)
         record.watched_seconds = request.total_watched_seconds
         record.last_position = request.final_position
         record.seek_allowed = SEEK_ALLOWED_ON_COMPLETE
+        record.first_watch = False  # 완료 후 재시청은 배속 허용
         record.completed_at = now.isoformat()
         record.updated_at = now.isoformat()
 
-        # 7. 4대교육이면 퀴즈 잠금 해제
+        # 6. 4대교육이면 퀴즈 잠금 해제
         if record.is_mandatory_edu:
             record.quiz_unlocked = True
             logger.info(
@@ -630,20 +676,6 @@ class VideoProgressService:
         progress = (watched_seconds / total_duration) * 100
         return min(progress, 100.0)
 
-    def _get_final_segment_seconds(self, total_duration: int) -> float:
-        """마지막 구간 초를 계산합니다.
-
-        설계: last_segment_seconds = max(total_duration * 0.05, 30.0)
-
-        Args:
-            total_duration: 영상 총 길이 (초)
-
-        Returns:
-            float: 마지막 구간 초
-        """
-        percent_based = total_duration * self._final_segment_ratio
-        return max(percent_based, self._final_segment_min_seconds)
-
     def _check_progress_surge(
         self,
         old_position_seconds: int,
@@ -686,3 +718,24 @@ class VideoProgressService:
             )
 
         return False, ""
+
+    def _get_max_playback_rate(
+        self, is_mandatory_edu: bool, first_watch: bool
+    ) -> float:
+        """허용 최대 배속을 계산합니다.
+
+        배속 정책:
+        - 4대교육 최초 시청: 1.0배속만 허용
+        - 4대교육 재시청: 2.0배속까지 허용
+        - 일반 교육: 2.0배속까지 허용
+
+        Args:
+            is_mandatory_edu: 4대교육 여부
+            first_watch: 최초 시청 여부
+
+        Returns:
+            float: 허용 최대 배속 (1.0 또는 2.0)
+        """
+        if is_mandatory_edu and first_watch:
+            return MAX_PLAYBACK_RATE_MANDATORY_FIRST_WATCH  # 1.0
+        return MAX_PLAYBACK_RATE_ALLOWED  # 2.0
