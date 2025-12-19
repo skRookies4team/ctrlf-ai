@@ -24,7 +24,7 @@ Phase 28 정책:
 - APPROVED 스크립트 + 렌더 SUCCEEDED 후에만 발행 가능
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from typing import Optional
 
 from app.core.logging import get_logger
@@ -334,8 +334,10 @@ async def generate_script(
 @router.post(
     "/videos/{video_id}/render-jobs",
     response_model=RenderJobCreateResponse,
-    summary="렌더 잡 생성",
+    summary="[DEPRECATED] 렌더 잡 생성",
     description="""
+**DEPRECATED**: POST /api/v2/videos/{video_id}/render-jobs 사용 권장
+
 새 렌더 잡을 생성합니다.
 
 **권한**: REVIEWER만 가능
@@ -345,15 +347,19 @@ async def generate_script(
 - 해당 교육이 EXPIRED면 404
 - 동일 video_id에 대해 RUNNING/PENDING 잡이 있으면 409
 """,
+    deprecated=True,
 )
 async def create_render_job(
     video_id: str,
     request: RenderJobCreateRequest,
+    response: Response,
     user_id: str = "reviewer",
     user_role: str = "REVIEWER",
     service=Depends(get_render_service),
 ):
-    """렌더 잡 생성."""
+    """렌더 잡 생성 (DEPRECATED - V2 사용 권장)."""
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</api/v2/videos/{video_id}/render-jobs>; rel="successor-version"'
     # REVIEWER 역할 검증
     verify_reviewer_role(user_role)
 
@@ -440,14 +446,21 @@ async def get_render_job_status(
 @router.post(
     "/render-jobs/{job_id}/cancel",
     response_model=RenderJobCancelResponse,
-    summary="렌더 잡 취소",
-    description="진행 중인 렌더 잡을 취소합니다. (PENDING/RUNNING만 가능)",
+    summary="[DEPRECATED] 렌더 잡 취소",
+    description="""
+**DEPRECATED**: POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel 사용 권장
+
+진행 중인 렌더 잡을 취소합니다. (PENDING/RUNNING만 가능)
+""",
+    deprecated=True,
 )
 async def cancel_render_job(
     job_id: str,
+    response: Response,
     service=Depends(get_render_service),
 ):
-    """렌더 잡 취소."""
+    """렌더 잡 취소 (DEPRECATED - V2 사용 권장)."""
+    response.headers["Deprecation"] = "true"
     job = await service.cancel_job(job_id)
 
     if not job:
