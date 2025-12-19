@@ -438,6 +438,7 @@ class TestIntegration:
         ctx = RealRenderJobContext(
             job_id="job-test",
             video_id="video-test",
+            script_id="script-test",
             script_json=sample_script,
             output_dir=temp_dir,
         )
@@ -466,6 +467,7 @@ class TestIntegration:
         ctx = RealRenderJobContext(
             job_id="job-test",
             video_id="video-test",
+            script_id="script-test",
             script_json=sample_script,
             output_dir=temp_dir,
         )

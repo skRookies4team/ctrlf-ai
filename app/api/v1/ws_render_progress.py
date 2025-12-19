@@ -108,28 +108,50 @@ class RenderProgressConnectionManager:
         self._connections: Dict[str, Set[WebSocket]] = defaultdict(set)
         # WebSocket -> Set[video_id] (역방향 매핑, 정리용)
         self._socket_videos: Dict[WebSocket, Set[str]] = defaultdict(set)
+        # Phase 33: WebSocket -> job_id (필터링용, None이면 모든 이벤트 수신)
+        self._socket_job_filter: Dict[WebSocket, Optional[str]] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket, video_id: str) -> None:
-        """WebSocket 연결을 등록합니다."""
+    async def connect(
+        self,
+        websocket: WebSocket,
+        video_id: str,
+        job_id: Optional[str] = None,
+    ) -> None:
+        """WebSocket 연결을 등록합니다.
+
+        Args:
+            websocket: WebSocket 연결
+            video_id: 구독할 비디오 ID
+            job_id: (Optional) 특정 잡만 필터링 (Phase 33)
+        """
         await websocket.accept()
 
         async with self._lock:
             self._connections[video_id].add(websocket)
             self._socket_videos[websocket].add(video_id)
+            self._socket_job_filter[websocket] = job_id
 
-        logger.info(f"WebSocket connected: video_id={video_id}, total={len(self._connections[video_id])}")
+        logger.info(
+            f"WebSocket connected: video_id={video_id}, job_id={job_id}, "
+            f"total={len(self._connections[video_id])}"
+        )
 
         # 연결 성공 메시지 전송
         await websocket.send_json({
             "type": "connected",
             "video_id": video_id,
+            "job_id": job_id,
             "message": "Connected to render progress stream",
             "timestamp": datetime.utcnow().isoformat() + "Z",
         })
 
     def disconnect(self, websocket: WebSocket, video_id: Optional[str] = None) -> None:
         """WebSocket 연결을 해제합니다."""
+        # Phase 33: job filter 정리
+        if websocket in self._socket_job_filter:
+            del self._socket_job_filter[websocket]
+
         # video_id가 지정된 경우
         if video_id:
             self._connections[video_id].discard(websocket)
@@ -151,7 +173,11 @@ class RenderProgressConnectionManager:
         logger.info(f"WebSocket disconnected: video_id={video_id}")
 
     async def broadcast(self, video_id: str, event: RenderProgressEvent) -> int:
-        """특정 video_id에 연결된 모든 클라이언트에게 이벤트를 전송합니다.
+        """특정 video_id에 연결된 클라이언트에게 이벤트를 전송합니다.
+
+        Phase 33: job_id 필터링 지원
+        - 클라이언트가 특정 job_id를 구독한 경우, 해당 잡의 이벤트만 전송
+        - job_id 필터가 None인 클라이언트는 모든 이벤트 수신
 
         Args:
             video_id: 비디오 ID
@@ -165,10 +191,16 @@ class RenderProgressConnectionManager:
             return 0
 
         event_data = event.model_dump()
+        event_job_id = event.job_id
         sent_count = 0
         failed = []
 
         for websocket in connections:
+            # Phase 33: job_id 필터링
+            filter_job_id = self._socket_job_filter.get(websocket)
+            if filter_job_id and filter_job_id != event_job_id:
+                continue  # 다른 job_id 이벤트는 스킵
+
             try:
                 await websocket.send_json(event_data)
                 sent_count += 1
@@ -236,20 +268,41 @@ def clear_connection_manager() -> None:
 
 
 @router.websocket("/videos/{video_id}/render-progress")
-async def render_progress_websocket(websocket: WebSocket, video_id: str):
+async def render_progress_websocket(
+    websocket: WebSocket,
+    video_id: str,
+    job_id: Optional[str] = None,
+):
     """렌더 진행률 WebSocket 엔드포인트.
 
     클라이언트가 이 엔드포인트에 연결하면 해당 video_id의 렌더 진행률을
     실시간으로 수신할 수 있습니다.
 
+    Phase 33: job_id query parameter 지원
+    - job_id 지정 시: 해당 잡의 이벤트만 필터링
+    - job_id 미지정 시: 최신 RUNNING 잡으로 자동 매핑
+
     Args:
         websocket: WebSocket 연결
         video_id: 구독할 비디오 ID
+        job_id: (Optional) 특정 잡 ID 필터링
     """
     manager = get_connection_manager()
 
+    # Phase 33: job_id 미지정 시 최신 활성 잡으로 자동 매핑
+    active_job_id = job_id
+    if not active_job_id:
+        try:
+            from app.repositories.render_job_repository import get_render_job_repository
+            repo = get_render_job_repository()
+            active_job = repo.get_active_by_video_id(video_id)
+            if active_job:
+                active_job_id = active_job.job_id
+        except Exception:
+            pass  # 저장소 오류 시 무시
+
     try:
-        await manager.connect(websocket, video_id)
+        await manager.connect(websocket, video_id, job_id=active_job_id)
 
         # 연결 유지 (클라이언트가 끊을 때까지)
         while True:
@@ -268,7 +321,7 @@ async def render_progress_websocket(websocket: WebSocket, video_id: str):
                 break
 
     except Exception as e:
-        logger.error(f"WebSocket error: video_id={video_id}, error={e}")
+        logger.error(f"WebSocket error: video_id={video_id}, job_id={job_id}, error={e}")
 
     finally:
         manager.disconnect(websocket, video_id)

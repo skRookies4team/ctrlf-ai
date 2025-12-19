@@ -1,18 +1,22 @@
 """
-Phase 32: Real Video Renderer
+Phase 34: Real Video Renderer
 
 실제 TTS, FFmpeg, Storage를 사용하는 영상 렌더러 구현.
 
 구성요소:
 - TTS Provider: 음성 합성 (mock, gtts, polly, gcp)
 - Video Composer: FFmpeg 기반 영상 합성
-- Storage Adapter: 에셋 업로드 (local, s3, minio)
+- Storage Adapter: 에셋 업로드 (local, s3)
 - WebSocket Progress: 실시간 진행률 알림
 
 환경변수:
 - TTS_PROVIDER: mock | gtts | polly | gcp
-- STORAGE_PROVIDER: local | s3 | minio
+- STORAGE_PROVIDER: local | s3
 - RENDER_OUTPUT_DIR: 렌더링 출력 디렉토리 (기본: ./video_output)
+
+Phase 34 변경사항:
+- object_key 규칙: videos/{video_id}/{script_id}/{job_id}/video.mp4
+- StorageUploadError 예외 처리 추가
 """
 
 import asyncio
@@ -30,6 +34,7 @@ from app.api.v1.ws_render_progress import (
 )
 from app.clients.storage_adapter import (
     BaseStorageProvider,
+    StorageUploadError,
     get_default_storage_provider,
 )
 from app.clients.tts_provider import BaseTTSProvider, get_default_tts_provider
@@ -64,9 +69,13 @@ class RealRendererConfig:
 
 @dataclass
 class RealRenderJobContext:
-    """렌더 잡 컨텍스트."""
+    """렌더 잡 컨텍스트.
+
+    Phase 34: script_id 추가 (object_key 규칙용)
+    """
     job_id: str
     video_id: str
+    script_id: str  # Phase 34: object_key 규칙용
     script_json: Dict[str, Any]
     output_dir: Path
 
@@ -159,8 +168,9 @@ class RealVideoRenderer(VideoRenderer):
         """파이프라인 단계 실행."""
         # 컨텍스트 생성/조회
         if job_id not in self._contexts:
-            # video_id 추출 (script_json에서 또는 job_id에서)
+            # video_id, script_id 추출
             video_id = script_json.get("video_id", job_id.replace("job-", "video-"))
+            script_id = script_json.get("script_id", "script-default")
 
             job_output_dir = self._output_dir / job_id
             job_output_dir.mkdir(parents=True, exist_ok=True)
@@ -168,6 +178,7 @@ class RealVideoRenderer(VideoRenderer):
             self._contexts[job_id] = RealRenderJobContext(
                 job_id=job_id,
                 video_id=video_id,
+                script_id=script_id,
                 script_json=script_json,
                 output_dir=job_output_dir,
             )
@@ -213,6 +224,18 @@ class RealVideoRenderer(VideoRenderer):
                 message=f"{message} 완료",
             )
 
+        except StorageUploadError as e:
+            # Phase 34: Storage 업로드 실패 시 STORAGE_UPLOAD_FAILED 에러
+            logger.error(f"Storage upload failed for job {job_id}: {e}")
+            await notify_render_progress(
+                job_id=ctx.job_id,
+                video_id=ctx.video_id,
+                status=RenderJobStatus.FAILED,
+                step=step,
+                progress=progress,
+                message=f"스토리지 업로드 실패: {str(e)[:100]}",
+            )
+            raise
         except Exception as e:
             logger.error(f"Step {step.value} failed for job {job_id}: {e}")
             await notify_render_progress(
@@ -319,16 +342,25 @@ class RealVideoRenderer(VideoRenderer):
         logger.info(f"Video composed: {ctx.video_path}")
 
     async def _upload_assets(self, ctx: RealRenderJobContext) -> None:
-        """에셋 업로드."""
+        """에셋 업로드.
+
+        Phase 34: object_key 규칙 적용
+        - videos/{video_id}/{script_id}/{job_id}/video.mp4
+        - videos/{video_id}/{script_id}/{job_id}/subtitles.srt
+        - videos/{video_id}/{script_id}/{job_id}/thumb.jpg
+        """
         logger.info(f"Uploading assets for job: {ctx.job_id}")
 
         storage = self._get_storage()
+
+        # Phase 34: object_key 기본 경로
+        base_key = f"videos/{ctx.video_id}/{ctx.script_id}/{ctx.job_id}"
 
         # 비디오 업로드
         if ctx.video_path and Path(ctx.video_path).exists():
             result = await storage.put_file(
                 ctx.video_path,
-                f"{ctx.job_id}/video.mp4",
+                f"{base_key}/video.mp4",
                 "video/mp4",
             )
             ctx.video_url = result.url
@@ -338,7 +370,7 @@ class RealVideoRenderer(VideoRenderer):
         if ctx.subtitle_path and Path(ctx.subtitle_path).exists():
             result = await storage.put_file(
                 ctx.subtitle_path,
-                f"{ctx.job_id}/subtitle.srt",
+                f"{base_key}/subtitles.srt",
                 "text/plain",
             )
             ctx.subtitle_url = result.url
@@ -348,7 +380,7 @@ class RealVideoRenderer(VideoRenderer):
         if ctx.thumbnail_path and Path(ctx.thumbnail_path).exists():
             result = await storage.put_file(
                 ctx.thumbnail_path,
-                f"{ctx.job_id}/thumbnail.jpg",
+                f"{base_key}/thumb.jpg",
                 "image/jpeg",
             )
             ctx.thumbnail_url = result.url

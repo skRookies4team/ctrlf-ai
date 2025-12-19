@@ -13,10 +13,13 @@ FastAPI 인스턴스를 생성하고, 라우터를 등록하며, 미들웨어를
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video, video_render, ws_render_progress
+from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, ingest, internal_rag, quiz_generate, rag, search, video, video_render, video_render_phase33, ws_render_progress
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -190,3 +193,11 @@ app.include_router(video_render.router, tags=["Video Render"])
 # Phase 32: WebSocket Render Progress (실시간 렌더 진행률)
 # - WS /ws/videos/{video_id}/render-progress: 렌더 진행률 실시간 구독
 app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
+
+# Phase 33: Video Render API V2 (렌더 잡 영속화 + idempotent)
+# - POST /api/v2/videos/{video_id}/render-jobs: 렌더 잡 생성 (idempotent)
+# - GET /api/v2/videos/{video_id}/render-jobs: 잡 목록 조회
+# - GET /api/v2/videos/{video_id}/render-jobs/{job_id}: 잡 상세 조회
+# - POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel: 잡 취소
+# - GET /api/v2/videos/{video_id}/assets/published: 발행된 에셋 조회
+app.include_router(video_render_phase33.router, tags=["Video Render V2"])

@@ -213,20 +213,47 @@ class Settings(BaseSettings):
     # Storage Provider 선택 (local, s3, minio)
     STORAGE_PROVIDER: str = "local"
 
-    # 렌더링 출력 디렉토리
+    # 렌더링 출력 디렉토리 (임시 파일용)
     RENDER_OUTPUT_DIR: str = "./video_output"
 
-    # Storage 기본 URL (로컬 모드용)
-    STORAGE_BASE_URL: str = "http://localhost:8000/static/videos"
+    # =========================================================================
+    # Phase 34: Storage Provider 설정 (영구 저장소)
+    # =========================================================================
+    # 로컬 Storage 디렉토리 (STORAGE_PROVIDER=local 일 때)
+    STORAGE_LOCAL_DIR: str = "./data/assets"
+
+    # Storage Public Base URL (FE가 접근하는 URL)
+    # - local: FastAPI StaticFiles로 서빙 (/assets/...)
+    # - s3/minio: 외부 접근 가능한 URL
+    STORAGE_PUBLIC_BASE_URL: Optional[str] = None
 
     # S3 설정 (STORAGE_PROVIDER=s3 일 때)
     AWS_S3_BUCKET: Optional[str] = None
     AWS_S3_REGION: str = "ap-northeast-2"
-    AWS_S3_PREFIX: str = "videos/"
+    AWS_S3_PREFIX: str = ""  # Phase 34: object_key에 prefix 포함하므로 빈값
+    S3_ENDPOINT_URL: Optional[str] = None  # MinIO 호환 S3 엔드포인트
 
     # MinIO 설정 (STORAGE_PROVIDER=minio 일 때)
     MINIO_ENDPOINT: Optional[str] = None
     MINIO_BUCKET: str = "videos"
+
+    # =========================================================================
+    # Phase 35: Backend Presigned Storage 설정 (STORAGE_PROVIDER=backend_presigned)
+    # =========================================================================
+    # AI 서버는 AWS 자격증명 없이 백엔드가 발급한 Presigned URL로 S3에 업로드.
+    # 최소권한 원칙: AI 서버는 S3 직접 접근 불가, 백엔드 API만 호출.
+
+    # 백엔드 서비스 토큰 (내부 API 인증용)
+    BACKEND_SERVICE_TOKEN: Optional[str] = None
+
+    # Presigned URL 발급 API 경로
+    BACKEND_STORAGE_PRESIGN_PATH: str = "/internal/storage/presign-put"
+
+    # 업로드 완료 콜백 API 경로
+    BACKEND_STORAGE_COMPLETE_PATH: str = "/internal/storage/complete"
+
+    # 업로드 최대 용량 제한 (bytes) - 기본 100MB
+    VIDEO_MAX_UPLOAD_BYTES: int = 104857600
 
     # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
@@ -378,6 +405,22 @@ class Settings(BaseSettings):
                 mapping[slug.strip().lower()] = kb_id.strip()
 
         return mapping
+
+    # =========================================================================
+    # Phase 34: Storage URL 프로퍼티
+    # =========================================================================
+
+    @property
+    def storage_public_base_url(self) -> str:
+        """Storage Public Base URL을 반환합니다.
+
+        STORAGE_PUBLIC_BASE_URL이 설정되면 그 값을 사용하고,
+        없으면 로컬 모드에서 /assets 경로를 기본값으로 사용합니다.
+        """
+        if self.STORAGE_PUBLIC_BASE_URL:
+            return self.STORAGE_PUBLIC_BASE_URL.rstrip("/")
+        # 로컬 모드 기본값: StaticFiles 마운트 경로
+        return "/assets"
 
 
 @lru_cache()
