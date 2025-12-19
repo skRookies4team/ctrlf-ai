@@ -103,6 +103,12 @@ from app.services.router_orchestrator import (
     RouterOrchestrator,
 )
 from app.services.video_progress_service import VideoProgressService
+from app.services.answer_guard_service import (
+    AnswerGuardService,
+    DebugInfo,
+    RequestContext,
+    get_answer_guard_service,
+)
 
 logger = get_logger(__name__)
 
@@ -356,6 +362,7 @@ class ChatService:
         router_orchestrator: Optional[RouterOrchestrator] = None,
         video_progress_service: Optional[VideoProgressService] = None,
         milvus_client: Optional[MilvusSearchClient] = None,
+        answer_guard_service: Optional[AnswerGuardService] = None,
     ) -> None:
         """
         Initialize ChatService.
@@ -372,6 +379,7 @@ class ChatService:
             video_progress_service: VideoProgressService instance. If None, creates a new instance. (Phase 22)
             milvus_client: MilvusSearchClient instance. If None and MILVUS_ENABLED=True, creates singleton. (Phase 24)
                               Pass custom services for testing or dependency injection.
+            answer_guard_service: AnswerGuardService instance. If None, creates singleton. (Phase 39)
         """
         self._ragflow = ragflow_client or RagflowClient()
         self._llm = llm_client or LLMClient()
@@ -388,6 +396,12 @@ class ChatService:
             llm_client=self._llm
         )
         self._video_progress = video_progress_service or VideoProgressService()
+
+        # Phase 39: Answer Guard Service (답변 품질 가드레일)
+        self._answer_guard = answer_guard_service or get_answer_guard_service()
+
+        # Phase 39: 마지막 에러 사유 저장 (불만 빠른 경로용)
+        self._last_error_reason: Optional[str] = None
 
         # Phase 24: Milvus Vector Search Client
         # MILVUS_ENABLED=True 설정 시 RAGFlow 대신 Milvus 사용
@@ -452,6 +466,31 @@ class ChatService:
         if pii_input.has_pii:
             logger.info(
                 f"PII detected in input: {len(pii_input.tags)} entities masked"
+            )
+
+        # =====================================================================
+        # Phase 39: [E] Complaint Fast Path (불만/욕설 빠른 경로)
+        # =====================================================================
+        # intent 분류 전에 먼저 실행 (전처리)
+        # 불만 키워드 감지 시 RAG/툴 호출 없이 즉시 응답
+        complaint_response = self._answer_guard.check_complaint_fast_path(
+            user_query=masked_query,
+            last_error_reason=self._last_error_reason,
+        )
+        if complaint_response:
+            logger.info("Complaint fast path triggered - returning immediate response")
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return ChatResponse(
+                answer=complaint_response,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    route=RouteType.LLM_ONLY.value,
+                    intent=IntentType.GENERAL_CHAT.value,
+                    domain="GENERAL",
+                    masked=pii_input.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    latency_ms=latency_ms,
+                ),
             )
 
         # =====================================================================
@@ -644,6 +683,71 @@ class ChatService:
             logger.debug(f"Route {route.value}: No RAG/Backend")
             sources = []
 
+        # =====================================================================
+        # Phase 39: [A] Answerability Gate (답변 가능 여부 게이트)
+        # =====================================================================
+        # 내부 규정/사규/정책 질문에서 RAG 근거가 없으면 답변 생성 금지
+        # 고정 템플릿으로 "문서 근거 없음" 안내하고 종료
+
+        # Tier0Intent 결정: orchestration_result가 있으면 사용, 없으면 매핑
+        tier0_intent = Tier0Intent.UNKNOWN
+        if orchestration_result is not None:
+            tier0_intent = orchestration_result.router_result.tier0_intent
+        elif intent == IntentType.POLICY_QA:
+            tier0_intent = Tier0Intent.POLICY_QA
+        elif intent == IntentType.EDUCATION_QA:
+            tier0_intent = Tier0Intent.EDUCATION_QA
+
+        # RouterRouteType 매핑
+        router_route_type = self._map_route_type_to_router_route_type(route)
+
+        # 디버그 정보 생성
+        debug_info = self._answer_guard.create_debug_info(
+            intent=tier0_intent,
+            domain=domain,
+            route_type=router_route_type,
+            route_reason=f"intent={intent.value}, rag_sources={len(sources)}",
+        )
+
+        # Answerability 체크
+        is_answerable, no_evidence_template = self._answer_guard.check_answerability(
+            intent=tier0_intent,
+            sources=sources,
+            route_type=router_route_type,
+            top_k=5,  # 기본 topK 값
+            debug_info=debug_info,
+        )
+
+        if not is_answerable:
+            # 답변 불가 - 고정 템플릿으로 즉시 종료
+            logger.warning(
+                f"Answerability BLOCKED: intent={tier0_intent.value}, "
+                f"sources={len(sources)}, returning no-evidence template"
+            )
+            # 마지막 에러 사유 저장 (불만 빠른 경로용)
+            self._last_error_reason = "NO_RAG_EVIDENCE"
+
+            # 디버그 로그 출력
+            self._answer_guard.log_debug_info(debug_info, req.session_id)
+
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return ChatResponse(
+                answer=no_evidence_template,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    route=route.value,
+                    intent=intent.value,
+                    domain=domain,
+                    masked=pii_input.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    rag_used=False,
+                    rag_source_count=0,
+                    latency_ms=latency_ms,
+                    error_type="NO_RAG_EVIDENCE",
+                    error_message="내부 규정 질문에 대한 RAG 근거 없음",
+                ),
+            )
+
         # Step 5: Build LLM prompt messages (with guardrails)
         # Phase 11: 라우트에 따라 다른 프롬프트 빌더 사용
         if route in mixed_routes:
@@ -751,6 +855,65 @@ class ChatService:
             # Phase 12: 메트릭 수집
             metrics.increment_error(LOG_TAG_LLM_ERROR)
             metrics.increment_error(LOG_TAG_LLM_FALLBACK)
+
+        # =====================================================================
+        # Phase 39: [B] Citation Hallucination Guard (가짜 조항 인용 차단)
+        # =====================================================================
+        # 답변에 "제N조/조항/항" 패턴이 있는데 RAG 소스에 없으면 답변 폐기
+        # LLM_ONLY 경로에서는 "근거/조항 섹션"을 절대 붙이지 않음
+        if final_route != RouteType.ERROR:  # 에러 응답은 검증 스킵
+            citation_valid, validated_answer = self._answer_guard.validate_citation(
+                answer=raw_answer,
+                sources=sources,
+                debug_info=debug_info,
+            )
+
+            if not citation_valid:
+                logger.warning("Citation validation FAILED - replacing with blocked template")
+                raw_answer = validated_answer  # 차단 템플릿으로 교체
+                error_type = "CITATION_HALLUCINATION"
+                error_message = "가짜 조항 인용 감지됨"
+                self._last_error_reason = "CITATION_HALLUCINATION"
+            else:
+                raw_answer = validated_answer
+
+        # =====================================================================
+        # Phase 39: [D] Korean-only Output Enforcement (언어 가드레일)
+        # =====================================================================
+        # 중국어 혼입 탐지 시: 한국어 강제 재생성 1회 시도
+        # 재생성도 실패하면 "언어 오류" 템플릿으로 대체
+        if final_route != RouteType.ERROR:  # 에러 응답은 검증 스킵
+            async def llm_regenerate(prompt: str) -> str:
+                """LLM 재생성 함수."""
+                return await self._llm.generate_chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=None,
+                    temperature=0.2,
+                    max_tokens=1024,
+                )
+
+            korean_valid, korean_answer = await self._answer_guard.enforce_korean_output(
+                answer=raw_answer,
+                llm_regenerate_fn=llm_regenerate,
+                original_query=masked_query,
+                debug_info=debug_info,
+            )
+
+            if not korean_valid:
+                logger.warning("Korean enforcement FAILED - replacing with error template")
+                raw_answer = korean_answer  # 언어 오류 템플릿으로 교체
+                error_type = "LANGUAGE_ERROR"
+                error_message = "중국어 혼입 감지됨"
+                self._last_error_reason = "LANGUAGE_ERROR"
+            else:
+                raw_answer = korean_answer
+
+        # Phase 39: 성공 시 마지막 에러 사유 초기화
+        if error_type is None:
+            self._last_error_reason = None
+
+        # Phase 39: 디버그 로그 출력
+        self._answer_guard.log_debug_info(debug_info, req.session_id)
 
         # Step 7: PII Masking (OUTPUT stage)
         pii_output = await self._pii.detect_and_mask(
@@ -1549,6 +1712,36 @@ class ChatService:
             RouterRouteType.ROUTE_UNKNOWN: RouteType.FALLBACK,
         }
         return mapping.get(router_route)
+
+    def _map_route_type_to_router_route_type(
+        self, route: RouteType
+    ) -> RouterRouteType:
+        """
+        RouteType을 RouterRouteType으로 매핑합니다 (역방향).
+
+        Phase 39: Answerability 체크에 필요한 역방향 매핑.
+
+        Args:
+            route: RouteType
+
+        Returns:
+            RouterRouteType: 매핑된 RouterRouteType
+        """
+        mapping = {
+            RouteType.RAG_INTERNAL: RouterRouteType.RAG_INTERNAL,
+            RouteType.ROUTE_RAG_INTERNAL: RouterRouteType.RAG_INTERNAL,
+            RouteType.BACKEND_API: RouterRouteType.BACKEND_API,
+            RouteType.LLM_ONLY: RouterRouteType.LLM_ONLY,
+            RouteType.ROUTE_LLM_ONLY: RouterRouteType.LLM_ONLY,
+            RouteType.TRAINING: RouterRouteType.LLM_ONLY,
+            RouteType.ROUTE_TRAINING: RouterRouteType.LLM_ONLY,
+            RouteType.MIXED_BACKEND_RAG: RouterRouteType.RAG_INTERNAL,
+            RouteType.INCIDENT: RouterRouteType.BACKEND_API,
+            RouteType.ROUTE_INCIDENT: RouterRouteType.BACKEND_API,
+            RouteType.FALLBACK: RouterRouteType.ROUTE_UNKNOWN,
+            RouteType.ERROR: RouterRouteType.ROUTE_UNKNOWN,
+        }
+        return mapping.get(route, RouterRouteType.ROUTE_UNKNOWN)
 
     # =========================================================================
     # Phase 11: BACKEND_API용 LLM 메시지 빌더
