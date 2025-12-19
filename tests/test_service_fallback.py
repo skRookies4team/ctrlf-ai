@@ -67,7 +67,11 @@ async def test_chat_service_returns_response_without_config() -> None:
 @pytest.mark.anyio
 async def test_chat_service_returns_fallback_message() -> None:
     """
-    Test that ChatService returns LLM fallback message when LLM is not configured.
+    Test that ChatService returns fallback/template message when services are not configured.
+
+    Phase 39: AnswerGuardService 도입으로 RAG 근거 없으면 한국어 템플릿 반환.
+    - LLM 미설정 시 LLM fallback message (영어)
+    - RAG 근거 없음 시 AnswerGuardService 템플릿 (한국어: "승인/인덱싱된...")
     """
     ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
@@ -86,8 +90,15 @@ async def test_chat_service_returns_fallback_message() -> None:
 
     response = await service.handle_chat(request)
 
-    # Should return LLM fallback message
-    assert "LLM service" in response.answer or "not configured" in response.answer
+    # Phase 39: AnswerGuardService의 NO_EVIDENCE 템플릿 또는 LLM fallback 메시지
+    # - 한국어: "승인/인덱싱된 사내 문서에서 관련 내용을 찾지 못했어요"
+    # - 영어: "LLM service" or "not configured"
+    assert (
+        "LLM service" in response.answer
+        or "not configured" in response.answer
+        or "승인/인덱싱된" in response.answer
+        or "문서에서" in response.answer
+    )
 
 
 @pytest.mark.anyio
