@@ -20,12 +20,13 @@ Phase 34: Storage Adapter
 import asyncio
 import mimetypes
 import os
+import random
 import shutil
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Callable, Optional, Union
 from urllib.parse import urljoin
 
 from app.core.logging import get_logger
@@ -567,22 +568,41 @@ class MinIOStorageProvider(BaseStorageProvider):
 
 
 # =============================================================================
-# Backend Presigned Storage Provider (Phase 35)
+# Backend Presigned Storage Provider (Phase 35 + Phase 36)
 # =============================================================================
 
 
+@dataclass
+class UploadProgress:
+    """업로드 진행상태 콜백 정보 (Phase 36)."""
+    stage: str  # UPLOAD_STARTED, UPLOAD_DONE, UPLOAD_FAILED
+    key: str
+    message: str = ""
+    error: Optional[str] = None
+
+
+# 업로드 진행상태 콜백 타입
+UploadProgressCallback = Optional[Callable[[UploadProgress], None]]
+
+
 class BackendPresignedStorageProvider(BaseStorageProvider):
-    """Backend Presigned URL 방식 Storage Provider (Phase 35).
+    """Backend Presigned URL 방식 Storage Provider (Phase 35 + Phase 36).
 
     AI 서버는 AWS 자격증명 없이 백엔드가 발급한 Presigned URL로 S3에 업로드.
     최소권한 원칙: AI 서버는 S3 직접 접근 불가, 백엔드 Internal API만 호출.
 
+    Phase 36 업데이트:
+    - 재시도 정책: 5xx/네트워크 오류만 재시도, 4xx는 즉시 실패
+    - 스트리밍 업로드: bytes 전체를 메모리에 올리지 않고 파일 핸들로 전송
+    - ETag 검증 강화: 기본적으로 ETag 없으면 실패 (STORAGE_ETAG_OPTIONAL로 완화)
+    - 업로드 진행상태 콜백: UPLOAD_STARTED, UPLOAD_DONE, UPLOAD_FAILED
+
     흐름:
     1. put_object 호출 시 파일 크기 확인 (VIDEO_MAX_UPLOAD_BYTES 초과 시 에러)
-    2. 백엔드 /internal/storage/presign-put 호출 → upload_url, public_url 수신
-    3. httpx로 PUT upload_url 실행 (Presigned URL로 S3에 직접 업로드)
-    4. 업로드 응답 헤더에서 ETag 수집
-    5. 백엔드 /internal/storage/complete 호출 → 메타데이터 저장 완료
+    2. 백엔드 /internal/storage/presign-put 호출 → upload_url, public_url 수신 (재시도 적용)
+    3. httpx로 PUT upload_url 실행 (스트리밍, 재시도 적용)
+    4. 업로드 응답 헤더에서 ETag 수집 (ETag 검증)
+    5. 백엔드 /internal/storage/complete 호출 (재시도 적용)
     6. StorageResult(url=public_url, key=key, ...) 반환
 
     환경변수:
@@ -591,6 +611,9 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
     - BACKEND_STORAGE_PRESIGN_PATH: Presign 발급 API 경로
     - BACKEND_STORAGE_COMPLETE_PATH: 완료 콜백 API 경로
     - VIDEO_MAX_UPLOAD_BYTES: 업로드 최대 용량 (기본 100MB)
+    - STORAGE_UPLOAD_RETRY_MAX: 최대 재시도 횟수 (기본 3)
+    - STORAGE_UPLOAD_RETRY_BASE_SEC: exponential backoff 기본 시간 (기본 1.0)
+    - STORAGE_ETAG_OPTIONAL: ETag 없이도 성공 처리 (기본 False)
     """
 
     def __init__(self):
@@ -603,6 +626,11 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         self._complete_path = settings.BACKEND_STORAGE_COMPLETE_PATH
         self._max_upload_bytes = settings.VIDEO_MAX_UPLOAD_BYTES
         self._public_base_url = settings.storage_public_base_url
+
+        # Phase 36: 재시도 및 ETag 설정
+        self._retry_max = settings.STORAGE_UPLOAD_RETRY_MAX
+        self._retry_base_sec = settings.STORAGE_UPLOAD_RETRY_BASE_SEC
+        self._etag_optional = settings.STORAGE_ETAG_OPTIONAL
 
         if not self._backend_base_url:
             raise ValueError(
@@ -617,13 +645,137 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
             headers["Authorization"] = f"Bearer {self._service_token}"
         return headers
 
+    def _should_retry(self, error: Exception) -> bool:
+        """재시도 여부 판단 (Phase 36).
+
+        재시도 대상:
+        - 네트워크 오류 (ConnectError, TimeoutException)
+        - 5xx 서버 오류
+
+        재시도 금지 (즉시 실패):
+        - 4xx 클라이언트 오류 (401/403/404/422 등)
+        """
+        import httpx
+
+        # 네트워크 오류는 재시도
+        if isinstance(error, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
+            return True
+
+        # HTTP 상태 코드 확인
+        if isinstance(error, httpx.HTTPStatusError):
+            status_code = error.response.status_code
+            # 5xx는 재시도, 4xx는 즉시 실패
+            if 500 <= status_code < 600:
+                return True
+            return False
+
+        # 기타 예외는 재시도하지 않음
+        return False
+
+    async def _with_retry(
+        self,
+        operation_name: str,
+        operation: Callable,
+        key: str,
+        *args,
+        **kwargs,
+    ) -> Any:
+        """재시도 로직 래퍼 (Phase 36).
+
+        Args:
+            operation_name: 작업 이름 (로깅용)
+            operation: 실행할 async 함수
+            key: 객체 키 (에러 메시지용)
+            *args, **kwargs: operation에 전달할 인자
+
+        Returns:
+            operation 결과
+
+        Raises:
+            StorageUploadError: 최대 재시도 후 실패 시
+        """
+        import httpx
+
+        last_error: Optional[Exception] = None
+
+        for attempt in range(self._retry_max + 1):
+            try:
+                return await operation(*args, **kwargs)
+
+            except (httpx.HTTPStatusError, httpx.ConnectError,
+                    httpx.TimeoutException, httpx.NetworkError) as e:
+
+                last_error = e
+
+                # 재시도 불가능한 에러인지 확인
+                if not self._should_retry(e):
+                    status_code = getattr(getattr(e, 'response', None), 'status_code', 'N/A')
+                    logger.error(
+                        f"{operation_name} failed (no retry): "
+                        f"key={key}, status={status_code}, error={e}"
+                    )
+                    raise StorageUploadError(
+                        f"{operation_name} failed: HTTP {status_code}",
+                        key,
+                        e,
+                    )
+
+                # 마지막 시도였으면 실패
+                if attempt == self._retry_max:
+                    logger.error(
+                        f"{operation_name} failed after {self._retry_max + 1} attempts: "
+                        f"key={key}, error={e}"
+                    )
+                    raise StorageUploadError(
+                        f"{operation_name} failed after {self._retry_max + 1} attempts",
+                        key,
+                        e,
+                    )
+
+                # Exponential backoff with jitter
+                backoff = self._retry_base_sec * (2 ** attempt)
+                jitter = random.uniform(0, backoff)
+                wait_time = backoff + jitter
+
+                logger.warning(
+                    f"{operation_name} failed (attempt {attempt + 1}/{self._retry_max + 1}): "
+                    f"key={key}, error={e}, retrying in {wait_time:.2f}s"
+                )
+                await asyncio.sleep(wait_time)
+
+            except Exception as e:
+                # 기타 예외는 재시도하지 않음
+                logger.error(f"{operation_name} unexpected error: key={key}, error={e}")
+                raise StorageUploadError(f"{operation_name} error: {e}", key, e)
+
+        # 이론상 도달 불가
+        raise StorageUploadError(
+            f"{operation_name} failed unexpectedly",
+            key,
+            last_error,
+        )
+
+    async def _do_presign_request(
+        self,
+        url: str,
+        payload: dict,
+        headers: dict,
+    ) -> dict:
+        """Presign 요청 실행 (재시도 없음, _with_retry에서 래핑)."""
+        import httpx
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            return response.json()
+
     async def _request_presign(
         self,
         object_key: str,
         content_type: str,
         content_length: int,
     ) -> dict:
-        """백엔드에 Presigned URL 발급 요청.
+        """백엔드에 Presigned URL 발급 요청 (Phase 36: 재시도 적용).
 
         Args:
             object_key: 저장할 객체 키
@@ -636,8 +788,6 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         Raises:
             StorageUploadError: Presign 발급 실패 시
         """
-        import httpx
-
         url = f"{self._backend_base_url}{self._presign_path}"
         payload = {
             "object_key": object_key,
@@ -645,38 +795,73 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
             "content_length": content_length,
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers=self._get_headers(),
+        return await self._with_retry(
+            "Presign request",
+            self._do_presign_request,
+            object_key,
+            url,
+            payload,
+            self._get_headers(),
+        )
+
+    async def _do_upload(
+        self,
+        upload_url: str,
+        file_path: Path,
+        headers: dict,
+    ) -> str:
+        """파일 업로드 실행 (스트리밍, 재시도 없음).
+
+        Phase 36: 파일을 메모리에 올리지 않고 스트리밍으로 업로드.
+        """
+        import httpx
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            # 파일을 스트리밍으로 전송 (메모리 효율적)
+            with open(file_path, "rb") as f:
+                response = await client.put(
+                    upload_url,
+                    content=f,
+                    headers=headers,
                 )
                 response.raise_for_status()
-                return response.json()
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Presign request failed: {e.response.status_code} - {e.response.text}")
-            raise StorageUploadError(
-                f"Presign request failed: HTTP {e.response.status_code}",
-                object_key,
-                e,
-            )
-        except Exception as e:
-            logger.error(f"Presign request error: {e}")
-            raise StorageUploadError(f"Presign request error: {e}", object_key, e)
 
-    async def _upload_to_presigned_url(
+                # ETag 추출
+                etag = response.headers.get("ETag", "")
+                return etag
+
+    async def _do_upload_bytes(
         self,
         upload_url: str,
         data: bytes,
         headers: dict,
     ) -> str:
-        """Presigned URL로 파일 업로드.
+        """bytes 데이터 업로드 실행 (재시도 없음)."""
+        import httpx
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.put(
+                upload_url,
+                content=data,
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.headers.get("ETag", "")
+
+    async def _upload_to_presigned_url(
+        self,
+        upload_url: str,
+        data: Union[bytes, Path],
+        headers: dict,
+        key: str,
+    ) -> str:
+        """Presigned URL로 파일 업로드 (Phase 36: 스트리밍 + 재시도).
 
         Args:
             upload_url: Presigned PUT URL
-            data: 업로드할 데이터
+            data: 업로드할 데이터 (bytes 또는 Path)
             headers: 업로드 시 사용할 헤더 (Content-Type 등)
+            key: 객체 키 (에러 메시지용)
 
         Returns:
             str: ETag 값 (따옴표 포함)
@@ -684,31 +869,40 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         Raises:
             StorageUploadError: 업로드 실패 시
         """
+        if isinstance(data, Path):
+            etag = await self._with_retry(
+                "Presigned PUT upload",
+                self._do_upload,
+                key,
+                upload_url,
+                data,
+                headers,
+            )
+        else:
+            etag = await self._with_retry(
+                "Presigned PUT upload",
+                self._do_upload_bytes,
+                key,
+                upload_url,
+                data,
+                headers,
+            )
+
+        logger.info(f"Upload to presigned URL succeeded: key={key}, ETag={etag}")
+        return etag
+
+    async def _do_complete_request(
+        self,
+        url: str,
+        payload: dict,
+        headers: dict,
+    ) -> None:
+        """Complete 요청 실행 (재시도 없음)."""
         import httpx
 
-        try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
-                response = await client.put(
-                    upload_url,
-                    content=data,
-                    headers=headers,
-                )
-                response.raise_for_status()
-
-                # ETag 추출 (S3 응답 헤더)
-                etag = response.headers.get("ETag", "")
-                logger.info(f"Upload to presigned URL succeeded, ETag: {etag}")
-                return etag
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Presigned upload failed: {e.response.status_code}")
-            raise StorageUploadError(
-                f"Upload to presigned URL failed: HTTP {e.response.status_code}",
-                upload_url,
-                e,
-            )
-        except Exception as e:
-            logger.error(f"Presigned upload error: {e}")
-            raise StorageUploadError(f"Upload error: {e}", upload_url, e)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
 
     async def _notify_complete(
         self,
@@ -718,7 +912,7 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         content_type: str,
         public_url: str,
     ) -> None:
-        """백엔드에 업로드 완료 알림.
+        """백엔드에 업로드 완료 알림 (Phase 36: 재시도 적용).
 
         Args:
             object_key: 저장된 객체 키
@@ -730,8 +924,6 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         Raises:
             StorageUploadError: 완료 알림 실패 시
         """
-        import httpx
-
         url = f"{self._backend_base_url}{self._complete_path}"
         payload = {
             "object_key": object_key,
@@ -741,57 +933,97 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
             "public_url": public_url,
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers=self._get_headers(),
+        await self._with_retry(
+            "Complete notification",
+            self._do_complete_request,
+            object_key,
+            url,
+            payload,
+            self._get_headers(),
+        )
+
+        logger.info(f"Upload complete notification sent: key={object_key}")
+
+    def _validate_etag(self, etag: str, key: str) -> None:
+        """ETag 유효성 검증 (Phase 36).
+
+        Args:
+            etag: S3 응답의 ETag
+            key: 객체 키 (에러 메시지용)
+
+        Raises:
+            StorageUploadError: ETag가 없고 STORAGE_ETAG_OPTIONAL=False인 경우
+        """
+        if not etag or etag.strip() == "":
+            if self._etag_optional:
+                logger.warning(
+                    f"ETag missing but STORAGE_ETAG_OPTIONAL=True, "
+                    f"proceeding without ETag: key={key}"
                 )
-                response.raise_for_status()
-                logger.info(f"Upload complete notification sent for: {object_key}")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Complete notification failed: {e.response.status_code}")
-            raise StorageUploadError(
-                f"Complete notification failed: HTTP {e.response.status_code}",
-                object_key,
-                e,
-            )
-        except Exception as e:
-            logger.error(f"Complete notification error: {e}")
-            raise StorageUploadError(f"Complete notification error: {e}", object_key, e)
+            else:
+                raise StorageUploadError(
+                    "ETag missing in S3 response. "
+                    "Set STORAGE_ETAG_OPTIONAL=True to allow uploads without ETag.",
+                    key,
+                )
 
     async def put_object(
         self,
         data: Union[bytes, str, Path],
         key: str,
         content_type: Optional[str] = None,
+        progress_callback: UploadProgressCallback = None,
     ) -> StorageResult:
         """객체를 Backend Presigned URL 방식으로 S3에 저장.
 
-        Phase 35 핵심 로직:
-        1. 파일 크기 검증 (VIDEO_MAX_UPLOAD_BYTES 초과 시 에러)
-        2. Presign 요청 → upload_url 수신
-        3. Presigned URL로 PUT 업로드
-        4. Complete 콜백 호출
-        5. StorageResult 반환
+        Phase 36 업데이트:
+        - 스트리밍 업로드 (파일은 메모리에 올리지 않음)
+        - 재시도 정책 적용
+        - ETag 검증 강화
+        - 진행상태 콜백 지원
+
+        Args:
+            data: 업로드할 데이터 (bytes, 파일 경로 문자열, 또는 Path)
+            key: 객체 키
+            content_type: MIME 타입 (None이면 자동 추론)
+            progress_callback: 진행상태 콜백 함수
+
+        Returns:
+            StorageResult: 업로드 결과
+
+        Raises:
+            StorageUploadError: 업로드 실패 시
         """
         try:
+            # 진행상태: 시작
+            if progress_callback:
+                progress_callback(UploadProgress(
+                    stage="UPLOAD_STARTED",
+                    key=key,
+                    message="업로드 시작",
+                ))
+
             # 데이터 준비 및 크기 확인
+            file_path: Optional[Path] = None
+            upload_data: Union[bytes, Path]
+
             if isinstance(data, Path):
                 if not data.exists():
                     raise StorageUploadError(f"File not found: {data}", key)
-                file_bytes = data.read_bytes()
-                size_bytes = len(file_bytes)
+                file_path = data
+                size_bytes = data.stat().st_size
+                upload_data = data
             elif isinstance(data, str):
                 path = Path(data)
                 if not path.exists():
                     raise StorageUploadError(f"File not found: {data}", key)
-                file_bytes = path.read_bytes()
-                size_bytes = len(file_bytes)
+                file_path = path
+                size_bytes = path.stat().st_size
+                upload_data = path
             else:
-                file_bytes = data
+                # bytes는 메모리에 있으므로 그대로 사용
                 size_bytes = len(data)
+                upload_data = data
 
             # 용량 제한 검증
             if size_bytes > self._max_upload_bytes:
@@ -807,7 +1039,7 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
                 content_type, _ = mimetypes.guess_type(key)
                 content_type = content_type or "application/octet-stream"
 
-            # 1. Presign 요청
+            # 1. Presign 요청 (재시도 적용)
             presign_response = await self._request_presign(
                 object_key=key,
                 content_type=content_type,
@@ -822,26 +1054,38 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
             if "Content-Type" not in upload_headers:
                 upload_headers["Content-Type"] = content_type
 
-            # 2. Presigned URL로 업로드
+            # 2. Presigned URL로 업로드 (스트리밍, 재시도 적용)
             etag = await self._upload_to_presigned_url(
                 upload_url=upload_url,
-                data=file_bytes,
+                data=upload_data,
                 headers=upload_headers,
+                key=key,
             )
 
-            # 3. Complete 콜백
+            # 3. ETag 검증 (Phase 36)
+            self._validate_etag(etag, key)
+
+            # 4. Complete 콜백 (재시도 적용)
             await self._notify_complete(
                 object_key=key,
-                etag=etag,
+                etag=etag or "",
                 size_bytes=size_bytes,
                 content_type=content_type,
                 public_url=public_url,
             )
 
             logger.info(
-                f"Backend presigned upload succeeded: {key}, "
+                f"Backend presigned upload succeeded: key={key}, "
                 f"size={size_bytes}, url={public_url}"
             )
+
+            # 진행상태: 완료
+            if progress_callback:
+                progress_callback(UploadProgress(
+                    stage="UPLOAD_DONE",
+                    key=key,
+                    message="업로드 완료",
+                ))
 
             return StorageResult(
                 key=key,
@@ -850,11 +1094,29 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
                 content_type=content_type,
             )
 
-        except StorageUploadError:
+        except StorageUploadError as e:
+            # 진행상태: 실패
+            if progress_callback:
+                progress_callback(UploadProgress(
+                    stage="UPLOAD_FAILED",
+                    key=key,
+                    message="업로드 실패",
+                    error=e.message,
+                ))
             raise
+
         except Exception as e:
-            logger.error(f"Backend presigned upload failed: {key}, error={e}")
-            raise StorageUploadError(str(e), key, e)
+            logger.error(f"Backend presigned upload failed: key={key}, error={e}")
+            error = StorageUploadError(str(e), key, e)
+            # 진행상태: 실패
+            if progress_callback:
+                progress_callback(UploadProgress(
+                    stage="UPLOAD_FAILED",
+                    key=key,
+                    message="업로드 실패",
+                    error=str(e),
+                ))
+            raise error
 
     async def get_url(self, key: str, expires_in: int = 3600) -> str:
         """객체 URL 반환.
@@ -875,7 +1137,6 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         """
         import httpx
 
-        # TODO: 백엔드 delete API 경로 설정 추가 필요
         delete_path = "/internal/storage/delete"
         url = f"{self._backend_base_url}{delete_path}"
 
@@ -890,7 +1151,7 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
                 logger.info(f"Backend presigned storage: deleted {key}")
                 return True
         except Exception as e:
-            logger.error(f"Backend presigned delete failed: {key}, error={e}")
+            logger.error(f"Backend presigned delete failed: key={key}, error={e}")
             return False
 
 

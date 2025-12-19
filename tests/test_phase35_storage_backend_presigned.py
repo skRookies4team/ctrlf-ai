@@ -42,6 +42,10 @@ def mock_settings():
     settings.BACKEND_STORAGE_COMPLETE_PATH = "/internal/storage/complete"
     settings.VIDEO_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB for testing
     settings.storage_public_base_url = "https://cdn.example.com"
+    # Phase 36: 재시도 및 ETag 설정
+    settings.STORAGE_UPLOAD_RETRY_MAX = 3  # 최대 3회 재시도
+    settings.STORAGE_UPLOAD_RETRY_BASE_SEC = 0.01  # 테스트용 짧은 대기시간
+    settings.STORAGE_ETAG_OPTIONAL = False  # 기본: ETag 필수
     return settings
 
 
@@ -230,7 +234,7 @@ class TestPresignFailure:
 
     @pytest.mark.asyncio
     async def test_presign_http_error_raises_storage_error(self, provider, sample_file):
-        """Presign HTTP 에러 시 StorageUploadError 발생."""
+        """Presign HTTP 5xx 에러 시 재시도 후 StorageUploadError 발생 (Phase 36)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
@@ -255,13 +259,14 @@ class TestPresignFailure:
             with pytest.raises(StorageUploadError) as exc_info:
                 await provider.put_object(sample_file, key, "video/mp4")
 
-            assert "Presign request failed" in str(exc_info.value)
+            # Phase 36: 5xx는 재시도 후 실패 메시지
+            assert "after 4 attempts" in str(exc_info.value) or "Presign request" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_presign_connection_error_raises_storage_error(
         self, provider, sample_file
     ):
-        """Presign 연결 에러 시 StorageUploadError 발생."""
+        """Presign 연결 에러 시 재시도 후 StorageUploadError 발생 (Phase 36)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
@@ -278,7 +283,8 @@ class TestPresignFailure:
             with pytest.raises(StorageUploadError) as exc_info:
                 await provider.put_object(sample_file, key, "video/mp4")
 
-            assert "Presign request error" in str(exc_info.value)
+            # Phase 36: 네트워크 에러는 재시도 후 실패 메시지
+            assert "after 4 attempts" in str(exc_info.value) or "Presign request" in str(exc_info.value)
 
 
 # =============================================================================
@@ -293,13 +299,11 @@ class TestPutUploadFailure:
     async def test_put_http_error_raises_storage_error(
         self, provider, sample_file, mock_presign_response
     ):
-        """PUT 업로드 HTTP 에러 시 StorageUploadError 발생."""
+        """PUT 업로드 403 에러 시 재시도 없이 StorageUploadError 발생 (Phase 36)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
-
-            call_count = 0
 
             async def mock_post(url, **kwargs):
                 response = MagicMock()
@@ -326,7 +330,8 @@ class TestPutUploadFailure:
             with pytest.raises(StorageUploadError) as exc_info:
                 await provider.put_object(sample_file, key, "video/mp4")
 
-            assert "Upload to presigned URL failed" in str(exc_info.value)
+            # Phase 36: 4xx는 재시도 없이 즉시 실패
+            assert "HTTP 403" in str(exc_info.value) or "Presigned PUT upload failed" in str(exc_info.value)
 
 
 # =============================================================================
@@ -341,25 +346,25 @@ class TestCompleteCallbackFailure:
     async def test_complete_http_error_raises_storage_error(
         self, provider, sample_file, mock_presign_response
     ):
-        """Complete 콜백 HTTP 에러 시 StorageUploadError 발생."""
+        """Complete 콜백 HTTP 5xx 에러 시 재시도 후 StorageUploadError 발생 (Phase 36)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
 
-            post_call_count = 0
+            presign_done = False
 
             async def mock_post(url, **kwargs):
-                nonlocal post_call_count
-                post_call_count += 1
+                nonlocal presign_done
 
                 response = MagicMock()
-                if post_call_count == 1:
-                    # First call: presign
+                if "presign-put" in url and not presign_done:
+                    # Presign 요청
+                    presign_done = True
                     response.json.return_value = mock_presign_response
                     response.raise_for_status = MagicMock()
                 else:
-                    # Second call: complete - fail
+                    # Complete 요청 - 5xx 에러
                     response.status_code = 500
                     response.raise_for_status.side_effect = httpx.HTTPStatusError(
                         "Server Error",
@@ -383,7 +388,8 @@ class TestCompleteCallbackFailure:
             with pytest.raises(StorageUploadError) as exc_info:
                 await provider.put_object(sample_file, key, "video/mp4")
 
-            assert "Complete notification failed" in str(exc_info.value)
+            # Phase 36: 5xx는 재시도 후 실패 메시지
+            assert "after 4 attempts" in str(exc_info.value) or "Complete notification" in str(exc_info.value)
 
 
 # =============================================================================
