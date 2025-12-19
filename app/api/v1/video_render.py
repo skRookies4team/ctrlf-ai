@@ -39,6 +39,8 @@ from app.models.video_render import (
     RenderJobStatus,
     ScriptCreateRequest,
     ScriptApproveRequest,
+    ScriptGenerateRequest,
+    ScriptGenerateResponse,
     ScriptResponse,
     ScriptStatus,
     VideoAssetResponse,
@@ -47,6 +49,10 @@ from app.services.education_catalog_service import get_education_catalog_service
 from app.services.kb_index_service import get_kb_index_service
 from app.services.video_render_service import get_video_render_service
 from app.services.video_renderer_mvp import get_mvp_video_renderer
+from app.services.video_script_generation_service import (
+    get_video_script_generation_service,
+    ScriptGenerationOptions,
+)
 
 logger = get_logger(__name__)
 
@@ -213,6 +219,110 @@ async def get_script(
         created_by=script.created_by,
         created_at=script.created_at.isoformat(),
     )
+
+
+# =============================================================================
+# Phase 31: Script Generation API
+# =============================================================================
+
+
+@router.post(
+    "/videos/{video_id}/scripts/generate",
+    response_model=ScriptGenerateResponse,
+    summary="스크립트 자동 생성 (Phase 31)",
+    description="""
+교육 원문을 LLM으로 분석하여 VideoScript JSON을 자동 생성합니다.
+
+**입력**:
+- source_text: 교육 원문 텍스트
+- language: 언어 코드 (기본: ko)
+- target_minutes: 목표 영상 길이 (분, 기본: 3)
+- max_chapters: 최대 챕터 수 (기본: 5)
+- max_scenes_per_chapter: 챕터당 최대 씬 수 (기본: 6)
+- style: 스크립트 스타일 (기본: friendly_security_training)
+
+**출력**:
+- 생성된 스크립트 (DRAFT 상태)
+- 생성된 raw_json (chapters/scenes 구조)
+
+**정책**:
+- EXPIRED 교육(video_id 기준)은 404 차단
+- 생성 실패 시 422 반환 (reason_code: SCRIPT_GENERATION_FAILED)
+""",
+)
+async def generate_script(
+    video_id: str,
+    request: ScriptGenerateRequest,
+    user_id: str = "anonymous",
+    service=Depends(get_render_service),
+):
+    """교육 원문에서 스크립트 자동 생성 (Phase 31)."""
+    # EXPIRED 교육 차단
+    ensure_education_not_expired(video_id)
+
+    # 생성 옵션 구성
+    options = ScriptGenerationOptions(
+        language=request.language,
+        target_minutes=request.target_minutes,
+        max_chapters=request.max_chapters,
+        max_scenes_per_chapter=request.max_scenes_per_chapter,
+        style=request.style,
+    )
+
+    try:
+        # LLM으로 스크립트 생성
+        gen_service = get_video_script_generation_service()
+        raw_json = await gen_service.generate_script(
+            video_id=video_id,
+            source_text=request.source_text,
+            options=options,
+        )
+
+        # 생성된 스크립트를 DRAFT로 저장
+        script = service.create_script(
+            video_id=video_id,
+            raw_json=raw_json,
+            created_by=user_id,
+        )
+
+        logger.info(
+            f"Script generated and saved: video_id={video_id}, "
+            f"script_id={script.script_id}"
+        )
+
+        return ScriptGenerateResponse(
+            script_id=script.script_id,
+            video_id=script.video_id,
+            status=script.status.value,
+            raw_json=script.raw_json,
+        )
+
+    except ValueError as e:
+        # 스크립트 생성 실패
+        error_args = e.args
+        detail = {
+            "reason_code": "SCRIPT_GENERATION_FAILED",
+            "message": str(error_args[0]) if error_args else "Script generation failed",
+        }
+        if len(error_args) > 1 and isinstance(error_args[1], dict):
+            detail.update(error_args[1])
+
+        logger.error(f"Script generation failed: video_id={video_id}, error={e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=detail,
+        )
+
+    except Exception as e:
+        # 예상치 못한 에러
+        logger.exception(f"Unexpected error in script generation: video_id={video_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "reason_code": "INTERNAL_ERROR",
+                "message": f"Unexpected error: {type(e).__name__}",
+            },
+        )
 
 
 # =============================================================================

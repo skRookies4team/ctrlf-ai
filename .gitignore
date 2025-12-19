@@ -133,3 +133,4 @@ prompt.txt
 *.xlsx
 /DEVELOPMENT_REPORT*.md
 .claude/
+video_output/

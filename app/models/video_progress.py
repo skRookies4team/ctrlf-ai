@@ -9,12 +9,14 @@ Phase 22: 교육영상 진행률 모델 (Video Progress Models)
 3. 완료 확정 (서버 검증): VIDEO_COMPLETE
 4. 퀴즈 버튼 활성화 조건: QUIZ_UNLOCK
 5. 시크 제한: SEEK_LOCK_ENFORCEMENT
+6. 배속 제어: PLAYBACK_RATE_CONTROL
 
 서버 검증 룰:
 - 역행 금지: progress가 감소하면 거부
 - 급증 제한: 단위 시간당 progress 증가폭 상한 (10초에 30% 증가 같은 비정상 차단)
-- 완료 판정: 누적 시청률 >= 95% AND 마지막 구간 시청 조건 만족
+- 완료 판정: 누적 시청률 >= 100% (100%면 완료)
 - 시크 제한: 완료 전 seek_allowed=False, 완료 후 True
+- 배속 제한: 4대교육 최초 시청 시 1.0배속만 허용, 재시청 또는 일반교육은 배속 허용
 """
 
 from datetime import datetime
@@ -61,12 +63,14 @@ class VideoPlayStartRequest(BaseModel):
         training_id: 교육/영상 ID
         total_duration: 영상 총 길이 (초)
         is_mandatory_edu: 4대교육 여부 (True면 완료 후 퀴즈 필수)
+        playback_rate: 재생 속도 (기본 1.0, 4대교육 최초 시청 시 1.0만 허용)
     """
 
     user_id: str = Field(..., description="사용자 ID")
     training_id: str = Field(..., description="교육/영상 ID")
     total_duration: int = Field(..., gt=0, description="영상 총 길이 (초)")
     is_mandatory_edu: bool = Field(False, description="4대교육 여부")
+    playback_rate: float = Field(1.0, ge=0.5, le=2.0, description="재생 속도 (0.5~2.0)")
 
 
 class VideoPlayStartResponse(BaseModel):
@@ -79,6 +83,9 @@ class VideoPlayStartResponse(BaseModel):
         state: 현재 상태
         seek_allowed: 시크 허용 여부
         created_at: 생성 시간
+        first_watch: 최초 시청 여부
+        max_playback_rate: 허용 최대 배속 (1.0 또는 2.0)
+        playback_rate_reason: 배속 제한 사유 (있으면)
     """
 
     session_id: str = Field(..., description="시청 세션 ID")
@@ -90,6 +97,9 @@ class VideoPlayStartResponse(BaseModel):
     )
     seek_allowed: bool = Field(False, description="시크 허용 여부")
     created_at: str = Field(..., description="생성 시간")
+    first_watch: bool = Field(True, description="최초 시청 여부")
+    max_playback_rate: float = Field(2.0, description="허용 최대 배속 (1.0 또는 2.0)")
+    playback_rate_reason: Optional[str] = Field(None, description="배속 제한 사유")
 
 
 # =============================================================================
@@ -105,12 +115,14 @@ class VideoProgressUpdateRequest(BaseModel):
         training_id: 교육/영상 ID
         current_position: 현재 재생 위치 (초)
         watched_seconds: 실제 시청한 누적 초 (스킵 구간 제외)
+        playback_rate: 현재 재생 속도 (기본 1.0)
     """
 
     user_id: str = Field(..., description="사용자 ID")
     training_id: str = Field(..., description="교육/영상 ID")
     current_position: int = Field(..., ge=0, description="현재 재생 위치 (초)")
     watched_seconds: int = Field(..., ge=0, description="실제 시청한 누적 초")
+    playback_rate: float = Field(1.0, ge=0.5, le=2.0, description="현재 재생 속도 (0.5~2.0)")
 
 
 class VideoProgressUpdateResponse(BaseModel):
@@ -127,6 +139,8 @@ class VideoProgressUpdateResponse(BaseModel):
         updated_at: 업데이트 시간
         accepted: 업데이트 수락 여부
         rejection_reason: 거부 사유 (있으면)
+        max_playback_rate: 허용 최대 배속
+        playback_rate_enforced: 배속이 강제 조정되었는지 여부
     """
 
     user_id: str = Field(..., description="사용자 ID")
@@ -143,6 +157,8 @@ class VideoProgressUpdateResponse(BaseModel):
     accepted: bool = Field(True, description="업데이트 수락 여부")
     rejection_reason: Optional[str] = Field(None, description="거부 사유")
     message: Optional[str] = Field(None, description="응답 메시지")
+    max_playback_rate: float = Field(2.0, description="허용 최대 배속")
+    playback_rate_enforced: bool = Field(False, description="배속 강제 조정 여부")
 
 
 # =============================================================================
@@ -267,6 +283,7 @@ class VideoProgressRecord(BaseModel):
         seek_allowed: 시크 허용 여부
         quiz_unlocked: 퀴즈 잠금 해제 여부
         is_mandatory_edu: 4대교육 여부
+        first_watch: 최초 시청 여부 (첫 완료 전까지 True)
         last_final_segment_time: 마지막 구간 시청 시간 (초) - 완료 검증용
         created_at: 생성 시간
         updated_at: 마지막 업데이트 시간
@@ -285,7 +302,8 @@ class VideoProgressRecord(BaseModel):
     seek_allowed: bool = False
     quiz_unlocked: bool = False
     is_mandatory_edu: bool = False
-    last_final_segment_time: int = 0  # 마지막 5% 구간 시청 시간
+    first_watch: bool = True  # 최초 시청 여부 (첫 완료 전까지 True)
+    last_final_segment_time: int = 0  # (deprecated) 마지막 구간 시청 시간 - 더 이상 사용 안함
     created_at: str = ""
     updated_at: str = ""
     completed_at: Optional[str] = None
@@ -302,7 +320,7 @@ class VideoRejectionReason(str, Enum):
 
     PROGRESS_REGRESSION = "PROGRESS_REGRESSION"  # 진행률 역행
     PROGRESS_SURGE = "PROGRESS_SURGE"  # 비정상 급증
-    COMPLETION_THRESHOLD_NOT_MET = "COMPLETION_THRESHOLD_NOT_MET"  # 완료 기준 미달
-    FINAL_SEGMENT_NOT_WATCHED = "FINAL_SEGMENT_NOT_WATCHED"  # 마지막 구간 미시청
+    COMPLETION_THRESHOLD_NOT_MET = "COMPLETION_THRESHOLD_NOT_MET"  # 완료 기준 미달 (100% 미만)
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"  # 세션 없음
     ALREADY_COMPLETED = "ALREADY_COMPLETED"  # 이미 완료됨
+    PLAYBACK_RATE_NOT_ALLOWED = "PLAYBACK_RATE_NOT_ALLOWED"  # 배속 허용 안됨 (4대교육 최초시청)

@@ -79,6 +79,10 @@ class ChatSource(BaseModel):
     - article_label, article_path 필드 추가 (조항/섹션 정보)
     - 사용자에게 "어떤 문서의 몇 조/몇 항인지" 정보 제공
 
+    Phase 29 업데이트:
+    - source_type 필드 추가 (POLICY, TRAINING_SCRIPT 등 소스 유형 구분)
+    - 교육 스크립트 기반 RAG 결과와 정책 문서 결과 구분
+
     Attributes:
         doc_id: Document ID managed by backend/RAGFlow
         title: Document title
@@ -87,6 +91,7 @@ class ChatSource(BaseModel):
         snippet: Text excerpt from document for LLM prompt context (optional)
         article_label: Human-readable article label (e.g., "제10조 (정보보호 의무) 제2항")
         article_path: Hierarchical path to the article (e.g., "제3장 > 제10조 > 제2항")
+        source_type: Source type (POLICY, TRAINING_SCRIPT, etc.)
     """
 
     doc_id: str = Field(description="Document ID managed by backend/RAGFlow")
@@ -110,6 +115,12 @@ class ChatSource(BaseModel):
     article_path: Optional[str] = Field(
         default=None,
         description="Hierarchical path to the article (e.g., '제3장 정보보호 > 제10조 > 제2항')",
+    )
+
+    # Phase 29: 소스 유형 구분
+    source_type: Optional[str] = Field(
+        default=None,
+        description="Source type: POLICY (정책문서), TRAINING_SCRIPT (교육스크립트), etc.",
     )
 
 

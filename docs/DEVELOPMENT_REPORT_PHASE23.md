@@ -315,22 +315,50 @@ python -m pytest tests/test_personalization.py -v
 }
 ```
 
-### 시나리오 2: 교육 애매 → 되묻기
+### 시나리오 2: 교육 애매 → 되묻기 → 2턴 응답
 
-**요청**
+**Turn 1: 요청**
 ```json
 {
   "messages": [{"role": "user", "content": "교육 알려줘"}]
 }
 ```
 
-**응답 (needs_clarify=true)**
+**Turn 1: 응답 (needs_clarify=true)**
 ```json
 {
   "answer": "교육 내용 설명이 필요해요, 아니면 내 이수현황/진도 조회가 필요해요?",
   "meta": {
     "needs_clarify": true,
-    "domain": "EDU"
+    "domain": "EDU",
+    "clarify_group": "EDU"
+  }
+}
+```
+→ PendingAction 저장: `{original_query: "교육 알려줘", clarify_group: EDU, expires_at: +5분}`
+
+**Turn 2: 유저 응답 "이수현황"**
+```json
+{
+  "messages": [{"role": "user", "content": "이수현황"}]
+}
+```
+
+**Turn 2: 처리 과정**
+1. `PendingActionStore.get(session_id)` → pending 존재
+2. 응답 길이: 4자 ≤ 20자 → 짧은 응답
+3. 키워드 매핑: `"이수" in CLARIFY_KEYWORD_MAPPING[EDU]` → `BACKEND_STATUS`
+4. pending 삭제 (one-shot)
+5. BACKEND_STATUS 라우트 실행 → PersonalizationClient 호출
+
+**Turn 2: 최종 응답**
+```json
+{
+  "answer": "현재 이수한 교육은 3건입니다.\n- 정보보호교육 (완료, 2025-01-15)\n- 개인정보보호교육 (완료, 2025-01-10)\n미이수 필수 교육: 보안교육 (마감 2025-01-31)",
+  "meta": {
+    "route": "BACKEND_API",
+    "sub_intent_id": "EDU_STATUS_CHECK",
+    "confidence": 0.9
   }
 }
 ```
@@ -390,24 +418,45 @@ python -m pytest tests/test_personalization.py -v
 │                                                                      │
 │  route()                                                             │
 │    │                                                                 │
-│    ├─► RuleRouter.route()  ─────┐                                   │
-│    │                            │                                    │
-│    ├─► needs_clarify? ──Yes──► 되묻기 응답 반환                     │
-│    │                            │                                    │
-│    ├─► confidence < 0.85? ──► LLMRouter.route()                     │
-│    │                            │                                    │
-│    ├─► route_type?             │                                    │
-│    │     │                      │                                    │
+│    ├─► [1] pending 체크 (PendingActionStore.get)                    │
+│    │         │                                                       │
+│    │         └─ pending 있으면 → _handle_pending_response()         │
+│    │               │                                                 │
+│    │               ├─ 짧은 응답(≤20자) → 키워드 매핑 → 라우팅 결정  │
+│    │               │     예: "이수현황" → BACKEND_STATUS             │
+│    │               │     예: "내용" → RAG_INTERNAL                   │
+│    │               │                                                 │
+│    │               ├─ 긴 응답(>20자) → 새 질문으로 처리 (재라우팅)   │
+│    │               │                                                 │
+│    │               └─ 매핑 실패 → 원문+응답 결합 후 재라우팅         │
+│    │                                                                 │
+│    ├─► [2] RuleRouter.route() (키워드 기반 1차 분류)                │
+│    │         │                                                       │
+│    │         ├─ 개인화 키워드 (EDU_STATUS, HR_PERSONAL 등)          │
+│    │         │    → confidence=0.9, BACKEND_API                      │
+│    │         │                                                       │
+│    │         ├─ 치명 액션 (QUIZ 3종)                                │
+│    │         │    → confidence=0.95, requires_confirmation=True      │
+│    │         │                                                       │
+│    │         ├─ 콘텐츠 키워드 (POLICY, EDU_CONTENT 등)              │
+│    │         │    → confidence=0.85, RAG_INTERNAL                    │
+│    │         │                                                       │
+│    │         └─ 애매한 경계 감지                                     │
+│    │              → confidence=0.3, needs_clarify=True               │
+│    │                                                                 │
+│    ├─► [3] needs_clarify? ──Yes──► _create_clarify_result()         │
+│    │         │                      │                                │
+│    │         │                      └─ pending 저장 (TTL=5분)       │
+│    │         │                          original_query, clarify_group│
+│    │                                                                 │
+│    ├─► [4] confidence < 0.85? ──► LLMRouter.route() (fallback)      │
+│    │                                                                 │
+│    ├─► [5] route_type별 실행                                        │
+│    │     │                                                           │
 │    │     ├─ BACKEND_API ──────► _execute_backend_api()              │
 │    │     │     │                                                     │
 │    │     │     ├─► Q5? → _handle_q5_department_search()             │
-│    │     │     │          │                                          │
-│    │     │     │          ├─ 0 matches → Clarify (부서 없음)        │
-│    │     │     │          ├─ 1 match → target_dept_id 설정          │
-│    │     │     │          └─ N matches → Clarify (부서 선택)        │
-│    │     │     │                                                     │
 │    │     │     ├─► PersonalizationClient.resolve_facts()            │
-│    │     │     │                                                     │
 │    │     │     └─► AnswerGenerator.generate()                       │
 │    │     │                                                           │
 │    │     ├─ RAG_INTERNAL → RAGFlowClient                            │
@@ -566,6 +615,210 @@ python -m pytest tests/test_personalization.py -v
 
 ---
 
+---
+
+## 11. 되묻기 후 2턴 처리 방식 (Clarify Answer Handler)
+
+### 11.1 개요
+
+Phase 23에서 "되묻기(clarify)" 후 사용자의 짧은 응답을 처리하는 2턴 대화 흐름을 구현했습니다.
+
+**문제 상황:**
+- 사용자: "교육 알려줘"
+- AI: "교육 내용 설명이 필요해요, 아니면 내 이수현황/진도 조회가 필요해요?"
+- 사용자: "이수현황" ← 이 짧은 응답을 어떻게 처리할 것인가?
+
+**해결 방안:**
+- PendingActionStore에 clarify 상태를 저장
+- 다음 요청에서 pending이 있으면 ClarifyAnswerHandler로 처리
+- 짧은 응답(≤20자)은 키워드 매핑으로 라우팅 결정
+- 긴 응답(>20자)은 새 질문으로 처리
+
+### 11.2 PendingAction 모델 확장
+
+```python
+@dataclass
+class PendingAction:
+    action_type: PendingActionType
+    trace_id: str
+    pending_intent: Tier0Intent
+    sub_intent_id: str = ""
+    router_result: Optional[RouterResult] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Phase 23: 되묻기 후 2턴 처리를 위한 필드
+    expires_at: Optional[datetime] = None      # TTL 만료 시각
+    original_query: str = ""                   # 원래 질문 ("교육 알려줘")
+    clarify_group: ClarifyGroup = ClarifyGroup.UNKNOWN  # 카테고리
+    user_id: str = ""                          # 사용자 ID
+```
+
+### 11.3 ClarifyGroup 및 키워드 매핑
+
+```python
+class ClarifyGroup(str, Enum):
+    EDU = "EDU"         # 교육 관련
+    FAQ = "FAQ"         # 일반 FAQ
+    PROFILE = "PROFILE" # 프로필/인사정보
+    POLICY = "POLICY"   # 규정/정책
+    INCIDENT = "INCIDENT"  # 사건/사고
+    UNKNOWN = "UNKNOWN"
+
+CLARIFY_KEYWORD_MAPPING: dict[ClarifyGroup, dict[str, str]] = {
+    ClarifyGroup.EDU: {
+        "이수": "BACKEND_STATUS",      # 이수현황 → 백엔드 조회
+        "진도": "BACKEND_STATUS",      # 진도율 → 백엔드 조회
+        "조회": "BACKEND_STATUS",      # 조회 → 백엔드 조회
+        "내용": "RAG_INTERNAL",        # 내용 → RAG 검색
+        "설명": "RAG_INTERNAL",        # 설명 → RAG 검색
+        "요약": "RAG_INTERNAL",        # 요약 → RAG 검색
+        "교육과정": "RAG_INTERNAL",    # 교육과정 → RAG 검색
+    },
+    ClarifyGroup.POLICY: {
+        "규정": "RAG_INTERNAL",
+        "정책": "RAG_INTERNAL",
+        "개인": "BACKEND_STATUS",
+        "조회": "BACKEND_STATUS",
+    },
+    # ... 기타 그룹
+}
+
+CLARIFY_SHORT_RESPONSE_MAX_LENGTH = 20  # 짧은 응답 기준
+```
+
+### 11.4 TTL (Time-To-Live) 설정
+
+```python
+# app/core/config.py
+ROUTER_PENDING_TIMEOUT_SECONDS: int = 300  # 5분
+
+# PendingActionStore에서 TTL 체크
+def get(self, session_id: str) -> Optional[PendingAction]:
+    pending = self._store.get(session_id)
+    if pending is None:
+        return None
+
+    # TTL 만료 체크
+    if pending.expires_at and datetime.now(timezone.utc) > pending.expires_at:
+        self.delete(session_id)
+        return None
+
+    return pending
+```
+
+### 11.5 ClarifyAnswerHandler 처리 흐름
+
+```python
+async def _handle_pending_response(
+    self,
+    pending: PendingAction,
+    user_query: str,
+    session_id: str,
+    ...
+) -> OrchestrationResult:
+    """pending clarify에 대한 응답 처리."""
+
+    # 1. pending 삭제 (one-shot)
+    self._pending_store.delete(session_id)
+
+    # 2. 응답 길이 체크
+    response_length = len(user_query.strip())
+
+    # 3. 긴 응답(20자 초과)이면 새 질문으로 처리
+    if response_length > CLARIFY_SHORT_RESPONSE_MAX_LENGTH:
+        return await self.route(user_query=user_query, ...)
+
+    # 4. 짧은 응답: 키워드 매핑
+    resolved_route = self._resolve_clarify_answer(
+        user_response=user_query,
+        clarify_group=pending.clarify_group,
+    )
+
+    if resolved_route:
+        # 매핑 성공 → 해당 라우트로 실행
+        return await self._execute_route(resolved_route, ...)
+    else:
+        # 매핑 실패 → 원문+응답 결합 재라우팅
+        combined_query = f"{pending.original_query} {user_query}"
+        return await self.route(user_query=combined_query, ...)
+```
+
+### 11.6 시나리오 예시
+
+#### 시나리오 1: 교육 → 이수현황
+
+**Turn 1 (되묻기 발생)**
+```
+User: "교육 알려줘"
+→ Router: needs_clarify=true, clarify_group=EDU
+→ PendingAction 저장: {original_query: "교육 알려줘", clarify_group: EDU, expires_at: +5분}
+→ AI: "교육 내용 설명이 필요해요, 아니면 내 이수현황/진도 조회가 필요해요?"
+```
+
+**Turn 2 (응답 처리)**
+```
+User: "이수현황"
+→ pending 조회: {original_query: "교육 알려줘", clarify_group: EDU}
+→ 짧은 응답(4자) → 키워드 매핑
+→ "이수" in CLARIFY_KEYWORD_MAPPING[EDU] → "BACKEND_STATUS"
+→ pending 삭제 (one-shot)
+→ BACKEND_STATUS 라우트 실행
+→ AI: "현재 이수한 교육은 3건입니다. 미이수 필수 교육: 보안교육(마감 1/31)"
+```
+
+#### 시나리오 2: TTL 만료
+
+```
+User: "교육 알려줘"
+→ pending 저장 (expires_at: 10:00:00 + 5분 = 10:05:00)
+→ AI: "교육 내용 설명이 필요해요..."
+
+(5분 후, 10:06:00)
+
+User: "이수현황"
+→ pending 조회: expires_at(10:05:00) < now(10:06:00) → 만료
+→ pending 삭제, None 반환
+→ 새 질문으로 처리: "이수현황" 라우팅
+```
+
+#### 시나리오 3: 긴 응답 (새 질문)
+
+```
+User: "교육 알려줘"
+→ pending 저장
+→ AI: "교육 내용 설명이 필요해요..."
+
+User: "연차 휴가 규정이 어떻게 되는지 자세하게 알려주세요"
+→ pending 조회
+→ 긴 응답(25자 > 20자) → 새 질문으로 처리
+→ pending 삭제
+→ 새 라우팅: "연차 휴가 규정이 어떻게 되는지..." → POLICY_QA
+```
+
+### 11.7 테스트 커버리지
+
+**Phase 23 Clarify Flow 테스트 (22개)**
+
+| 테스트 클래스 | 테스트 수 | 설명 |
+|-------------|----------|------|
+| TestPendingActionModel | 4 | 모델 필드 검증 |
+| TestPendingActionStoreTTL | 3 | TTL 만료/삭제 검증 |
+| TestClarifyFlowPendingCreation | 3 | clarify시 pending 생성 검증 |
+| TestClarifyAnswerHandler | 4 | 키워드 매핑 검증 |
+| TestLongResponseHandling | 2 | 긴 응답 처리 검증 |
+| TestCombinedQueryRouting | 1 | 결합 쿼리 라우팅 검증 |
+| TestClarifyGroupDetermination | 5 | Intent→ClarifyGroup 매핑 |
+
+```bash
+# 테스트 실행
+python -m pytest tests/test_phase23_clarify_flow.py -v
+
+# 결과
+22 passed in 1.48s
+```
+
+---
+
 **작성일**: 2025-12-18
 **Phase**: 23
-**테스트 결과**: 630 passed (37 new tests added)
+**테스트 결과**: 652 passed (22 clarify flow tests + 37 personalization tests)

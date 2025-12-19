@@ -190,6 +190,45 @@ class Settings(BaseSettings):
     SUPPORTED_FILE_EXTENSIONS: str = ".pdf,.txt,.docx,.doc,.hwp"
 
     # =========================================================================
+    # Phase 29: KB Index 토큰 기반 청킹 설정
+    # =========================================================================
+    # 교육 스크립트 청크 최대 토큰 수 (초과 시 분할)
+    KB_CHUNK_MAX_TOKENS: int = 500
+
+    # 청크 분할 시 최소 토큰 수 (너무 작은 청크 방지)
+    KB_CHUNK_MIN_TOKENS: int = 50
+
+    # 토큰 계산 방식 ("char" = 문자 기반 근사, "tiktoken" = 정확한 토큰 계산)
+    KB_CHUNK_TOKENIZER: str = "char"
+
+    # 문자 기반 토큰 근사 비율 (한국어: 약 1.5자 = 1토큰)
+    KB_CHUNK_CHARS_PER_TOKEN: float = 1.5
+
+    # =========================================================================
+    # Phase 32: Video Rendering 설정
+    # =========================================================================
+    # TTS Provider 선택 (mock, gtts, polly, gcp)
+    TTS_PROVIDER: str = "mock"
+
+    # Storage Provider 선택 (local, s3, minio)
+    STORAGE_PROVIDER: str = "local"
+
+    # 렌더링 출력 디렉토리
+    RENDER_OUTPUT_DIR: str = "./video_output"
+
+    # Storage 기본 URL (로컬 모드용)
+    STORAGE_BASE_URL: str = "http://localhost:8000/static/videos"
+
+    # S3 설정 (STORAGE_PROVIDER=s3 일 때)
+    AWS_S3_BUCKET: Optional[str] = None
+    AWS_S3_REGION: str = "ap-northeast-2"
+    AWS_S3_PREFIX: str = "videos/"
+
+    # MinIO 설정 (STORAGE_PROVIDER=minio 일 때)
+    MINIO_ENDPOINT: Optional[str] = None
+    MINIO_BUCKET: str = "videos"
+
+    # =========================================================================
     # Validators: 빈 문자열을 None으로 변환
     # =========================================================================
     @field_validator(

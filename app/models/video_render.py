@@ -211,13 +211,13 @@ class RenderedAssets:
 
 @dataclass
 class KBChunk:
-    """KB 청크 모델 (Phase 28).
+    """KB 청크 모델 (Phase 28/29).
 
     승인된 스크립트에서 생성된 청크입니다.
-    씬 단위로 1개의 청크를 생성합니다.
+    씬 단위로 청크를 생성하되, 긴 내용은 토큰 기반으로 분할합니다.
 
     Attributes:
-        chunk_id: 청크 ID (script_id:chapter:scene 형태)
+        chunk_id: 청크 ID (script_id:chapter:scene 또는 script_id:chapter:scene:part 형태)
         video_id: 비디오 ID
         script_id: 스크립트 ID
         chapter_order: 챕터 순서
@@ -227,6 +227,8 @@ class KBChunk:
         content: 청크 내용 (narration + caption)
         source_refs: 원본 참조 (doc_id, chunk_id 등)
         metadata: 추가 메타데이터
+        part_index: 분할 파트 인덱스 (Phase 29, None이면 분할되지 않음)
+        source_type: 소스 타입 (Phase 29, "TRAINING_SCRIPT" 등)
     """
     chunk_id: str
     video_id: str
@@ -238,6 +240,9 @@ class KBChunk:
     content: str
     source_refs: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
+    # Phase 29: 토큰 기반 분할 지원
+    part_index: Optional[int] = None
+    source_type: str = "TRAINING_SCRIPT"
 
 
 # =============================================================================
@@ -362,6 +367,35 @@ class KBIndexStatusResponse(BaseModel):
     kb_indexed_at: Optional[str] = Field(None, description="인덱싱 완료 시각")
     kb_document_status: Optional[str] = Field(None, description="KB 문서 상태")
     kb_last_error: Optional[str] = Field(None, description="마지막 에러")
+
+
+# =============================================================================
+# Phase 31: Script Generation API Models
+# =============================================================================
+
+
+class ScriptGenerateRequest(BaseModel):
+    """스크립트 자동 생성 요청 (Phase 31).
+
+    POST /api/videos/{video_id}/scripts/generate
+    """
+    source_text: str = Field(..., min_length=10, description="교육 원문 텍스트")
+    language: str = Field(default="ko", description="언어 코드 (ko, en 등)")
+    target_minutes: float = Field(default=3, ge=1, le=30, description="목표 영상 길이 (분)")
+    max_chapters: int = Field(default=5, ge=1, le=10, description="최대 챕터 수")
+    max_scenes_per_chapter: int = Field(default=6, ge=1, le=15, description="챕터당 최대 씬 수")
+    style: str = Field(default="friendly_security_training", description="스크립트 스타일")
+
+
+class ScriptGenerateResponse(BaseModel):
+    """스크립트 자동 생성 응답 (Phase 31).
+
+    POST /api/videos/{video_id}/scripts/generate
+    """
+    script_id: str = Field(..., description="생성된 스크립트 ID")
+    video_id: str = Field(..., description="비디오 ID")
+    status: str = Field(..., description="스크립트 상태 (DRAFT)")
+    raw_json: Dict[str, Any] = Field(..., description="생성된 스크립트 JSON")
 
 
 # Forward reference 해결

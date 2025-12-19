@@ -397,6 +397,8 @@ class MilvusSearchClient:
 
         기존 RagflowClient.search_as_sources()와 호환되는 인터페이스입니다.
 
+        Phase 29: source_type 필드 추가하여 TRAINING_SCRIPT 등 구분
+
         Args:
             query: 검색 쿼리 텍스트
             domain: 도메인 필터
@@ -414,6 +416,18 @@ class MilvusSearchClient:
             for result in results:
                 metadata = result.get("metadata", {})
 
+                # Phase 29: source_type 결정
+                # TRAINING 도메인이거나 metadata에 source_type이 있으면 사용
+                source_type = metadata.get("source_type")
+                if not source_type:
+                    result_domain = result.get("domain", "")
+                    if result_domain == "TRAINING" or "training" in result.get("doc_id", "").lower():
+                        source_type = "TRAINING_SCRIPT"
+                    elif result_domain == "POLICY" or "policy" in result.get("doc_id", "").lower():
+                        source_type = "POLICY"
+                    else:
+                        source_type = "DOCUMENT"  # 기본값
+
                 source = ChatSource(
                     doc_id=result.get("doc_id", result.get("id", "")),
                     title=result.get("title", "Unknown"),
@@ -422,6 +436,7 @@ class MilvusSearchClient:
                     page=metadata.get("page"),
                     article_label=metadata.get("article_label"),
                     article_path=metadata.get("article_path"),
+                    source_type=source_type,  # Phase 29
                 )
                 sources.append(source)
 
