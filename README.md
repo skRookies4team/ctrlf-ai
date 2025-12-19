@@ -285,6 +285,53 @@ Milvus에서 문서를 삭제합니다.
 }
 ```
 
+### curl 예시
+
+```bash
+# 1. 문서 인덱싱 요청
+curl -X POST http://localhost:8000/internal/rag/index \
+  -H "Content-Type: application/json" \
+  -d '{
+    "documentId": "DOC-001",
+    "versionNo": 1,
+    "title": "인사규정 v2.0",
+    "domain": "POLICY",
+    "fileUrl": "https://storage.example.com/docs/hr-policy.pdf",
+    "requestedBy": "admin-001",
+    "jobId": "job-uuid-1234"
+  }'
+
+# 2. 작업 상태 폴링
+curl http://localhost:8000/internal/jobs/job-uuid-1234
+
+# 3. 문서 전체 삭제
+curl -X POST http://localhost:8000/internal/rag/delete \
+  -H "Content-Type: application/json" \
+  -d '{
+    "documentId": "DOC-001"
+  }'
+
+# 4. 특정 버전만 삭제
+curl -X POST http://localhost:8000/internal/rag/delete \
+  -H "Content-Type: application/json" \
+  -d '{
+    "documentId": "DOC-001",
+    "versionNo": 1
+  }'
+```
+
+### 인덱싱 파이프라인
+
+새 버전 인덱싱 시 이전 버전 자동 삭제 보장:
+
+1. `fileUrl`에서 파일 다운로드
+2. 텍스트 추출 및 청킹
+3. 임베딩 생성 (BGE-M3)
+4. Milvus에 upsert
+5. **upsert 성공 후** 이전 버전 삭제 (`version_no < current`)
+
+> **주의**: upsert 실패 시 이전 버전 삭제는 실행되지 않음 (데이터 안전 보장)
+
 ## 환경변수
 
 ### 기본 설정

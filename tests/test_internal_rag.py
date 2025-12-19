@@ -520,3 +520,122 @@ class TestVersionDeletion:
         # delete_old_versions가 호출되었는지 확인
         # (upsert 성공 후에만 호출되어야 함)
         mock_milvus.delete_old_versions.assert_called_once_with("DOC-001", 2)
+
+    @pytest.mark.asyncio
+    async def test_delete_old_versions_not_called_on_upsert_failure(self):
+        """upsert 실패 시 이전 버전 삭제가 호출되지 않아야 함."""
+        from app.clients.milvus_client import MilvusSearchClient, MilvusError
+
+        # Mock 설정 - upsert가 실패하도록 구성
+        mock_milvus = MagicMock(spec=MilvusSearchClient)
+        mock_milvus.delete_by_document = AsyncMock(return_value=0)
+        mock_milvus.delete_old_versions = AsyncMock(return_value=0)
+        mock_milvus.upsert_chunks = AsyncMock(side_effect=MilvusError("Upsert failed"))
+        mock_milvus.generate_embedding = AsyncMock(return_value=[0.1] * 1024)
+
+        mock_processor = MagicMock()
+        mock_processor.process = AsyncMock(return_value=[
+            DocumentChunk(
+                document_id="DOC-001",
+                version_no=2,
+                domain="POLICY",
+                title="Test",
+                chunk_id=0,
+                chunk_text="Test content",
+            )
+        ])
+
+        mock_job_service = JobService()
+
+        # 재시도 설정을 최소화 (테스트 속도 향상)
+        with patch("app.services.indexing_service.get_settings") as mock_settings:
+            settings = MagicMock()
+            settings.INDEX_RETRY_MAX_ATTEMPTS = 1
+            settings.INDEX_RETRY_BACKOFF_SECONDS = "0.01"
+            mock_settings.return_value = settings
+
+            service = IndexingService(
+                document_processor=mock_processor,
+                milvus_client=mock_milvus,
+                job_service=mock_job_service,
+            )
+
+        request = InternalRagIndexRequest(
+            documentId="DOC-001",
+            versionNo=2,
+            domain="POLICY",
+            fileUrl="https://example.com/doc.pdf",
+            jobId="test-fail-job",
+        )
+
+        # 인덱싱 요청 (비동기 작업 시작)
+        await service.index_document(request)
+
+        # 비동기 작업 완료 대기
+        await asyncio.sleep(0.5)
+
+        # upsert가 호출되었는지 확인
+        mock_milvus.upsert_chunks.assert_called()
+
+        # 핵심: delete_old_versions는 호출되지 않아야 함
+        mock_milvus.delete_old_versions.assert_not_called()
+
+        # Job 상태가 FAILED인지 확인
+        job = await mock_job_service.get_job("test-fail-job")
+        assert job.status == JobStatus.FAILED
+        assert "Upsert failed" in job.error_message
+
+    @pytest.mark.asyncio
+    async def test_pipeline_order_upsert_before_delete(self):
+        """파이프라인 순서: upsert 성공 → delete_old_versions 호출."""
+        from app.clients.milvus_client import MilvusSearchClient
+
+        call_order = []
+
+        async def mock_upsert(*args, **kwargs):
+            call_order.append("upsert")
+            return 10
+
+        async def mock_delete_old(*args, **kwargs):
+            call_order.append("delete_old_versions")
+            return 5
+
+        mock_milvus = MagicMock(spec=MilvusSearchClient)
+        mock_milvus.delete_by_document = AsyncMock(return_value=0)
+        mock_milvus.delete_old_versions = AsyncMock(side_effect=mock_delete_old)
+        mock_milvus.upsert_chunks = AsyncMock(side_effect=mock_upsert)
+        mock_milvus.generate_embedding = AsyncMock(return_value=[0.1] * 1024)
+
+        mock_processor = MagicMock()
+        mock_processor.process = AsyncMock(return_value=[
+            DocumentChunk(
+                document_id="DOC-001",
+                version_no=3,
+                domain="POLICY",
+                title="Test",
+                chunk_id=0,
+                chunk_text="Test content",
+            )
+        ])
+
+        mock_job_service = JobService()
+
+        service = IndexingService(
+            document_processor=mock_processor,
+            milvus_client=mock_milvus,
+            job_service=mock_job_service,
+        )
+
+        request = InternalRagIndexRequest(
+            documentId="DOC-001",
+            versionNo=3,
+            domain="POLICY",
+            fileUrl="https://example.com/doc.pdf",
+            jobId="test-order-job",
+        )
+
+        await service.index_document(request)
+        await asyncio.sleep(0.5)
+
+        # 순서 검증: upsert가 먼저, delete_old_versions가 나중
+        assert call_order == ["upsert", "delete_old_versions"]
