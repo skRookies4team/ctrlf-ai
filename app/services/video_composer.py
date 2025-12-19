@@ -1,5 +1,5 @@
 """
-Phase 32: Video Composer (FFmpeg)
+Phase 32 + Phase 37: Video Composer (FFmpeg)
 
 FFmpeg를 사용한 영상 합성 서비스.
 
@@ -8,6 +8,10 @@ FFmpeg를 사용한 영상 합성 서비스.
 - SRT 자막 파일 생성
 - 썸네일 추출
 
+Phase 37 추가 기능:
+- animated 모드: Ken Burns(zoompan) + fade 전환 효과
+- 씬 이미지 기반 영상 합성
+
 의존성:
 - ffmpeg: 시스템에 설치 필요 (Docker에서는 기본 포함)
 - ffprobe: 오디오/비디오 정보 조회
@@ -15,6 +19,7 @@ FFmpeg를 사용한 영상 합성 서비스.
 환경변수:
 - FFMPEG_PATH: ffmpeg 바이너리 경로 (기본: ffmpeg)
 - FFPROBE_PATH: ffprobe 바이너리 경로 (기본: ffprobe)
+- VIDEO_VISUAL_STYLE: basic | animated (기본: basic)
 """
 
 import asyncio
@@ -54,6 +59,11 @@ class ComposerConfig:
     text_color: str = "white"
     font_size: int = 48
     font_file: Optional[str] = None  # 폰트 파일 경로 (None이면 기본)
+
+    # Phase 37: Animated 모드 설정
+    visual_style: str = "basic"  # "basic" or "animated"
+    fade_duration: float = 0.5  # 씬 전환 fade 시간 (초)
+    kenburns_zoom: float = 1.1  # Ken Burns 줌 비율 (1.0 = 줌 없음)
 
 
 @dataclass
@@ -167,7 +177,11 @@ class VideoComposer:
         video_path = output_path / f"{job_id}.mp4"
 
         if self._ffmpeg_available:
-            await self._compose_with_ffmpeg(scenes, audio_path, video_path, duration_sec)
+            # Phase 37: visual_style에 따라 합성 방식 선택
+            if self.config.visual_style == "animated" and self._has_scene_images(scenes):
+                await self._compose_animated(scenes, audio_path, video_path, duration_sec)
+            else:
+                await self._compose_with_ffmpeg(scenes, audio_path, video_path, duration_sec)
         else:
             # Mock 모드: 빈 파일 생성
             await self._compose_mock(video_path, duration_sec)
@@ -185,6 +199,13 @@ class VideoComposer:
             duration_sec=duration_sec,
             scenes=scenes,
         )
+
+    def _has_scene_images(self, scenes: List[SceneInfo]) -> bool:
+        """모든 씬에 이미지가 있는지 확인."""
+        for scene in scenes:
+            if not scene.image_path or not Path(scene.image_path).exists():
+                return False
+        return True
 
     async def get_audio_duration(self, audio_path: str) -> float:
         """오디오 파일의 길이를 반환합니다."""
@@ -365,6 +386,172 @@ class VideoComposer:
         # 빈 파일 생성
         output_path.write_bytes(b"\x00" * 1024)
         logger.warning(f"Mock video created (FFmpeg not available): {output_path}")
+
+    async def _compose_animated(
+        self,
+        scenes: List[SceneInfo],
+        audio_path: str,
+        output_path: Path,
+        duration: float,
+    ) -> None:
+        """Phase 37: Animated 모드 영상 합성 (Ken Burns + fade).
+
+        각 씬 이미지에 zoompan(Ken Burns) 효과와 xfade(fade) 전환을 적용합니다.
+
+        Args:
+            scenes: 씬 정보 목록 (각 씬에 image_path 필요)
+            audio_path: 오디오 파일 경로
+            output_path: 출력 비디오 경로
+            duration: 전체 비디오 길이
+        """
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._compose_animated_sync, scenes, audio_path, output_path, duration)
+
+    def _compose_animated_sync(
+        self,
+        scenes: List[SceneInfo],
+        audio_path: str,
+        output_path: Path,
+        duration: float,
+    ) -> None:
+        """Animated 합성 동기 버전."""
+        # FFmpeg 명령 빌드
+        cmd = self._build_animated_ffmpeg_command(scenes, audio_path, output_path, duration)
+
+        logger.debug(f"FFmpeg animated command: {' '.join(cmd)}")
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10분 타임아웃
+        )
+
+        if result.returncode != 0:
+            logger.error(f"FFmpeg animated error: {result.stderr}")
+            raise RuntimeError(f"FFmpeg animated failed: {result.stderr[:500]}")
+
+        logger.info(f"Animated video composed: {output_path}")
+
+    def _build_animated_ffmpeg_command(
+        self,
+        scenes: List[SceneInfo],
+        audio_path: str,
+        output_path: Path,
+        duration: float,
+    ) -> List[str]:
+        """Animated 모드 FFmpeg 명령 빌드.
+
+        Ken Burns(zoompan) + fade 전환 필터를 생성합니다.
+
+        Returns:
+            List[str]: FFmpeg 명령 인자 목록
+        """
+        config = self.config
+        fps = config.fps
+        zoom = config.kenburns_zoom
+        fade_dur = config.fade_duration
+        width = config.video_width
+        height = config.video_height
+
+        # 입력 파일 목록
+        cmd = [self._ffmpeg, "-y"]
+
+        # 씬 이미지 입력
+        for scene in scenes:
+            cmd.extend(["-loop", "1", "-t", str(scene.duration_sec or 5.0), "-i", scene.image_path])
+
+        # 오디오 입력
+        cmd.extend(["-i", audio_path])
+
+        # 필터 복합 구성
+        filter_parts = []
+        n_scenes = len(scenes)
+
+        for i, scene in enumerate(scenes):
+            scene_dur = scene.duration_sec or 5.0
+            total_frames = int(scene_dur * fps)
+
+            # Ken Burns (zoompan) 필터
+            # 줌 인: 시작 1.0 → 끝 zoom
+            # 랜덤하게 줌 방향 결정 (짝수 씬: 줌인, 홀수 씬: 줌아웃)
+            if i % 2 == 0:
+                # Zoom in: 1.0 → zoom
+                zoom_expr = f"'min(zoom+{(zoom-1)/total_frames:.6f},pzoom*{zoom})'"
+            else:
+                # Zoom out: zoom → 1.0
+                zoom_expr = f"'if(eq(on,1),{zoom},max(zoom-{(zoom-1)/total_frames:.6f},1))'"
+
+            # 줌 중심점 약간 이동 (동적인 느낌)
+            x_expr = "'iw/2-(iw/zoom/2)'"
+            y_expr = "'ih/2-(ih/zoom/2)'"
+
+            # zoompan 필터
+            zoompan_filter = (
+                f"[{i}:v]scale={width*2}:{height*2},"
+                f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:"
+                f"d={total_frames}:s={width}x{height}:fps={fps}"
+                f"[v{i}]"
+            )
+            filter_parts.append(zoompan_filter)
+
+        # Fade 전환 (xfade) 적용
+        if n_scenes == 1:
+            # 씬이 1개면 fade 없이 그대로
+            filter_parts.append(f"[v0]format=yuv420p[vout]")
+        else:
+            # 씬들을 xfade로 연결
+            current_offset = 0.0
+            prev_label = "v0"
+
+            for i in range(1, n_scenes):
+                # 이전 씬의 끝에서 fade_dur 전에 전환 시작
+                prev_dur = scenes[i - 1].duration_sec or 5.0
+                current_offset += prev_dur - fade_dur
+
+                xfade_label = f"xf{i}" if i < n_scenes - 1 else "vout_pre"
+                xfade_filter = (
+                    f"[{prev_label}][v{i}]xfade=transition=fade:"
+                    f"duration={fade_dur}:offset={current_offset:.2f}[{xfade_label}]"
+                )
+                filter_parts.append(xfade_filter)
+                prev_label = xfade_label
+
+            # 최종 출력 포맷
+            filter_parts.append(f"[{prev_label}]format=yuv420p[vout]")
+
+        # 필터 체인
+        filter_complex = ";".join(filter_parts)
+
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-map", f"{n_scenes}:a",  # 오디오 스트림
+            "-c:v", config.video_codec,
+            "-preset", config.preset,
+            "-b:v", config.video_bitrate,
+            "-c:a", config.audio_codec,
+            "-b:a", config.audio_bitrate,
+            "-shortest",
+            "-movflags", "+faststart",
+            str(output_path),
+        ])
+
+        return cmd
+
+    def get_animated_ffmpeg_command_preview(
+        self,
+        scenes: List[SceneInfo],
+        audio_path: str,
+        output_path: str,
+    ) -> List[str]:
+        """테스트용: Animated FFmpeg 명령 미리보기.
+
+        실제 실행하지 않고 명령만 반환합니다.
+        """
+        return self._build_animated_ffmpeg_command(
+            scenes, audio_path, Path(output_path), 0.0
+        )
 
     async def _generate_thumbnail(
         self,
