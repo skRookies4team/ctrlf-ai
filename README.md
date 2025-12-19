@@ -154,25 +154,26 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 # AI 환경 (mock / real)
 AI_ENV=real
 
-# LLM 서버
+# LLM 서버 (vLLM - 채팅 + 임베딩 통합)
 LLM_BASE_URL=http://your-llm-server:port
+LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+EMBEDDING_MODEL_NAME=BAAI/bge-m3
 
-# 임베딩 서버
-EMBEDDING_BASE_URL=http://your-embedding-server:port
-EMBEDDING_MODEL_NAME=jhgan/ko-sroberta-multitask
-
-# Milvus
+# Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)
 MILVUS_ENABLED=true
 MILVUS_HOST=your-server-host
-MILVUS_PORT=19540
+MILVUS_PORT=19530
 MILVUS_COLLECTION_NAME=ragflow_chunks
 
-# RAGFlow
+# RAGFlow (MILVUS_ENABLED=false일 때 사용)
 RAGFLOW_BASE_URL=http://localhost:9380
 RAGFLOW_API_KEY=your-api-key
 
-# TTS
+# TTS (mock / gtts / polly / gcp)
 TTS_PROVIDER=gtts
+
+# Storage (local / s3 / backend_presigned)
+STORAGE_PROVIDER=local
 ```
 
 ## 테스트
