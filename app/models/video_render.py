@@ -291,6 +291,25 @@ class RenderJobCancelResponse(BaseModel):
     message: str = Field(..., description="결과 메시지")
 
 
+class RenderJobStartResponse(BaseModel):
+    """Phase 38: 렌더 잡 시작 응답.
+
+    POST /api/render-jobs/{job_id}/start
+
+    Attributes:
+        job_id: 잡 ID
+        status: 현재 상태
+        started: 새로 시작되었는지 여부 (False면 이미 시작됨)
+        message: 결과 메시지
+        error_code: 에러 코드 (실패 시)
+    """
+    job_id: str = Field(..., description="잡 ID")
+    status: str = Field(..., description="현재 상태")
+    started: bool = Field(..., description="새로 시작 여부")
+    message: str = Field(..., description="결과 메시지")
+    error_code: Optional[str] = Field(None, description="에러 코드")
+
+
 class VideoAssetResponse(BaseModel):
     """비디오 에셋 응답.
 

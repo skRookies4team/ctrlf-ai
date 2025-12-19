@@ -35,6 +35,7 @@ from app.models.video_render import (
     RenderJobCancelResponse,
     RenderJobCreateRequest,
     RenderJobCreateResponse,
+    RenderJobStartResponse,
     RenderJobStatusResponse,
     RenderJobStatus,
     ScriptCreateRequest,
@@ -473,6 +474,145 @@ async def cancel_render_job(
         job_id=job.job_id,
         status=job.status.value,
         message="렌더 잡이 취소되었습니다.",
+    )
+
+
+# =============================================================================
+# Phase 38: Job Start API
+# =============================================================================
+
+
+@router.post(
+    "/render-jobs/{job_id}/start",
+    response_model=RenderJobStartResponse,
+    summary="Phase 38: 렌더 잡 시작 (스냅샷 기반)",
+    description="""
+렌더 잡을 시작합니다.
+
+**Phase 38 동작**:
+1. 백엔드에서 최신 render-spec 조회
+2. render-spec을 잡에 스냅샷으로 저장
+3. 파이프라인 실행 시작
+
+**Idempotent**:
+- 이미 render_spec_json이 있고 RUNNING/SUCCEEDED/FAILED 상태면 no-op
+- 같은 잡에 여러 번 호출해도 안전
+
+**재시도 정책**:
+- retry 시에는 기존 스냅샷을 재사용
+- 백엔드를 다시 호출하지 않음
+
+**에러 코드**:
+- JOB_NOT_FOUND: 잡이 존재하지 않음
+- SCRIPT_FETCH_FAILED: 백엔드 render-spec 조회 실패
+- EMPTY_RENDER_SPEC: render-spec에 씬이 없음
+""",
+)
+async def start_render_job(
+    job_id: str,
+    service=Depends(get_render_service),
+):
+    """Phase 38: 렌더 잡 시작."""
+    from app.services.render_job_runner import get_render_job_runner
+
+    runner = get_render_job_runner()
+
+    # 렌더러 설정 확인
+    if runner._renderer is None:
+        runner.set_renderer(get_mvp_video_renderer())
+
+    result = await runner.start_job(job_id)
+
+    if result.error_code == "JOB_NOT_FOUND":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason_code": "JOB_NOT_FOUND",
+                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
+            },
+        )
+
+    if result.error_code and result.error_code.startswith("SCRIPT_FETCH"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason_code": result.error_code,
+                "message": result.message,
+            },
+        )
+
+    if result.error_code == "EMPTY_RENDER_SPEC":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason_code": "EMPTY_RENDER_SPEC",
+                "message": "Render-spec에 씬이 없습니다.",
+            },
+        )
+
+    return RenderJobStartResponse(
+        job_id=job_id,
+        status=result.job.status if result.job else "UNKNOWN",
+        started=result.started,
+        message=result.message,
+        error_code=result.error_code,
+    )
+
+
+@router.post(
+    "/render-jobs/{job_id}/retry",
+    response_model=RenderJobStartResponse,
+    summary="Phase 38: 렌더 잡 재시도",
+    description="""
+실패한 렌더 잡을 재시도합니다.
+
+**Phase 38 정책**:
+- 기존에 저장된 render-spec 스냅샷을 재사용
+- 백엔드를 다시 호출하지 않음
+
+**조건**:
+- render_spec_json이 있어야 함 (start_job 이후)
+- RUNNING 상태가 아니어야 함
+""",
+)
+async def retry_render_job(
+    job_id: str,
+    service=Depends(get_render_service),
+):
+    """Phase 38: 렌더 잡 재시도."""
+    from app.services.render_job_runner import get_render_job_runner
+
+    runner = get_render_job_runner()
+
+    if runner._renderer is None:
+        runner.set_renderer(get_mvp_video_renderer())
+
+    result = await runner.retry_job(job_id)
+
+    if result.error_code == "JOB_NOT_FOUND":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason_code": "JOB_NOT_FOUND",
+                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
+            },
+        )
+
+    if result.error_code == "NO_RENDER_SPEC_FOR_RETRY":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "NO_RENDER_SPEC_FOR_RETRY",
+                "message": "재시도하려면 먼저 /start를 호출해야 합니다.",
+            },
+        )
+
+    return RenderJobStartResponse(
+        job_id=job_id,
+        status=result.job.status if result.job else "UNKNOWN",
+        started=result.started,
+        message=result.message,
+        error_code=result.error_code,
     )
 
 
