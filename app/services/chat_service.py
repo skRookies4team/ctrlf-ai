@@ -109,6 +109,13 @@ from app.services.answer_guard_service import (
     RequestContext,
     get_answer_guard_service,
 )
+from app.utils.debug_log import (
+    dbg_route,
+    dbg_final_query,
+    dbg_retrieval_top5,
+    generate_request_id,
+    is_debug_enabled,
+)
 
 logger = get_logger(__name__)
 
@@ -440,9 +447,12 @@ class ChatService:
         """
         start_time = time.perf_counter()
 
+        # Phase 41: RAG 디버그용 request_id 생성
+        request_id = generate_request_id()
+
         logger.info(
             f"Processing chat request: session_id={req.session_id}, "
-            f"user_id={req.user_id}, user_role={req.user_role}"
+            f"user_id={req.user_id}, user_role={req.user_role}, request_id={request_id}"
         )
 
         # Step 1: Extract the latest user message as query
@@ -562,6 +572,17 @@ class ChatService:
                 f"route={route.value}, domain={domain}, "
                 f"tier0_intent={router_result.tier0_intent.value}"
             )
+
+            # Phase 41: [A] route 결정 직후 디버그 로그
+            dbg_route(
+                request_id=request_id,
+                user_message=masked_query,
+                intent=intent.value,
+                domain=domain,
+                tool=route.value,
+                reason=f"orchestrator: tier0={router_result.tier0_intent.value}",
+                confidence=router_result.confidence,
+            )
         else:
             # Use IntentService result directly
             intent = intent_result.intent
@@ -571,6 +592,16 @@ class ChatService:
             logger.info(
                 f"Intent classification: intent={intent.value}, "
                 f"route={route.value}, domain={domain}"
+            )
+
+            # Phase 41: [A] route 결정 직후 디버그 로그
+            dbg_route(
+                request_id=request_id,
+                user_message=masked_query,
+                intent=intent.value,
+                domain=domain,
+                tool=route.value,
+                reason=f"rule-based: IntentService",
             )
 
         # Step 4: RAG Search / Backend Data (based on route)
@@ -622,7 +653,7 @@ class ChatService:
             rag_search_attempted = True
             rag_start = time.perf_counter()
             sources, rag_search_failed = await self._perform_rag_search_with_fallback(
-                masked_query, domain, req
+                masked_query, domain, req, request_id=request_id
             )
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
 
@@ -633,7 +664,9 @@ class ChatService:
 
             # Phase 12: 병렬 호출에서 각각의 실패를 독립적으로 처리
             rag_start = time.perf_counter()
-            rag_task = self._perform_rag_search_with_fallback(masked_query, domain, req)
+            rag_task = self._perform_rag_search_with_fallback(
+                masked_query, domain, req, request_id=request_id
+            )
             backend_task = self._fetch_backend_data_for_mixed(
                 user_role=intent_result.user_role,
                 domain=domain,
@@ -1312,22 +1345,35 @@ class ChatService:
         query: str,
         domain: str,
         req: ChatRequest,
+        request_id: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool]:
         """
         RAG 검색을 수행하고 실패 여부를 함께 반환합니다.
 
         Phase 12: fallback 처리를 위해 실패 여부를 명시적으로 반환.
         Phase 24: MILVUS_ENABLED=True 시 Milvus 벡터 검색 사용.
+        Phase 41: RAG 디버그 로그 추가.
 
         Args:
             query: 검색 쿼리 (마스킹된 상태)
             domain: 도메인
             req: 원본 요청
+            request_id: 디버그용 요청 ID (Phase 41)
 
         Returns:
             Tuple[List[ChatSource], bool]: (검색 결과, 실패 여부)
             - 실패 여부: 예외 발생 시 True, 정상 (0건 포함) 시 False
         """
+        # Phase 41: [C] final_query 디버그 로그
+        # 현재 프로젝트에는 query rewrite가 없으므로 원본 쿼리만 로깅
+        if request_id:
+            dbg_final_query(
+                request_id=request_id,
+                original_query=query,
+                rewritten_query=None,  # 리라이트 없음
+                keywords=None,  # 별도 키워드 추출 없음
+            )
+
         try:
             # Phase 24: Milvus 사용 시 Milvus 클라이언트로 검색
             if self._milvus_enabled and self._milvus:
@@ -1338,6 +1384,7 @@ class ChatService:
                     user_role=req.user_role,
                     department=req.department,
                     top_k=5,
+                    request_id=request_id,  # Phase 41: request_id 전달
                 )
             else:
                 # 기존 RAGFlow 검색
@@ -1356,6 +1403,19 @@ class ChatService:
                 logger.warning(
                     f"{search_backend} search returned no results for query: {query[:50]}..."
                 )
+
+            # Phase 41: [D] retrieval_top5 디버그 로그 (RAGFlow 경로용)
+            # Milvus는 milvus_client.py에서 직접 로깅
+            if request_id and not (self._milvus_enabled and self._milvus):
+                top5_results = [
+                    {
+                        "doc_title": s.title,
+                        "chunk_id": s.doc_id,
+                        "score": s.score,
+                    }
+                    for s in sources[:5]
+                ]
+                dbg_retrieval_top5(request_id=request_id, results=top5_results)
 
             # 0건도 정상 응답 (실패 아님)
             return sources, False
