@@ -623,6 +623,15 @@ class RenderJobRunner:
 
             logger.info(f"Render job succeeded: job_id={job_id}")
 
+            # 백엔드로 영상 생성 완료 콜백 (비동기, 실패해도 렌더링 성공에 영향 없음)
+            asyncio.create_task(
+                self._notify_job_complete(
+                    job_id=job_id,
+                    video_url=rendered.video_path,
+                    duration=int(rendered.duration_sec),
+                )
+            )
+
         except asyncio.CancelledError:
             # 취소됨
             logger.info(f"Render job task cancelled: {job_id}")
@@ -823,6 +832,15 @@ class RenderJobRunner:
 
             logger.info(f"Render job succeeded: job_id={job_id}")
 
+            # 백엔드로 영상 생성 완료 콜백 (비동기, 실패해도 렌더링 성공에 영향 없음)
+            asyncio.create_task(
+                self._notify_job_complete(
+                    job_id=job_id,
+                    video_url=rendered.mp4_path,
+                    duration=int(rendered.duration_sec),
+                )
+            )
+
         except asyncio.CancelledError:
             logger.info(f"Render job task cancelled: {job_id}")
             raise
@@ -881,6 +899,36 @@ class RenderJobRunner:
         finally:
             if job_id in self._running_jobs:
                 del self._running_jobs[job_id]
+
+    async def _notify_job_complete(
+        self,
+        job_id: str,
+        video_url: str,
+        duration: int,
+    ) -> None:
+        """영상 생성 완료를 백엔드에 알립니다 (백그라운드).
+
+        Args:
+            job_id: 잡 ID
+            video_url: 영상 URL (S3 경로)
+            duration: 영상 길이 (초)
+        """
+        from app.clients.backend_callback_client import get_backend_callback_client
+
+        try:
+            callback_client = get_backend_callback_client()
+            await callback_client.notify_job_complete(
+                job_id=job_id,
+                video_url=video_url,
+                duration=duration,
+                status="COMPLETED",
+            )
+        except Exception as e:
+            # 콜백 실패는 로그만 남기고 무시 (렌더링 자체는 성공)
+            logger.warning(
+                f"Job complete callback failed (non-blocking): "
+                f"job_id={job_id}, error={e}"
+            )
 
     async def _cleanup_job_files(self, job_id: str) -> None:
         """잡 임시 파일 정리.

@@ -49,6 +49,9 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Video Render"])
 
+# Backend → AI 호출용 라우터 (영상 생성 시작/재시도)
+ai_router = APIRouter(prefix="/video/job", tags=["Video Job (Backend → AI)"])
+
 
 # =============================================================================
 # Dependencies
@@ -273,14 +276,16 @@ async def generate_script(
 # =============================================================================
 
 
-@router.post(
-    "/render-jobs/{job_id}/start",
+@ai_router.post(
+    "/{job_id}/start",
     response_model=RenderJobStartResponse,
-    summary="Phase 38: 렌더 잡 시작 (스냅샷 기반)",
+    summary="영상 생성 시작 (Backend → AI)",
     description="""
-렌더 잡을 시작합니다.
+백엔드가 호출하여 영상 생성을 시작합니다.
 
-**Phase 38 동작**:
+**URL**: POST /ai/video/job/{jobId}/start
+
+**동작**:
 1. 백엔드에서 최신 render-spec 조회
 2. render-spec을 잡에 스냅샷으로 저장
 3. 파이프라인 실행 시작
@@ -288,10 +293,6 @@ async def generate_script(
 **Idempotent**:
 - 이미 render_spec_json이 있고 RUNNING/SUCCEEDED/FAILED 상태면 no-op
 - 같은 잡에 여러 번 호출해도 안전
-
-**재시도 정책**:
-- retry 시에는 기존 스냅샷을 재사용
-- 백엔드를 다시 호출하지 않음
 
 **에러 코드**:
 - JOB_NOT_FOUND: 잡이 존재하지 않음
@@ -303,7 +304,7 @@ async def start_render_job(
     job_id: str,
     service=Depends(get_render_service),
 ):
-    """Phase 38: 렌더 잡 시작."""
+    """영상 생성 시작 (Backend → AI)."""
     from app.services.render_job_runner import get_render_job_runner
 
     runner = get_render_job_runner()
@@ -350,19 +351,21 @@ async def start_render_job(
     )
 
 
-@router.post(
-    "/render-jobs/{job_id}/retry",
+@ai_router.post(
+    "/{job_id}/retry",
     response_model=RenderJobStartResponse,
-    summary="Phase 38: 렌더 잡 재시도",
+    summary="영상 생성 재시도 (Backend → AI)",
     description="""
-실패한 렌더 잡을 재시도합니다.
+백엔드가 호출하여 실패한 영상 생성을 재시도합니다.
 
-**Phase 38 정책**:
+**URL**: POST /ai/video/job/{jobId}/retry
+
+**정책**:
 - 기존에 저장된 render-spec 스냅샷을 재사용
 - 백엔드를 다시 호출하지 않음
 
 **조건**:
-- render_spec_json이 있어야 함 (start_job 이후)
+- render_spec_json이 있어야 함 (start 이후)
 - RUNNING 상태가 아니어야 함
 """,
 )
@@ -370,7 +373,7 @@ async def retry_render_job(
     job_id: str,
     service=Depends(get_render_service),
 ):
-    """Phase 38: 렌더 잡 재시도."""
+    """영상 생성 재시도 (Backend → AI)."""
     from app.services.render_job_runner import get_render_job_runner
 
     runner = get_render_job_runner()
