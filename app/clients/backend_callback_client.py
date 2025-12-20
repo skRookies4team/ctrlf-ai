@@ -5,16 +5,27 @@ AI 서버에서 백엔드로 콜백을 보내는 클라이언트.
 
 지원 콜백:
 - POST /video/script/complete: 스크립트 생성 완료 알림
+- POST /video/job/{jobId}/complete: 영상 생성 완료 알림
 
 Usage:
     from app.clients.backend_callback_client import get_backend_callback_client
 
     client = get_backend_callback_client()
+
+    # 스크립트 생성 완료
     await client.notify_script_complete(
         material_id="uuid",
         script_id="uuid",
         script="생성된 스크립트 내용...",
         version=1,
+    )
+
+    # 영상 생성 완료
+    await client.notify_job_complete(
+        job_id="uuid",
+        video_url="s3://bucket/path/video.mp4",
+        duration=1230,
+        status="COMPLETED",
     )
 
 Environment Variables:
@@ -65,6 +76,32 @@ class ScriptCompleteResponse(BaseModel):
     message: Optional[str] = None
 
 
+class JobCompleteRequest(BaseModel):
+    """영상 생성 완료 콜백 요청.
+
+    Attributes:
+        jobId: 잡 ID
+        videoUrl: S3 영상 경로
+        duration: 영상 길이 (초)
+        status: 완료 상태 (COMPLETED, FAILED 등)
+    """
+
+    jobId: str
+    videoUrl: str
+    duration: int
+    status: str
+
+
+class JobCompleteResponse(BaseModel):
+    """영상 생성 완료 콜백 응답.
+
+    Attributes:
+        saved: 저장 성공 여부
+    """
+
+    saved: bool = True
+
+
 # =============================================================================
 # Exceptions
 # =============================================================================
@@ -107,6 +144,24 @@ class ScriptCompleteCallbackError(CallbackError):
     ):
         super().__init__(
             endpoint="/video/script/complete",
+            status_code=status_code,
+            message=message,
+            error_code=error_code,
+        )
+
+
+class JobCompleteCallbackError(CallbackError):
+    """영상 생성 완료 콜백 실패 예외."""
+
+    def __init__(
+        self,
+        job_id: str,
+        status_code: int,
+        message: str,
+        error_code: str = "JOB_COMPLETE_CALLBACK_FAILED",
+    ):
+        super().__init__(
+            endpoint=f"/video/job/{job_id}/complete",
             status_code=status_code,
             message=message,
             error_code=error_code,
@@ -308,6 +363,149 @@ class BackendCallbackClient:
                 f"material_id={material_id}, error={e}"
             )
             raise ScriptCompleteCallbackError(
+                status_code=0,
+                message=f"Unexpected error: {str(e)[:200]}",
+                error_code="CALLBACK_FAILED",
+            )
+
+    async def notify_job_complete(
+        self,
+        job_id: str,
+        video_url: str,
+        duration: int,
+        status: str = "COMPLETED",
+    ) -> JobCompleteResponse:
+        """영상 생성 완료를 백엔드에 알립니다.
+
+        Args:
+            job_id: 잡 ID
+            video_url: S3 영상 경로
+            duration: 영상 길이 (초)
+            status: 완료 상태 (COMPLETED, FAILED 등)
+
+        Returns:
+            JobCompleteResponse: 콜백 응답
+
+        Raises:
+            JobCompleteCallbackError: 콜백 실패 시
+        """
+        if not self._base_url:
+            logger.warning(
+                "BACKEND_BASE_URL not configured, skipping job complete callback"
+            )
+            return JobCompleteResponse(saved=False)
+
+        url = f"{self._base_url}/video/job/{job_id}/complete"
+        headers = self._get_headers()
+
+        request_body = JobCompleteRequest(
+            jobId=job_id,
+            videoUrl=video_url,
+            duration=duration,
+            status=status,
+        )
+
+        logger.info(
+            f"Sending job complete callback: "
+            f"job_id={job_id}, status={status}, duration={duration}"
+        )
+
+        try:
+            if self._external_client:
+                response = await self._external_client.post(
+                    url,
+                    headers=headers,
+                    json=request_body.model_dump(),
+                    timeout=self._timeout,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        url,
+                        headers=headers,
+                        json=request_body.model_dump(),
+                        timeout=self._timeout,
+                    )
+
+            # HTTP 에러 처리
+            if response.status_code == 401:
+                raise JobCompleteCallbackError(
+                    job_id=job_id,
+                    status_code=401,
+                    message="Unauthorized - invalid or missing token",
+                    error_code="CALLBACK_UNAUTHORIZED",
+                )
+            elif response.status_code == 403:
+                raise JobCompleteCallbackError(
+                    job_id=job_id,
+                    status_code=403,
+                    message="Forbidden",
+                    error_code="CALLBACK_FORBIDDEN",
+                )
+            elif response.status_code == 404:
+                raise JobCompleteCallbackError(
+                    job_id=job_id,
+                    status_code=404,
+                    message="Job not found on backend",
+                    error_code="CALLBACK_NOT_FOUND",
+                )
+            elif response.status_code >= 500:
+                raise JobCompleteCallbackError(
+                    job_id=job_id,
+                    status_code=response.status_code,
+                    message=f"Backend server error: {response.text[:200]}",
+                    error_code="CALLBACK_SERVER_ERROR",
+                )
+            elif response.status_code not in (200, 201, 204):
+                raise JobCompleteCallbackError(
+                    job_id=job_id,
+                    status_code=response.status_code,
+                    message=f"Unexpected status: {response.text[:200]}",
+                    error_code="CALLBACK_FAILED",
+                )
+
+            logger.info(
+                f"Job complete callback succeeded: job_id={job_id}, status={status}"
+            )
+
+            # 200/201: JSON 응답 파싱, 204: 빈 응답
+            if response.status_code == 204 or not response.text.strip():
+                return JobCompleteResponse(saved=True)
+
+            try:
+                data = response.json()
+                return JobCompleteResponse(**data) if data else JobCompleteResponse(saved=True)
+            except Exception:
+                return JobCompleteResponse(saved=True)
+
+        except JobCompleteCallbackError:
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(
+                f"Job complete callback timeout: job_id={job_id}, error={e}"
+            )
+            raise JobCompleteCallbackError(
+                job_id=job_id,
+                status_code=0,
+                message=f"Timeout after {self._timeout}s",
+                error_code="CALLBACK_TIMEOUT",
+            )
+        except httpx.RequestError as e:
+            logger.error(
+                f"Job complete callback network error: job_id={job_id}, error={e}"
+            )
+            raise JobCompleteCallbackError(
+                job_id=job_id,
+                status_code=0,
+                message=f"Network error: {str(e)[:200]}",
+                error_code="CALLBACK_NETWORK_ERROR",
+            )
+        except Exception as e:
+            logger.error(
+                f"Job complete callback unexpected error: job_id={job_id}, error={e}"
+            )
+            raise JobCompleteCallbackError(
+                job_id=job_id,
                 status_code=0,
                 message=f"Unexpected error: {str(e)[:200]}",
                 error_code="CALLBACK_FAILED",

@@ -167,11 +167,13 @@ app.include_router(internal_rag.router, tags=["Internal RAG"])
 # - POST /api/scripts: 스크립트 생성
 # - GET /api/scripts/{script_id}: 스크립트 조회
 # - POST /api/videos/{video_id}/scripts/generate: 스크립트 자동 생성 (Phase 31)
-# Render Job 실행 (Phase 38):
-# - POST /api/render-jobs/{job_id}/start: 잡 시작 (스냅샷 기반)
-# - POST /api/render-jobs/{job_id}/retry: 잡 재시도
 # NOTE: V1 렌더 잡 생성/조회/취소/에셋 API는 V2로 이전됨 (Phase 33)
 app.include_router(video_render.router, tags=["Video Render"])
+
+# Backend → AI 호출 API (영상 생성 시작/재시도)
+# - POST /ai/video/job/{job_id}/start: 영상 생성 시작
+# - POST /ai/video/job/{job_id}/retry: 영상 생성 재시도
+app.include_router(video_render.ai_router, prefix="/ai", tags=["Video Job (Backend → AI)"])
 
 # Phase 32: WebSocket Render Progress (실시간 렌더 진행률)
 # - WS /ws/videos/{video_id}/render-progress: 렌더 진행률 실시간 구독

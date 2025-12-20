@@ -388,3 +388,169 @@ class TestSingleton:
             client2 = get_backend_callback_client()
 
             assert client1 is not client2
+
+
+# =============================================================================
+# Job Complete Callback Tests
+# =============================================================================
+
+
+class TestJobCompleteCallback:
+    """영상 생성 완료 콜백 테스트."""
+
+    @pytest.fixture
+    def sample_job_complete_request(self):
+        """샘플 잡 완료 요청."""
+        return {
+            "job_id": "job-001",
+            "video_url": "s3://bucket/videos/job-001/output.mp4",
+            "duration": 120,
+            "status": "COMPLETED",
+        }
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_success_200(
+        self, mock_settings, sample_job_complete_request
+    ):
+        """200 응답 - 잡 완료 콜백 성공."""
+        from app.clients.backend_callback_client import JobCompleteCallbackError
+
+        mock_response = httpx.Response(
+            status_code=200,
+            json={"saved": True},
+        )
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient(client=mock_client)
+            result = await client.notify_job_complete(**sample_job_complete_request)
+
+        assert result.saved is True
+        mock_client.post.assert_called_once()
+
+        # URL 확인
+        call_args = mock_client.post.call_args
+        assert "/video/job/job-001/complete" in call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_success_204(
+        self, mock_settings, sample_job_complete_request
+    ):
+        """204 응답 - 빈 응답 처리."""
+        mock_response = httpx.Response(
+            status_code=204,
+            content=b"",
+        )
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient(client=mock_client)
+            result = await client.notify_job_complete(**sample_job_complete_request)
+
+        assert result.saved is True
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_no_base_url(
+        self, sample_job_complete_request
+    ):
+        """BACKEND_BASE_URL 미설정 시 스킵."""
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = None
+        mock_settings.BACKEND_INTERNAL_TOKEN = None
+        mock_settings.BACKEND_TIMEOUT_SEC = 30.0
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient()
+            result = await client.notify_job_complete(**sample_job_complete_request)
+
+        assert result.saved is False
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_error_404(
+        self, mock_settings, sample_job_complete_request
+    ):
+        """404 Not Found 에러."""
+        from app.clients.backend_callback_client import JobCompleteCallbackError
+
+        mock_response = httpx.Response(
+            status_code=404,
+            text="Not Found",
+        )
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient(client=mock_client)
+
+            with pytest.raises(JobCompleteCallbackError) as exc_info:
+                await client.notify_job_complete(**sample_job_complete_request)
+
+            assert exc_info.value.status_code == 404
+            assert exc_info.value.error_code == "CALLBACK_NOT_FOUND"
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_error_500(
+        self, mock_settings, sample_job_complete_request
+    ):
+        """500 Server Error."""
+        from app.clients.backend_callback_client import JobCompleteCallbackError
+
+        mock_response = httpx.Response(
+            status_code=500,
+            text="Internal Server Error",
+        )
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient(client=mock_client)
+
+            with pytest.raises(JobCompleteCallbackError) as exc_info:
+                await client.notify_job_complete(**sample_job_complete_request)
+
+            assert exc_info.value.status_code == 500
+            assert exc_info.value.error_code == "CALLBACK_SERVER_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_timeout(
+        self, mock_settings, sample_job_complete_request
+    ):
+        """네트워크 타임아웃."""
+        from app.clients.backend_callback_client import JobCompleteCallbackError
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient(client=mock_client)
+
+            with pytest.raises(JobCompleteCallbackError) as exc_info:
+                await client.notify_job_complete(**sample_job_complete_request)
+
+            assert exc_info.value.error_code == "CALLBACK_TIMEOUT"
+
+    @pytest.mark.asyncio
+    async def test_notify_job_complete_request_body(
+        self, mock_settings, sample_job_complete_request
+    ):
+        """요청 본문 확인."""
+        mock_response = httpx.Response(status_code=200, json={"saved": True})
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+            client = BackendCallbackClient(client=mock_client)
+            await client.notify_job_complete(**sample_job_complete_request)
+
+        call_args = mock_client.post.call_args
+        body = call_args[1]["json"]
+        assert body["jobId"] == "job-001"
+        assert body["videoUrl"] == "s3://bucket/videos/job-001/output.mp4"
+        assert body["duration"] == 120
+        assert body["status"] == "COMPLETED"
