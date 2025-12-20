@@ -29,7 +29,7 @@ from app.api.v1 import (
     quiz_generate,
     render_jobs,
     scripts,
-    ws_render,
+    ws_render_progress,
 )
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
@@ -194,4 +194,4 @@ app.include_router(render_jobs.ai_router, prefix="/ai", tags=["Video Job (Backen
 
 # WebSocket Render Progress (실시간 렌더 진행률)
 # - WS /ws/videos/{video_id}/render-progress: 렌더 진행률 실시간 구독
-app.include_router(ws_render.router, prefix="/ws", tags=["WebSocket"])
+app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
