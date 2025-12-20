@@ -327,28 +327,6 @@ Milvus 직접 문서 인덱싱
 }
 ```
 
-#### POST /api/videos/{video_id}/publish
-
-영상 발행 + KB 인덱싱
-
-**Request**
-```json
-{
-  "publishedBy": "ADMIN-001",
-  "indexToKb": true
-}
-```
-
-**Response 200**
-```json
-{
-  "videoId": "VID-001",
-  "status": "PUBLISHED",
-  "kbIndexJobId": "job-kb-001",
-  "kbIndexStatus": "queued"
-}
-```
-
 #### WS /ws/videos/{video_id}/render-progress
 
 실시간 렌더 진행률 (WebSocket)
@@ -395,8 +373,6 @@ Milvus 직접 문서 인덱싱
 |------|-------------|
 | `VALIDATION_ERROR` | 입력값 유효성 실패 |
 | `RESOURCE_NOT_FOUND` | 리소스 없음 |
-| `EDUCATION_EXPIRED` | 교육 기한 만료 |
-| `SKIP_DETECTED` | 영상 스킵 감지 |
 | `LLM_ERROR` | LLM 서비스 오류 |
 | `RAG_ERROR` | RAG 검색 오류 |
 | `RENDER_ERROR` | 렌더링 오류 |
@@ -428,11 +404,6 @@ jobId, documentId, versionNo, fileUrl, requestedBy, chunksProcessed
 **Chat API**: snake_case (Python 표준)
 ```
 session_id, user_id, user_role
-```
-
-**Video Progress API**: snake_case (Python 표준)
-```
-training_id, user_id, current_position, watched_seconds, progress_percent
 ```
 
 **Video Render API**: snake_case (Python 표준)
@@ -516,10 +487,8 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 | `/ai/quiz/generate` | 60s |
 | `/ai/faq/generate` | 60s |
 | `/ai/faq/generate/batch` | 300s |
-| `/api/video/*` | 5s |
 | `/api/scripts/*` | 60s |
 | `/api/*/render-jobs` | 30s |
-| `/api/videos/{id}/publish` | 60s |
 | WebSocket | 5min (keepalive) |
 
 ---
@@ -550,8 +519,9 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 | 2025-12-20 | Deprecated API 섹션 추가 |
 | 2025-12-20 | Chat Response meta 필드 보강 (PII, latency 등) |
 | 2025-12-20 | **V1 Render API 제거** (V2로 완전 이전) |
+| 2025-12-20 | **백엔드 책임 API 제거**: Video Progress, Admin, Publish API → Spring 백엔드로 이전 |
 
 ---
 
 **문서 버전**: 2025-12-20
-**리팩토링 상태**: 완료 (V1 제거, V2 운영 중)
+**리팩토링 상태**: 완료 (AI 핵심 기능만 유지, 백엔드 책임 API 분리)

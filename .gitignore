@@ -142,3 +142,6 @@ test_output_script/
 test_storage/
 script.json
 test_chat.json
+
+# Runtime data
+data/
