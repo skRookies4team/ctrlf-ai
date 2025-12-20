@@ -2,7 +2,7 @@
 
 > **목적**: 기업 내부 정보보호 AI 어시스턴트 (LLM + RAG 기반)
 > **Base URL**: `http://{AI_GATEWAY_HOST}:{PORT}`
-> **문서 버전**: 2025-12-20 v2.1 (백엔드 제공 API 섹션 추가)
+> **문서 버전**: 2025-12-20 v2.2 (잡 완료 콜백 추가, 렌더 경로 변경)
 > **상태**: 리팩토링 완료 (검증 완료, 백엔드 연동 준비)
 
 ---
@@ -314,9 +314,11 @@ Milvus 직접 문서 인덱싱
 | `FAILED` | 실패 |
 | `CANCELLED` | 취소됨 |
 
-#### POST /api/render-jobs/{job_id}/start
+#### POST /ai/video/job/{job_id}/start
 
-렌더 잡 시작 (Phase 38)
+렌더 잡 시작 (Backend → AI)
+
+> 백엔드에서 AI 서버로 영상 생성 시작을 요청합니다.
 
 **Response 200**
 ```json
@@ -328,9 +330,11 @@ Milvus 직접 문서 인덱싱
 }
 ```
 
-#### POST /api/render-jobs/{job_id}/retry
+#### POST /ai/video/job/{job_id}/retry
 
-렌더 잡 재시도 (Phase 38)
+렌더 잡 재시도 (Backend → AI)
+
+> 실패한 잡의 재시도를 요청합니다.
 
 **Response 200**
 ```json
@@ -538,6 +542,7 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 | AI 로그 | POST | `/api/ai-logs` | AI 대화 로그 저장 | BackendClient |
 | 렌더 스펙 | GET | `/internal/scripts/{scriptId}/render-spec` | 영상 렌더 스펙 조회 | BackendScriptClient |
 | 스크립트 콜백 | POST | `/video/script/complete` | 스크립트 생성 완료 알림 | BackendCallbackClient |
+| 잡 완료 콜백 | POST | `/video/job/{jobId}/complete` | 영상 생성 완료 알림 | BackendCallbackClient |
 | 헬스체크 | GET | `/actuator/health` | 백엔드 상태 확인 | BackendClient |
 
 ### 8.2 선택 API (라우팅에 따라 필요)
@@ -718,7 +723,56 @@ X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
 
 ---
 
-### 9.4 교육 현황 조회
+### 9.4 영상 생성 완료 콜백
+
+#### POST /video/job/{jobId}/complete
+
+영상 렌더링 완료를 알립니다. (비동기 콜백)
+
+> AI 서버가 렌더링 완료 후 백엔드로 호출합니다.
+> 렌더 성공 시 자동 호출되며, 실패해도 렌더 결과에 영향을 주지 않습니다 (non-blocking).
+
+**Request Headers**
+```
+Content-Type: application/json
+X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
+```
+
+**Request Body** (camelCase 사용)
+```json
+{
+  "jobId": "RJ-2025-001",
+  "videoUrl": "s3://bucket/videos/VID-001/render.mp4",
+  "duration": 180,
+  "status": "COMPLETED"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| jobId | string | Yes | 렌더 잡 ID |
+| videoUrl | string | Yes | S3 영상 경로 |
+| duration | int | Yes | 영상 길이 (초) |
+| status | string | Yes | 완료 상태 (`COMPLETED`, `FAILED`) |
+
+**Response 200**
+```json
+{
+  "saved": true
+}
+```
+
+**에러 응답**
+
+| Status | 상황 |
+|--------|------|
+| 401 | 토큰 없음/잘못됨 |
+| 403 | 권한 없음 |
+| 404 | Job 없음 |
+
+---
+
+### 9.5 교육 현황 조회 (선택)
 
 #### GET /api/edu/status
 
@@ -755,7 +809,7 @@ X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
 
 ---
 
-### 9.5 교육 통계 조회
+### 9.6 교육 통계 조회 (선택)
 
 #### GET /api/edu/stats
 
@@ -784,7 +838,7 @@ X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
 
 ---
 
-### 9.6 사고 통계 조회
+### 9.7 사고 통계 조회 (선택)
 
 #### GET /api/incidents/overview
 
@@ -821,7 +875,7 @@ X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
 
 ---
 
-### 9.7 사고 상세 조회
+### 9.8 사고 상세 조회 (선택)
 
 #### GET /api/incidents/{incident_id}
 
@@ -845,7 +899,7 @@ X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
 
 ---
 
-### 9.8 신고 안내 조회
+### 9.9 신고 안내 조회 (선택)
 
 #### GET /api/incidents/report-guide
 
@@ -912,8 +966,10 @@ X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
 | 2025-12-20 | **V1 Render API 제거** (V2로 완전 이전) |
 | 2025-12-20 | **백엔드 책임 API 제거**: Video Progress, Admin, Publish API → Spring 백엔드로 이전 |
 | 2025-12-20 | **Part 2: 백엔드 제공 API 섹션 신규 추가** (AI 로그, 렌더 스펙, 콜백, 데이터 조회) |
+| 2025-12-20 | **렌더 잡 시작/재시도 경로 변경**: `/api/render-jobs/{job_id}/*` → `/ai/video/job/{job_id}/*` |
+| 2025-12-20 | **잡 완료 콜백 추가**: `POST /video/job/{jobId}/complete` (9.4절) |
 
 ---
 
-**문서 버전**: 2025-12-20 v2.1
+**문서 버전**: 2025-12-20 v2.2
 **리팩토링 상태**: 완료 (AI 핵심 기능만 유지, 백엔드 책임 API 분리, 백엔드 제공 API 명세 추가)
