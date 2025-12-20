@@ -1,26 +1,14 @@
 """
-Phase 27: Video Render API
-Phase 31: Script Generation API
-Phase 38: Render Job Start/Retry API
+스크립트 API
 
-영상 생성 파이프라인 API 엔드포인트.
+영상 스크립트 CRUD 및 편집 API 엔드포인트.
 
 엔드포인트:
 - POST /api/scripts : 스크립트 생성
 - GET /api/scripts/{script_id} : 스크립트 조회
-- POST /api/videos/{video_id}/scripts/generate : 스크립트 자동 생성 (Phase 31)
-- POST /api/render-jobs/{job_id}/start : 렌더 잡 시작 (Phase 38)
-- POST /api/render-jobs/{job_id}/retry : 렌더 잡 재시도 (Phase 38)
-
-V2로 이전된 API (Phase 33 - video_render_phase33.py):
-- POST /api/v2/videos/{video_id}/render-jobs : 렌더 잡 생성 (idempotent)
-- GET /api/v2/videos/{video_id}/render-jobs : 잡 목록 조회
-- GET /api/v2/videos/{video_id}/render-jobs/{job_id} : 잡 상세 조회
-- POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel : 잡 취소
-- GET /api/v2/videos/{video_id}/assets/published : 발행된 에셋 조회
-
-Phase 26 연동:
-- EXPIRED 교육에 대해 404 반환
+- POST /api/videos/{video_id}/scripts/generate : 스크립트 자동 생성
+- GET /api/scripts/{script_id}/editor : 편집용 뷰 조회
+- PATCH /api/scripts/{script_id}/editor : 씬 부분 수정
 """
 
 import asyncio
@@ -30,27 +18,31 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.clients.backend_client import get_backend_callback_client
 from app.core.logging import get_logger
+from app.models.script_editor import (
+    ScriptEditorPatchRequest,
+    ScriptEditorPatchResponse,
+    ScriptEditorView,
+    apply_scene_updates,
+    script_to_editor_view,
+)
 from app.models.video_render import (
-    RenderJobStartResponse,
     ScriptCreateRequest,
     ScriptGenerateRequest,
     ScriptGenerateResponse,
     ScriptResponse,
+    ScriptStatus,
 )
 from app.services.education_catalog_service import get_education_catalog_service
 from app.services.video_render_service import get_video_render_service
 from app.services.video_renderer_mvp import get_mvp_video_renderer
 from app.services.video_script_generation_service import (
-    get_video_script_generation_service,
     ScriptGenerationOptions,
+    get_video_script_generation_service,
 )
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api", tags=["Video Render"])
-
-# Backend → AI 호출용 라우터 (영상 생성 시작/재시도)
-ai_router = APIRouter(prefix="/video/job", tags=["Video Job (Backend → AI)"])
+router = APIRouter(prefix="/api", tags=["Scripts"])
 
 
 # =============================================================================
@@ -61,7 +53,6 @@ ai_router = APIRouter(prefix="/video/job", tags=["Video Job (Backend → AI)"])
 def get_render_service():
     """VideoRenderService 의존성."""
     service = get_video_render_service()
-    # 렌더러가 없으면 MVP 렌더러 설정
     if service._renderer is None:
         service.set_renderer(get_mvp_video_renderer())
     return service
@@ -70,8 +61,6 @@ def get_render_service():
 def ensure_education_not_expired(video_id: str) -> None:
     """교육이 만료되지 않았는지 확인.
 
-    Phase 26 정책: EXPIRED 교육은 404 차단
-
     Args:
         video_id: 비디오 ID (교육 ID로 매핑)
 
@@ -79,24 +68,21 @@ def ensure_education_not_expired(video_id: str) -> None:
         HTTPException: 교육이 만료된 경우 404
     """
     catalog = get_education_catalog_service()
-
-    # video_id를 education_id로 매핑 (동일하다고 가정)
-    # 실제 환경에서는 video → education 매핑 필요
     education_id = video_id
 
     if catalog.is_expired(education_id):
-        logger.warning(f"Video render blocked: education expired, education_id={education_id}")
+        logger.warning(f"Script operation blocked: education expired, education_id={education_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "reason_code": "EDU_EXPIRED",
-                "message": f"해당 교육({education_id})은 만료되어 영상 생성이 불가합니다.",
+                "message": f"해당 교육({education_id})은 만료되어 작업이 불가합니다.",
             },
         )
 
 
 # =============================================================================
-# Script Management APIs
+# Script CRUD APIs
 # =============================================================================
 
 
@@ -159,14 +145,14 @@ async def get_script(
 
 
 # =============================================================================
-# Phase 31: Script Generation API
+# Script Generation API
 # =============================================================================
 
 
 @router.post(
     "/videos/{video_id}/scripts/generate",
     response_model=ScriptGenerateResponse,
-    summary="스크립트 자동 생성 (Phase 31)",
+    summary="스크립트 자동 생성",
     description="""
 교육 원문을 LLM으로 분석하여 VideoScript JSON을 자동 생성합니다.
 
@@ -193,7 +179,7 @@ async def generate_script(
     user_id: str = "anonymous",
     service=Depends(get_render_service),
 ):
-    """교육 원문에서 스크립트 자동 생성 (Phase 31)."""
+    """교육 원문에서 스크립트 자동 생성."""
     # EXPIRED 교육 차단
     ensure_education_not_expired(video_id)
 
@@ -272,141 +258,119 @@ async def generate_script(
 
 
 # =============================================================================
-# Phase 38: Job Start API
+# Script Editor APIs
 # =============================================================================
 
 
-@ai_router.post(
-    "/{job_id}/start",
-    response_model=RenderJobStartResponse,
-    summary="영상 생성 시작 (Backend → AI)",
+@router.get(
+    "/scripts/{script_id}/editor",
+    response_model=ScriptEditorView,
+    summary="스크립트 편집용 뷰 조회",
     description="""
-백엔드가 호출하여 영상 생성을 시작합니다.
+스크립트를 편집용 DTO로 반환합니다.
 
-**URL**: POST /ai/video/job/{jobId}/start
-
-**동작**:
-1. 백엔드에서 최신 render-spec 조회
-2. render-spec을 잡에 스냅샷으로 저장
-3. 파이프라인 실행 시작
-
-**Idempotent**:
-- 이미 render_spec_json이 있고 RUNNING/SUCCEEDED/FAILED 상태면 no-op
-- 같은 잡에 여러 번 호출해도 안전
-
-**에러 코드**:
-- JOB_NOT_FOUND: 잡이 존재하지 않음
-- SCRIPT_FETCH_FAILED: 백엔드 render-spec 조회 실패
-- EMPTY_RENDER_SPEC: render-spec에 씬이 없음
+**응답**:
+- script_id, video_id, title, language, status
+- scenes[]: scene_id, order, chapter_id, chapter_title, scene_title, narration_text, subtitle_text, has_audio, has_captions
+- total_scenes: 전체 씬 수
+- editable: 편집 가능 여부 (DRAFT만 true)
 """,
 )
-async def start_render_job(
-    job_id: str,
+async def get_script_editor_view(
+    script_id: str,
     service=Depends(get_render_service),
 ):
-    """영상 생성 시작 (Backend → AI)."""
-    from app.services.render_job_runner import get_render_job_runner
-
-    runner = get_render_job_runner()
-
-    # 렌더러 설정 확인
-    if runner._renderer is None:
-        runner.set_renderer(get_mvp_video_renderer())
-
-    result = await runner.start_job(job_id)
-
-    if result.error_code == "JOB_NOT_FOUND":
+    """스크립트를 편집용 DTO로 반환."""
+    script = service.get_script(script_id)
+    if not script:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
+                "reason_code": "SCRIPT_NOT_FOUND",
+                "message": f"스크립트를 찾을 수 없습니다: {script_id}",
             },
         )
 
-    if result.error_code and result.error_code.startswith("SCRIPT_FETCH"):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "reason_code": result.error_code,
-                "message": result.message,
-            },
-        )
-
-    if result.error_code == "EMPTY_RENDER_SPEC":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "reason_code": "EMPTY_RENDER_SPEC",
-                "message": "Render-spec에 씬이 없습니다.",
-            },
-        )
-
-    return RenderJobStartResponse(
-        job_id=job_id,
-        status=result.job.status if result.job else "UNKNOWN",
-        started=result.started,
-        message=result.message,
-        error_code=result.error_code,
-    )
+    return script_to_editor_view(script)
 
 
-@ai_router.post(
-    "/{job_id}/retry",
-    response_model=RenderJobStartResponse,
-    summary="영상 생성 재시도 (Backend → AI)",
+@router.patch(
+    "/scripts/{script_id}/editor",
+    response_model=ScriptEditorPatchResponse,
+    summary="스크립트 씬 편집",
     description="""
-백엔드가 호출하여 실패한 영상 생성을 재시도합니다.
+특정 씬의 narration/subtitle을 부분 수정합니다.
 
-**URL**: POST /ai/video/job/{jobId}/retry
+**요청**:
+- updates[]: scene_id, narration_text (optional), subtitle_text (optional)
 
-**정책**:
-- 기존에 저장된 render-spec 스냅샷을 재사용
-- 백엔드를 다시 호출하지 않음
+**무효화 규칙**:
+- narration_text 변경 시: 해당 씬의 오디오 + 캡션 산출물 무효화
+- subtitle_text만 변경 시: 해당 씬의 캡션 산출물만 무효화
 
-**조건**:
-- render_spec_json이 있어야 함 (start 이후)
-- RUNNING 상태가 아니어야 함
+**권한 제약**:
+- status == DRAFT인 스크립트만 편집 가능
+- APPROVED/PUBLISHED는 409 에러
 """,
 )
-async def retry_render_job(
-    job_id: str,
+async def patch_script_editor(
+    script_id: str,
+    request: ScriptEditorPatchRequest,
     service=Depends(get_render_service),
 ):
-    """영상 생성 재시도 (Backend → AI)."""
-    from app.services.render_job_runner import get_render_job_runner
-
-    runner = get_render_job_runner()
-
-    if runner._renderer is None:
-        runner.set_renderer(get_mvp_video_renderer())
-
-    result = await runner.retry_job(job_id)
-
-    if result.error_code == "JOB_NOT_FOUND":
+    """스크립트 씬 편집."""
+    # 스크립트 조회
+    script = service.get_script(script_id)
+    if not script:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
+                "reason_code": "SCRIPT_NOT_FOUND",
+                "message": f"스크립트를 찾을 수 없습니다: {script_id}",
             },
         )
 
-    if result.error_code == "NO_RENDER_SPEC_FOR_RETRY":
+    # 상태 제약: DRAFT만 편집 가능
+    if script.status != ScriptStatus.DRAFT:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "reason_code": "NO_RENDER_SPEC_FOR_RETRY",
-                "message": "재시도하려면 먼저 /start를 호출해야 합니다.",
+                "reason_code": "NOT_EDITABLE",
+                "message": f"DRAFT 상태의 스크립트만 편집할 수 있습니다. 현재 상태: {script.status.value}",
             },
         )
 
-    return RenderJobStartResponse(
-        job_id=job_id,
-        status=result.job.status if result.job else "UNKNOWN",
-        started=result.started,
-        message=result.message,
-        error_code=result.error_code,
+    # 업데이트 적용
+    updated_json, updated_ids, audio_count, caption_count = apply_scene_updates(
+        script.raw_json,
+        request.updates,
+    )
+
+    if not updated_ids:
+        return ScriptEditorPatchResponse(
+            success=True,
+            updated_scene_ids=[],
+            invalidated_audio_count=0,
+            invalidated_caption_count=0,
+            message="변경된 씬이 없습니다.",
+        )
+
+    # raw_json 업데이트 후 저장
+    script.raw_json = updated_json
+    service._script_store.save(script)
+
+    logger.info(
+        f"Script editor patch applied: script_id={script_id}, "
+        f"updated_scenes={updated_ids}, "
+        f"invalidated_audio={audio_count}, invalidated_caption={caption_count}"
+    )
+
+    return ScriptEditorPatchResponse(
+        success=True,
+        updated_scene_ids=updated_ids,
+        invalidated_audio_count=audio_count,
+        invalidated_caption_count=caption_count,
+        message=f"{len(updated_ids)}개 씬이 수정되었습니다. 다음 렌더링 시 오디오/캡션이 재생성됩니다.",
     )
 
 

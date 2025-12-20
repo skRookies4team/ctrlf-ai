@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from app.clients.backend_data_client import (
+from app.clients.backend_client import (
     BackendDataClient,
     BackendDataResponse,
     BACKEND_EDU_STATUS_PATH,
@@ -124,7 +124,7 @@ async def test_backend_data_client_http_mock_transport_success() -> None:
     mock_transport = httpx.MockTransport(mock_handler)
     mock_client = httpx.AsyncClient(transport=mock_transport)
 
-    with patch("app.clients.backend_data_client.get_async_http_client", return_value=mock_client):
+    with patch("app.clients.backend_client.get_async_http_client", return_value=mock_client):
         client = BackendDataClient(base_url="http://test-backend:8080")
         result = await client.get_employee_edu_status("user-123")
 
@@ -142,7 +142,7 @@ async def test_backend_data_client_http_mock_transport_error() -> None:
     mock_transport = httpx.MockTransport(mock_handler)
     mock_client = httpx.AsyncClient(transport=mock_transport)
 
-    with patch("app.clients.backend_data_client.get_async_http_client", return_value=mock_client):
+    with patch("app.clients.backend_client.get_async_http_client", return_value=mock_client):
         client = BackendDataClient(base_url="http://test-backend:8080")
         result = await client.get_employee_edu_status("user-123")
 

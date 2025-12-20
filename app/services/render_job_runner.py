@@ -32,7 +32,7 @@ from app.api.v1.ws_render_progress import (
     get_step_progress,
     notify_render_progress,
 )
-from app.clients.backend_script_client import (
+from app.clients.backend_client import (
     BackendScriptClient,
     EmptyRenderSpecError,
     ScriptFetchError,
@@ -627,7 +627,7 @@ class RenderJobRunner:
             asyncio.create_task(
                 self._notify_job_complete(
                     job_id=job_id,
-                    video_url=rendered.video_path,
+                    video_url=rendered.mp4_path,
                     duration=int(rendered.duration_sec),
                 )
             )
@@ -913,7 +913,7 @@ class RenderJobRunner:
             video_url: 영상 URL (S3 경로)
             duration: 영상 길이 (초)
         """
-        from app.clients.backend_callback_client import get_backend_callback_client
+        from app.clients.backend_client import get_backend_callback_client
 
         try:
             callback_client = get_backend_callback_client()

@@ -89,7 +89,7 @@ from app.models.router_types import (
     Tier0Intent,
     TIER0_ROUTING_POLICY,
 )
-from app.clients.backend_data_client import BackendDataClient
+from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient
 from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
 from app.clients.ragflow_client import RagflowClient
