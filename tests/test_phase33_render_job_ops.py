@@ -310,32 +310,6 @@ class TestRenderJobRunner:
         assert result.created is False
         assert result.job.job_id == "job-existing"
 
-    @pytest.mark.asyncio
-    async def test_create_job_rejects_unapproved_script(self, repository, mock_renderer):
-        """APPROVED가 아닌 스크립트로 잡 생성 시 거부."""
-        from app.services.render_job_runner import RenderJobRunner
-
-        draft_script = VideoScript(
-            script_id="script-draft",
-            video_id="video-001",
-            status=ScriptStatus.DRAFT,  # NOT APPROVED
-            raw_json={},
-            created_by="user",
-        )
-
-        runner = RenderJobRunner(
-            renderer=mock_renderer,
-            repository=repository,
-        )
-
-        with pytest.raises(ValueError, match="not approved"):
-            await runner.create_job(
-                video_id="video-001",
-                script_id="script-draft",
-                script=draft_script,
-                created_by="test-user",
-            )
-
     def test_get_published_assets(self, repository, mock_renderer):
         """발행된 에셋 조회."""
         from app.repositories.render_job_repository import RenderJobEntity

@@ -1,19 +1,28 @@
 """
 Phase 27: Video Render API
 Phase 28: Publish & KB Indexing API
+Phase 31: Script Generation API
+Phase 38: Render Job Start/Retry API
 
 영상 생성 파이프라인 API 엔드포인트.
 
 엔드포인트:
-- POST /api/videos/{video_id}/render-jobs : 렌더 잡 생성
-- GET /api/render-jobs/{job_id} : 잡 상태 조회
-- POST /api/render-jobs/{job_id}/cancel : 잡 취소
-- GET /api/videos/{video_id}/asset : 결과 비디오 조회
+- POST /api/scripts : 스크립트 생성
+- GET /api/scripts/{script_id} : 스크립트 조회
+- POST /api/videos/{video_id}/scripts/generate : 스크립트 자동 생성 (Phase 31)
+- POST /api/render-jobs/{job_id}/start : 렌더 잡 시작 (Phase 38)
+- POST /api/render-jobs/{job_id}/retry : 렌더 잡 재시도 (Phase 38)
 - POST /api/videos/{video_id}/publish : 영상 발행 + KB 적재 (Phase 28)
 - GET /api/videos/{video_id}/kb-status : KB 인덱스 상태 조회 (Phase 28)
 
+V2로 이전된 API (Phase 33 - video_render_phase33.py):
+- POST /api/v2/videos/{video_id}/render-jobs : 렌더 잡 생성 (idempotent)
+- GET /api/v2/videos/{video_id}/render-jobs : 잡 목록 조회
+- GET /api/v2/videos/{video_id}/render-jobs/{job_id} : 잡 상세 조회
+- POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel : 잡 취소
+- GET /api/v2/videos/{video_id}/assets/published : 발행된 에셋 조회
+
 권한:
-- 렌더 잡 생성: REVIEWER 역할만 가능
 - 발행: REVIEWER 역할만 가능
 
 Phase 26 연동:
@@ -21,30 +30,27 @@ Phase 26 연동:
 
 Phase 28 정책:
 - KB 적재는 PUBLISHED 상태의 영상만 대상
-- APPROVED 스크립트 + 렌더 SUCCEEDED 후에만 발행 가능
+- 렌더 SUCCEEDED 후에만 발행 가능
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+import asyncio
+import json
 from typing import Optional
 
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from app.clients.backend_callback_client import get_backend_callback_client
 from app.core.logging import get_logger
 from app.models.video_render import (
     KBIndexStatus,
     KBIndexStatusResponse,
     PublishResponse,
-    RenderJobCancelResponse,
-    RenderJobCreateRequest,
-    RenderJobCreateResponse,
     RenderJobStartResponse,
-    RenderJobStatusResponse,
-    RenderJobStatus,
     ScriptCreateRequest,
-    ScriptApproveRequest,
     ScriptGenerateRequest,
     ScriptGenerateResponse,
     ScriptResponse,
     ScriptStatus,
-    VideoAssetResponse,
 )
 from app.services.education_catalog_service import get_education_catalog_service
 from app.services.kb_index_service import get_kb_index_service
@@ -144,43 +150,6 @@ async def create_script(
         raw_json=request.raw_json,
         created_by=user_id,
     )
-    return ScriptResponse(
-        script_id=script.script_id,
-        video_id=script.video_id,
-        status=script.status.value,
-        raw_json=script.raw_json,
-        created_by=script.created_by,
-        created_at=script.created_at.isoformat(),
-    )
-
-
-@router.post(
-    "/scripts/{script_id}/approve",
-    response_model=ScriptResponse,
-    summary="스크립트 승인",
-    description="스크립트를 승인합니다. (APPROVED 상태로 전환)",
-)
-async def approve_script(
-    script_id: str,
-    request: ScriptApproveRequest = None,
-    user_id: str = "reviewer",
-    user_role: str = "REVIEWER",
-    service=Depends(get_render_service),
-):
-    """스크립트 승인."""
-    # REVIEWER 역할 검증
-    verify_reviewer_role(user_role)
-
-    script = service.approve_script(script_id, user_id)
-    if not script:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "SCRIPT_NOT_FOUND",
-                "message": f"스크립트를 찾을 수 없습니다: {script_id}",
-            },
-        )
-
     return ScriptResponse(
         script_id=script.script_id,
         video_id=script.video_id,
@@ -291,6 +260,15 @@ async def generate_script(
             f"script_id={script.script_id}"
         )
 
+        # 백엔드로 스크립트 생성 완료 콜백 (비동기, 실패해도 응답에 영향 없음)
+        asyncio.create_task(
+            _notify_script_complete(
+                material_id=video_id,
+                script_id=script.script_id,
+                script_json=raw_json,
+            )
+        )
+
         return ScriptGenerateResponse(
             script_id=script.script_id,
             video_id=script.video_id,
@@ -324,170 +302,6 @@ async def generate_script(
                 "message": f"Unexpected error: {type(e).__name__}",
             },
         )
-
-
-# =============================================================================
-# Render Job APIs
-# =============================================================================
-
-
-@router.post(
-    "/videos/{video_id}/render-jobs",
-    response_model=RenderJobCreateResponse,
-    summary="[DEPRECATED] 렌더 잡 생성",
-    description="""
-**DEPRECATED**: POST /api/v2/videos/{video_id}/render-jobs 사용 권장
-
-새 렌더 잡을 생성합니다.
-
-**권한**: REVIEWER만 가능
-
-**검증**:
-- 스크립트가 APPROVED 상태여야 함
-- 해당 교육이 EXPIRED면 404
-- 동일 video_id에 대해 RUNNING/PENDING 잡이 있으면 409
-""",
-    deprecated=True,
-)
-async def create_render_job(
-    video_id: str,
-    request: RenderJobCreateRequest,
-    response: Response,
-    user_id: str = "reviewer",
-    user_role: str = "REVIEWER",
-    service=Depends(get_render_service),
-):
-    """렌더 잡 생성 (DEPRECATED - V2 사용 권장)."""
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</api/v2/videos/{video_id}/render-jobs>; rel="successor-version"'
-    # REVIEWER 역할 검증
-    verify_reviewer_role(user_role)
-
-    # EXPIRED 교육 차단
-    ensure_education_not_expired(video_id)
-
-    try:
-        job = await service.create_render_job(
-            video_id=video_id,
-            script_id=request.script_id,
-            requested_by=user_id,
-        )
-        return RenderJobCreateResponse(
-            job_id=job.job_id,
-            status=job.status.value,
-        )
-
-    except ValueError as e:
-        # 스크립트 관련 오류 (없음, 미승인, video_id 불일치)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "reason_code": "INVALID_SCRIPT",
-                "message": str(e),
-            },
-        )
-
-    except RuntimeError as e:
-        # 중복 잡 오류
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "DUPLICATE_JOB",
-                "message": str(e),
-            },
-        )
-
-
-@router.get(
-    "/render-jobs/{job_id}",
-    response_model=RenderJobStatusResponse,
-    summary="렌더 잡 상태 조회",
-    description="렌더 잡의 상태를 조회합니다.",
-)
-async def get_render_job_status(
-    job_id: str,
-    service=Depends(get_render_service),
-):
-    """렌더 잡 상태 조회."""
-    job, asset = service.get_job_with_asset(job_id)
-
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
-            },
-        )
-
-    response = RenderJobStatusResponse(
-        job_id=job.job_id,
-        video_id=job.video_id,
-        script_id=job.script_id,
-        status=job.status.value,
-        step=job.step.value if job.step else None,
-        progress=job.progress,
-        error_message=job.error_message,
-        started_at=job.started_at.isoformat() if job.started_at else None,
-        finished_at=job.finished_at.isoformat() if job.finished_at else None,
-        asset=VideoAssetResponse(
-            video_asset_id=asset.video_asset_id,
-            video_id=asset.video_id,
-            video_url=asset.video_url,
-            thumbnail_url=asset.thumbnail_url,
-            subtitle_url=asset.subtitle_url,
-            duration_sec=asset.duration_sec,
-            created_at=asset.created_at.isoformat(),
-        ) if asset else None,
-    )
-    return response
-
-
-@router.post(
-    "/render-jobs/{job_id}/cancel",
-    response_model=RenderJobCancelResponse,
-    summary="[DEPRECATED] 렌더 잡 취소",
-    description="""
-**DEPRECATED**: POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel 사용 권장
-
-진행 중인 렌더 잡을 취소합니다. (PENDING/RUNNING만 가능)
-""",
-    deprecated=True,
-)
-async def cancel_render_job(
-    job_id: str,
-    response: Response,
-    service=Depends(get_render_service),
-):
-    """렌더 잡 취소 (DEPRECATED - V2 사용 권장)."""
-    response.headers["Deprecation"] = "true"
-    job = await service.cancel_job(job_id)
-
-    if not job:
-        # 잡이 없거나 취소 불가
-        existing_job = service.get_job(job_id)
-        if not existing_job:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "reason_code": "JOB_NOT_FOUND",
-                    "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
-                },
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "CANNOT_CANCEL",
-                    "message": f"잡을 취소할 수 없습니다 (현재 상태: {existing_job.status.value})",
-                },
-            )
-
-    return RenderJobCancelResponse(
-        job_id=job.job_id,
-        status=job.status.value,
-        message="렌더 잡이 취소되었습니다.",
-    )
 
 
 # =============================================================================
@@ -629,45 +443,6 @@ async def retry_render_job(
     )
 
 
-@router.get(
-    "/videos/{video_id}/asset",
-    response_model=VideoAssetResponse,
-    summary="비디오 에셋 조회",
-    description="""
-비디오의 최신 에셋(영상/썸네일/자막)을 조회합니다.
-
-**Phase 26 정책**: EXPIRED 교육은 404 반환
-""",
-)
-async def get_video_asset(
-    video_id: str,
-    service=Depends(get_render_service),
-):
-    """비디오 에셋 조회."""
-    # EXPIRED 교육 차단
-    ensure_education_not_expired(video_id)
-
-    asset = service.get_latest_asset_by_video_id(video_id)
-
-    if not asset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "ASSET_NOT_FOUND",
-                "message": f"비디오 에셋을 찾을 수 없습니다: {video_id}",
-            },
-        )
-
-    return VideoAssetResponse(
-        video_asset_id=asset.video_asset_id,
-        video_id=asset.video_id,
-        video_url=asset.video_url,
-        thumbnail_url=asset.thumbnail_url,
-        subtitle_url=asset.subtitle_url,
-        duration_sec=asset.duration_sec,
-        created_at=asset.created_at.isoformat(),
-    )
-
 
 # =============================================================================
 # Phase 28: Publish & KB Indexing APIs
@@ -685,7 +460,6 @@ async def get_video_asset(
 
 **검증**:
 - 해당 video_id에 SUCCEEDED 렌더 잡이 있어야 함 (409)
-- 최신 스크립트가 APPROVED 상태여야 함 (409)
 - 해당 교육이 EXPIRED면 404
 
 **동작**:
@@ -722,7 +496,7 @@ async def publish_video(
             },
         )
 
-    # 2. APPROVED 스크립트 확인
+    # 2. 스크립트 확인
     script = service.get_script(succeeded_job.script_id)
     if not script:
         raise HTTPException(
@@ -730,15 +504,6 @@ async def publish_video(
             detail={
                 "reason_code": "SCRIPT_NOT_FOUND",
                 "message": f"스크립트를 찾을 수 없습니다: script_id={succeeded_job.script_id}",
-            },
-        )
-
-    if not script.is_approved():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "SCRIPT_NOT_APPROVED",
-                "message": f"스크립트가 승인되지 않았습니다: status={script.status.value}",
             },
         )
 
@@ -840,3 +605,39 @@ async def get_kb_index_status(
         kb_document_status=script.kb_document_status.value if script.kb_document_status else None,
         kb_last_error=script.kb_last_error,
     )
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+async def _notify_script_complete(
+    material_id: str,
+    script_id: str,
+    script_json: dict,
+) -> None:
+    """스크립트 생성 완료를 백엔드에 알립니다 (백그라운드).
+
+    Args:
+        material_id: 자료 ID (video_id)
+        script_id: 생성된 스크립트 ID
+        script_json: 생성된 스크립트 JSON (raw_json)
+    """
+    import json
+    from app.clients.backend_callback_client import get_backend_callback_client
+
+    try:
+        callback_client = get_backend_callback_client()
+        await callback_client.notify_script_complete(
+            material_id=material_id,
+            script_id=script_id,
+            script=json.dumps(script_json, ensure_ascii=False),
+            version=1,
+        )
+    except Exception as e:
+        # 콜백 실패는 로그만 남기고 무시 (스크립트 생성 자체는 성공)
+        logger.warning(
+            f"Script complete callback failed (non-blocking): "
+            f"material_id={material_id}, script_id={script_id}, error={e}"
+        )

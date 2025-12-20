@@ -172,7 +172,6 @@ class RenderJobRunner:
     ) -> JobCreationResult:
         """렌더 잡 생성 (idempotent).
 
-        - APPROVED 스크립트만 렌더 가능
         - 기존 RUNNING/PENDING 잡이 있으면 그 잡을 반환
         - 새 잡 생성 시 백그라운드에서 실행 시작
 
@@ -186,15 +185,9 @@ class RenderJobRunner:
             JobCreationResult: 생성 결과 (job, created, message)
 
         Raises:
-            ValueError: 스크립트가 APPROVED가 아닌 경우
+            ValueError: 스크립트 video_id가 불일치하는 경우
         """
-        # 1. 스크립트 상태 검증
-        if not script.is_approved():
-            raise ValueError(
-                f"Script is not approved: script_id={script_id}, "
-                f"status={script.status.value}"
-            )
-
+        # 1. 스크립트 video_id 검증
         if script.video_id != video_id:
             raise ValueError(
                 f"Script video_id mismatch: script={script.video_id}, "

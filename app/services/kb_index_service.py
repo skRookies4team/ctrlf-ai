@@ -100,7 +100,7 @@ class KBIndexService:
 
         Args:
             video_id: 비디오 ID
-            script: 승인된 스크립트
+            script: 스크립트
             course_type: 교육 유형 (FOUR_MANDATORY, JOB, TRAINING)
             year: 교육 연도
             expires_at: 만료 시각
@@ -108,20 +108,11 @@ class KBIndexService:
 
         Returns:
             KBIndexStatus: 인덱싱 결과 상태
-
-        Raises:
-            ValueError: 스크립트가 승인되지 않은 경우
         """
         logger.info(
             f"index_published_video: video_id={video_id}, script_id={script.script_id}, "
             f"course_type={course_type}"
         )
-
-        # 1. 스크립트 상태 검증
-        if not script.is_approved():
-            raise ValueError(
-                f"Script is not approved: {script.script_id} (status={script.status.value})"
-            )
 
         try:
             # 2. 스크립트 → 청크 변환

@@ -335,11 +335,6 @@ class ScriptCreateRequest(BaseModel):
     raw_json: Dict[str, Any] = Field(..., description="스크립트 JSON")
 
 
-class ScriptApproveRequest(BaseModel):
-    """스크립트 승인 요청."""
-    pass  # No body needed
-
-
 class ScriptResponse(BaseModel):
     """스크립트 응답."""
     script_id: str = Field(..., description="스크립트 ID")
