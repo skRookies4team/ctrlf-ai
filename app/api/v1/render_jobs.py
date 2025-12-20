@@ -4,11 +4,11 @@
 영상 렌더링 잡 CRUD 및 실행 API 엔드포인트.
 
 엔드포인트:
-- POST /api/videos/{video_id}/render-jobs : 렌더 잡 생성 (idempotent)
-- GET /api/videos/{video_id}/render-jobs : 잡 목록 조회
-- GET /api/videos/{video_id}/render-jobs/{job_id} : 잡 상세 조회
-- POST /api/videos/{video_id}/render-jobs/{job_id}/cancel : 잡 취소
-- GET /api/videos/{video_id}/assets/published : 발행된 에셋 조회
+- POST /api/v2/videos/{video_id}/render-jobs : 렌더 잡 생성 (idempotent)
+- GET /api/v2/videos/{video_id}/render-jobs : 잡 목록 조회
+- GET /api/v2/videos/{video_id}/render-jobs/{job_id} : 잡 상세 조회
+- POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel : 잡 취소
+- GET /api/v2/videos/{video_id}/assets/published : 발행된 에셋 조회
 - POST /ai/video/job/{job_id}/start : 잡 시작 (Backend → AI)
 - POST /ai/video/job/{job_id}/retry : 잡 재시도 (Backend → AI)
 
@@ -39,8 +39,8 @@ from app.services.video_renderer_mvp import get_mvp_video_renderer
 
 logger = get_logger(__name__)
 
-# 렌더 잡 CRUD API
-router = APIRouter(prefix="/api", tags=["Render Jobs"])
+# 렌더 잡 CRUD API (V2)
+router = APIRouter(prefix="/api/v2", tags=["Render Jobs"])
 
 # Backend → AI 호출용 라우터 (영상 생성 시작/재시도)
 ai_router = APIRouter(prefix="/video/job", tags=["Video Job (Backend → AI)"])
