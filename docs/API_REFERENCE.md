@@ -24,13 +24,6 @@
 | FAQ | POST | `/ai/faq/generate` | ✅ Active |
 | FAQ | POST | `/ai/faq/generate/batch` | ✅ Active |
 | Gap | POST | `/ai/gap/policy-edu/suggestions` | ✅ Active |
-| Video | POST | `/api/video/play/start` | ✅ Active |
-| Video | POST | `/api/video/progress` | ✅ Active |
-| Video | POST | `/api/video/complete` | ✅ Active |
-| Video | GET | `/api/video/status` | ✅ Active |
-| Video | GET | `/api/video/quiz/check` | ✅ Active |
-| Admin | POST | `/api/admin/education/reissue` | ✅ Active |
-| Admin | GET | `/api/admin/education/{id}` | ✅ Active |
 | Script | POST | `/api/scripts` | ✅ Active |
 | Script | GET | `/api/scripts/{id}` | ✅ Active |
 | Script | GET | `/api/scripts/{id}/editor` | ✅ Active |
@@ -42,9 +35,7 @@
 | Render V2 | GET | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
 | Render V2 | GET | `/api/v2/videos/{id}/render-jobs/{job_id}` | ✅ Active |
 | Render V2 | POST | `/api/v2/videos/{id}/render-jobs/{job_id}/cancel` | ✅ Active |
-| Publish | POST | `/api/videos/{id}/publish` | ✅ Active |
-| Publish | GET | `/api/videos/{id}/kb-status` | ✅ Active |
-| Publish | GET | `/api/v2/videos/{id}/assets/published` | ✅ Active |
+| Render V2 | GET | `/api/v2/videos/{id}/assets/published` | ✅ Active |
 | WebSocket | WS | `/ws/videos/{id}/render-progress` | ✅ Active |
 
 ### 1.2 제거된 API (레거시)
@@ -58,6 +49,15 @@
 | GET | `/api/render-jobs/{job_id}` | V1→V2 이전 완료 (2025-12-20) | `GET /api/v2/videos/{id}/render-jobs/{job_id}` |
 | POST | `/api/render-jobs/{job_id}/cancel` | V1→V2 이전 완료 (2025-12-20) | `POST /api/v2/.../cancel` |
 | GET | `/api/videos/{id}/asset` | V1→V2 이전 완료 (2025-12-20) | `GET /api/v2/videos/{id}/assets/published` |
+| POST | `/api/video/play/start` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| POST | `/api/video/progress` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| POST | `/api/video/complete` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| GET | `/api/video/status` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| GET | `/api/video/quiz/check` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| POST | `/api/admin/education/reissue` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| GET | `/api/admin/education/{id}` | 백엔드 책임 (2025-12-20) | Spring 백엔드로 이전 |
+| POST | `/api/videos/{id}/publish` | 백엔드 책임 (2025-12-20) | Spring 백엔드 + `/internal/rag/index` |
+| GET | `/api/videos/{id}/kb-status` | 백엔드 책임 (2025-12-20) | `/internal/jobs/{job_id}` |
 
 ---
 
@@ -227,161 +227,7 @@ Milvus 직접 문서 인덱싱
 
 ---
 
-### 2.3 영상 진행률 (Video Progress)
-
-#### POST /api/video/play/start
-
-**Request**
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "total_duration": 600,
-  "is_mandatory_edu": true,
-  "playback_rate": 1.0
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| user_id | string | ✅ | 사용자 ID |
-| training_id | string | ✅ | 교육/영상 ID |
-| total_duration | int | ✅ | 영상 총 길이 (초) |
-| is_mandatory_edu | bool | ❌ | 4대교육 여부 (default: false) |
-| playback_rate | float | ❌ | 재생 속도 0.5~2.0 (default: 1.0) |
-
-**Response 200**
-```json
-{
-  "session_id": "sess-abc123",
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "state": "IN_PROGRESS",
-  "seek_allowed": false,
-  "created_at": "2025-01-15T10:00:00Z",
-  "first_watch": true,
-  "max_playback_rate": 1.0
-}
-```
-
-**Response 404** (만료된 교육)
-```json
-{
-  "detail": {
-    "reason_code": "EDU_EXPIRED",
-    "message": "해당 교육은 만료되어 접근이 불가합니다."
-  }
-}
-```
-
-#### POST /api/video/progress
-
-**Request**
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "current_position": 180,
-  "watched_seconds": 180,
-  "playback_rate": 1.0
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| user_id | string | ✅ | 사용자 ID |
-| training_id | string | ✅ | 교육/영상 ID |
-| current_position | int | ✅ | 현재 재생 위치 (초) |
-| watched_seconds | int | ✅ | 실제 시청한 누적 초 |
-| playback_rate | float | ❌ | 현재 재생 속도 (default: 1.0) |
-
-**Response 200**
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "progress_percent": 30.0,
-  "watched_seconds": 180,
-  "last_position": 180,
-  "seek_allowed": false,
-  "state": "IN_PROGRESS",
-  "updated_at": "2025-01-15T10:03:00Z",
-  "accepted": true,
-  "rejection_reason": null
-}
-```
-
-**Response 200** (스킵 감지 - 거부)
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "accepted": false,
-  "rejection_reason": "PROGRESS_SURGE",
-  "message": "비정상적인 진행률 급증 감지"
-}
-```
-
-#### POST /api/video/complete
-
-**Request**
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "final_position": 600,
-  "total_watched_seconds": 600
-}
-```
-
-**Response 200**
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "completed": true,
-  "progress_percent": 100.0,
-  "quiz_unlocked": true,
-  "seek_allowed": true,
-  "completed_at": "2025-01-15T10:10:00Z"
-}
-```
-
-#### GET /api/video/status
-
-**Query**: `?user_id={id}&training_id={id}`
-
-**Response 200**
-```json
-{
-  "user_id": "EMP-12345",
-  "training_id": "EDU-2025-001",
-  "total_duration": 600,
-  "watched_seconds": 270,
-  "progress_percent": 45.0,
-  "last_position": 270,
-  "state": "IN_PROGRESS",
-  "seek_allowed": false,
-  "quiz_unlocked": false,
-  "is_mandatory_edu": true
-}
-```
-
-#### GET /api/video/quiz/check
-
-**Query**: `?user_id={id}&training_id={id}`
-
-**Response 200**
-```json
-{
-  "can_start": true,
-  "reason": "영상 시청을 완료했습니다."
-}
-```
-
----
-
-### 2.4 영상 생성 파이프라인 (Video Render)
+### 2.3 영상 생성 파이프라인 (Video Render)
 
 #### POST /api/scripts
 
