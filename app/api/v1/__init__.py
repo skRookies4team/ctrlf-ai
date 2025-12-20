@@ -13,7 +13,7 @@ Included routers:
     - internal_rag: Milvus 직접 인덱싱 endpoints (/internal/rag/*)
     - scripts: 스크립트 CRUD + 편집 endpoints (/api/scripts/*)
     - render_jobs: 렌더 잡 CRUD + 실행 endpoints (/api/videos/*/render-jobs/*)
-    - ws_render: WebSocket 렌더 진행률 endpoints (/ws/videos/*/render-progress)
+    - ws_render_progress: WebSocket 렌더 진행률 endpoints (/ws/videos/*/render-progress)
 """
 
 from app.api.v1 import (
@@ -26,7 +26,7 @@ from app.api.v1 import (
     quiz_generate,
     render_jobs,
     scripts,
-    ws_render,
+    ws_render_progress,
 )
 
 __all__ = [
@@ -39,5 +39,5 @@ __all__ = [
     "internal_rag",
     "scripts",
     "render_jobs",
-    "ws_render",
+    "ws_render_progress",
 ]
