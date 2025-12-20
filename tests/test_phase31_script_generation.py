@@ -464,33 +464,13 @@ class TestManualScriptAPI:
         assert data["status"] == "DRAFT"
         assert data["raw_json"] == valid_script_json
 
-    def test_manual_script_approve_still_works(self, client, valid_script_json):
-        """기존 POST /api/scripts/{script_id}/approve 경로 동작 확인."""
-        # Given: 스크립트 생성
-        create_response = client.post(
-            "/api/scripts",
-            json={
-                "video_id": "video-manual-002",
-                "raw_json": valid_script_json,
-            },
-        )
-        script_id = create_response.json()["script_id"]
-
-        # When: 스크립트 승인
-        approve_response = client.post(f"/api/scripts/{script_id}/approve")
-
-        # Then
-        assert approve_response.status_code == 200
-        assert approve_response.json()["status"] == "APPROVED"
-
-
 # =============================================================================
 # E2E Integration Test
 # =============================================================================
 
 
 class TestE2EScriptGenerationFlow:
-    """E2E 통합 테스트: generate → approve → render-job."""
+    """E2E 통합 테스트: generate → render-job."""
 
     @pytest.fixture
     def client(self):
@@ -499,8 +479,8 @@ class TestE2EScriptGenerationFlow:
         return TestClient(app)
 
     @pytest.mark.asyncio
-    async def test_full_flow_generate_approve_render(self, client, valid_script_json):
-        """전체 흐름: 생성 → 승인 → 렌더 잡 생성."""
+    async def test_full_flow_generate_render(self, client, valid_script_json):
+        """전체 흐름: 생성 → 렌더 잡 생성."""
         with patch(
             "app.services.video_script_generation_service.get_video_script_generation_service"
         ) as mock_get_service:
@@ -518,12 +498,7 @@ class TestE2EScriptGenerationFlow:
             script_id = gen_response.json()["script_id"]
             assert gen_response.json()["status"] == "DRAFT"
 
-            # Step 2: 스크립트 승인
-            approve_response = client.post(f"/api/scripts/{script_id}/approve")
-            assert approve_response.status_code == 200
-            assert approve_response.json()["status"] == "APPROVED"
-
-            # Step 3: 렌더 잡 생성
+            # Step 2: 렌더 잡 생성
             render_response = client.post(
                 "/api/videos/video-e2e/render-jobs",
                 json={"script_id": script_id},

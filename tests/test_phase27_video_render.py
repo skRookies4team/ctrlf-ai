@@ -118,39 +118,16 @@ class TestScriptValidation:
     """스크립트 검증 테스트."""
 
     @pytest.mark.asyncio
-    async def test_render_job_requires_approved_script(self, render_service, mock_renderer):
-        """APPROVED 스크립트만 렌더 잡 생성 가능."""
+    async def test_render_job_with_script(self, render_service, mock_renderer):
+        """스크립트로 렌더 잡 생성 성공."""
         render_service.set_renderer(mock_renderer)
 
-        # DRAFT 스크립트 생성
+        # 스크립트 생성
         script = render_service.create_script(
             video_id="video-001",
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        assert script.status == ScriptStatus.DRAFT
-
-        # DRAFT 스크립트로 렌더 잡 생성 시도 → ValueError
-        with pytest.raises(ValueError) as exc_info:
-            await render_service.create_render_job(
-                video_id="video-001",
-                script_id=script.script_id,
-                requested_by="reviewer-001",
-            )
-        assert "not approved" in str(exc_info.value).lower()
-
-    @pytest.mark.asyncio
-    async def test_render_job_with_approved_script(self, render_service, mock_renderer):
-        """APPROVED 스크립트로 렌더 잡 생성 성공."""
-        render_service.set_renderer(mock_renderer)
-
-        # 스크립트 생성 및 승인
-        script = render_service.create_script(
-            video_id="video-001",
-            raw_json={"text": "Test content"},
-            created_by="user-001",
-        )
-        render_service.approve_script(script.script_id, "reviewer-001")
 
         # 렌더 잡 생성 성공
         job = await render_service.create_render_job(
@@ -167,13 +144,12 @@ class TestScriptValidation:
         """스크립트 video_id 불일치 시 실패."""
         render_service.set_renderer(mock_renderer)
 
-        # video-001에 대한 스크립트 생성 및 승인
+        # video-001에 대한 스크립트 생성
         script = render_service.create_script(
             video_id="video-001",
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
 
         # video-002로 렌더 잡 생성 시도 → ValueError (video_id 불일치)
         with pytest.raises(ValueError) as exc_info:
@@ -198,13 +174,12 @@ class TestDuplicateJobCheck:
         """동일 video_id에 RUNNING 잡 있으면 409 (RuntimeError)."""
         render_service.set_renderer(mock_renderer)
 
-        # 스크립트 생성 및 승인
+        # 스크립트 생성
         script = render_service.create_script(
             video_id="video-001",
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
 
         # 첫 번째 잡 생성
         job1 = await render_service.create_render_job(
@@ -227,13 +202,12 @@ class TestDuplicateJobCheck:
         """완료된 잡이 있으면 새 잡 생성 가능."""
         render_service.set_renderer(mock_renderer)
 
-        # 스크립트 생성 및 승인
+        # 스크립트 생성
         script = render_service.create_script(
             video_id="video-001",
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
 
         # 첫 번째 잡 생성
         job1 = await render_service.create_render_job(
@@ -319,8 +293,7 @@ class TestJobStateTransitions:
             raw_json={"scenes": [{"caption": "Scene 1", "narration": "Narration 1"}]},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
-
+        
         # 잡 생성
         job = await render_service.create_render_job(
             video_id="video-001",
@@ -362,8 +335,7 @@ class TestJobStateTransitions:
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
-
+        
         # 잡 생성
         job = await render_service.create_render_job(
             video_id="video-001",
@@ -392,8 +364,7 @@ class TestJobStateTransitions:
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
-
+        
         # 잡 생성 및 완료 대기
         job = await render_service.create_render_job(
             video_id="video-001",
@@ -434,8 +405,7 @@ class TestCancelFunctionality:
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
-
+        
         # 잡 생성
         job = await render_service.create_render_job(
             video_id="video-001",
@@ -460,8 +430,7 @@ class TestCancelFunctionality:
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
-
+        
         # 잡 생성 및 완료 대기
         job = await render_service.create_render_job(
             video_id="video-001",
@@ -498,8 +467,7 @@ class TestAssetRetrieval:
             raw_json={"text": "Test content"},
             created_by="user-001",
         )
-        render_service.approve_script(script.script_id, "reviewer-001")
-
+        
         # 잡 생성 및 완료 대기
         job = await render_service.create_render_job(
             video_id="video-001",

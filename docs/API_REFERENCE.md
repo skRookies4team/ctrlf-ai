@@ -2,8 +2,8 @@
 
 > **목적**: 기업 내부 정보보호 AI 어시스턴트 (LLM + RAG 기반)
 > **Base URL**: `http://{AI_GATEWAY_HOST}:{PORT}`
-> **문서 버전**: 2025-12-19
-> **상태**: 리팩토링 완료 (레거시 제거, 연결성 검증 완료)
+> **문서 버전**: 2025-12-20 (V1 API 제거)
+> **상태**: 리팩토링 완료 (검증 완료, 백엔드 연동 준비)
 
 ---
 
@@ -22,6 +22,7 @@
 | RAG | GET | `/internal/jobs/{job_id}` | ✅ Active |
 | Quiz | POST | `/ai/quiz/generate` | ✅ Active |
 | FAQ | POST | `/ai/faq/generate` | ✅ Active |
+| FAQ | POST | `/ai/faq/generate/batch` | ✅ Active |
 | Gap | POST | `/ai/gap/policy-edu/suggestions` | ✅ Active |
 | Video | POST | `/api/video/play/start` | ✅ Active |
 | Video | POST | `/api/video/progress` | ✅ Active |
@@ -31,15 +32,16 @@
 | Admin | POST | `/api/admin/education/reissue` | ✅ Active |
 | Admin | GET | `/api/admin/education/{id}` | ✅ Active |
 | Script | POST | `/api/scripts` | ✅ Active |
-| Script | POST | `/api/scripts/{id}/approve` | ✅ Active |
 | Script | GET | `/api/scripts/{id}` | ✅ Active |
 | Script | GET | `/api/scripts/{id}/editor` | ✅ Active |
 | Script | PATCH | `/api/scripts/{id}/editor` | ✅ Active |
-| Render | POST | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
-| Render | GET | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
-| Render | GET | `/api/render-jobs/{job_id}` | ✅ Active |
+| Script | POST | `/api/videos/{id}/scripts/generate` | ✅ Active |
 | Render | POST | `/api/render-jobs/{job_id}/start` | ✅ Active |
 | Render | POST | `/api/render-jobs/{job_id}/retry` | ✅ Active |
+| Render V2 | POST | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
+| Render V2 | GET | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
+| Render V2 | GET | `/api/v2/videos/{id}/render-jobs/{job_id}` | ✅ Active |
+| Render V2 | POST | `/api/v2/videos/{id}/render-jobs/{job_id}/cancel` | ✅ Active |
 | Publish | POST | `/api/videos/{id}/publish` | ✅ Active |
 | Publish | GET | `/api/videos/{id}/kb-status` | ✅ Active |
 | Publish | GET | `/api/v2/videos/{id}/assets/published` | ✅ Active |
@@ -52,8 +54,10 @@
 | POST | `/search` | RAGFlow 레거시 | ChatService 내부 Milvus 직접 검색 |
 | POST | `/ingest` | RAGFlow 레거시 | `POST /internal/rag/index` |
 | POST | `/ai/rag/process` | RagflowClient 레거시 | `POST /internal/rag/index` |
-| POST | `/api/videos/{id}/render-jobs` | V1 비멱등성 | `POST /api/v2/videos/{id}/render-jobs` |
-| POST | `/api/render-jobs/{id}/cancel` | V1 경로 비표준 | `POST /api/v2/.../cancel` |
+| POST | `/api/videos/{id}/render-jobs` | V1→V2 이전 완료 (2025-12-20) | `POST /api/v2/videos/{id}/render-jobs` |
+| GET | `/api/render-jobs/{job_id}` | V1→V2 이전 완료 (2025-12-20) | `GET /api/v2/videos/{id}/render-jobs/{job_id}` |
+| POST | `/api/render-jobs/{job_id}/cancel` | V1→V2 이전 완료 (2025-12-20) | `POST /api/v2/.../cancel` |
+| GET | `/api/videos/{id}/asset` | V1→V2 이전 완료 (2025-12-20) | `GET /api/v2/videos/{id}/assets/published` |
 
 ---
 
@@ -102,7 +106,8 @@
       "score": 0.92,
       "snippet": "제15조(연차휴가)...",
       "article_label": "제15조",
-      "article_path": "제4장 휴가 > 제15조"
+      "article_path": "제4장 휴가 > 제15조",
+      "source_type": "POLICY"
     }
   ],
   "meta": {
@@ -111,7 +116,15 @@
     "route": "RAG_INTERNAL",
     "intent": "POLICY_QA",
     "domain": "POLICY",
-    "rag_gap_candidate": false
+    "rag_used": true,
+    "rag_source_count": 3,
+    "rag_gap_candidate": false,
+    "masked": false,
+    "has_pii_input": false,
+    "has_pii_output": false,
+    "latency_ms": 1500,
+    "rag_latency_ms": 200,
+    "llm_latency_ms": 1200
   }
 }
 ```
@@ -189,17 +202,28 @@ Milvus 직접 문서 인덱싱
   "jobId": "job-uuid-001",
   "status": "completed",
   "documentId": "DOC-2025-00123",
+  "versionNo": 3,
+  "progress": "upserting",
   "chunksProcessed": 45,
-  "completedAt": "2025-01-15T10:31:23Z"
+  "createdAt": "2025-01-15T10:30:00Z",
+  "updatedAt": "2025-01-15T10:31:23Z"
 }
 ```
 
 | Status | Description |
 |--------|-------------|
 | `queued` | 대기 중 |
-| `processing` | 처리 중 |
+| `running` | 처리 중 |
 | `completed` | 완료 |
 | `failed` | 실패 |
+
+| Progress | Description |
+|----------|-------------|
+| `downloading` | 파일 다운로드 중 |
+| `extracting` | 텍스트 추출 중 |
+| `chunking` | 청킹 중 |
+| `embedding` | 임베딩 생성 중 |
+| `upserting` | Milvus 저장 중 |
 
 ---
 
@@ -210,26 +234,43 @@ Milvus 직접 문서 인덱싱
 **Request**
 ```json
 {
-  "educationId": "EDU-2025-001",
-  "userId": "EMP-12345",
-  "videoDurationSec": 600
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
+  "total_duration": 600,
+  "is_mandatory_edu": true,
+  "playback_rate": 1.0
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| user_id | string | ✅ | 사용자 ID |
+| training_id | string | ✅ | 교육/영상 ID |
+| total_duration | int | ✅ | 영상 총 길이 (초) |
+| is_mandatory_edu | bool | ❌ | 4대교육 여부 (default: false) |
+| playback_rate | float | ❌ | 재생 속도 0.5~2.0 (default: 1.0) |
 
 **Response 200**
 ```json
 {
-  "sessionToken": "tok-abc123",
-  "resumePositionSec": 120,
-  "status": "IN_PROGRESS"
+  "session_id": "sess-abc123",
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
+  "state": "IN_PROGRESS",
+  "seek_allowed": false,
+  "created_at": "2025-01-15T10:00:00Z",
+  "first_watch": true,
+  "max_playback_rate": 1.0
 }
 ```
 
-**Response 403** (만료된 교육)
+**Response 404** (만료된 교육)
 ```json
 {
-  "detail": "교육 기한이 만료되었습니다.",
-  "error_code": "EDUCATION_EXPIRED"
+  "detail": {
+    "reason_code": "EDU_EXPIRED",
+    "message": "해당 교육은 만료되어 접근이 불가합니다."
+  }
 }
 ```
 
@@ -238,27 +279,46 @@ Milvus 직접 문서 인덱싱
 **Request**
 ```json
 {
-  "sessionToken": "tok-abc123",
-  "currentPositionSec": 180,
-  "clientTimestamp": "2025-01-15T10:35:00Z"
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
+  "current_position": 180,
+  "watched_seconds": 180,
+  "playback_rate": 1.0
 }
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| user_id | string | ✅ | 사용자 ID |
+| training_id | string | ✅ | 교육/영상 ID |
+| current_position | int | ✅ | 현재 재생 위치 (초) |
+| watched_seconds | int | ✅ | 실제 시청한 누적 초 |
+| playback_rate | float | ❌ | 현재 재생 속도 (default: 1.0) |
 
 **Response 200**
 ```json
 {
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
+  "progress_percent": 30.0,
+  "watched_seconds": 180,
+  "last_position": 180,
+  "seek_allowed": false,
+  "state": "IN_PROGRESS",
+  "updated_at": "2025-01-15T10:03:00Z",
   "accepted": true,
-  "serverPositionSec": 180,
-  "progressPercent": 30.0
+  "rejection_reason": null
 }
 ```
 
-**Response 400** (스킵 감지)
+**Response 200** (스킵 감지 - 거부)
 ```json
 {
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
   "accepted": false,
-  "reason": "SKIP_DETECTED",
-  "serverPositionSec": 120
+  "rejection_reason": "PROGRESS_SURGE",
+  "message": "비정상적인 진행률 급증 감지"
 }
 ```
 
@@ -267,43 +327,55 @@ Milvus 직접 문서 인덱싱
 **Request**
 ```json
 {
-  "sessionToken": "tok-abc123"
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
+  "final_position": 600,
+  "total_watched_seconds": 600
 }
 ```
 
 **Response 200**
 ```json
 {
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
   "completed": true,
-  "finalProgressPercent": 100.0,
-  "canStartQuiz": true
+  "progress_percent": 100.0,
+  "quiz_unlocked": true,
+  "seek_allowed": true,
+  "completed_at": "2025-01-15T10:10:00Z"
 }
 ```
 
 #### GET /api/video/status
 
-**Query**: `?educationId={id}&userId={id}`
+**Query**: `?user_id={id}&training_id={id}`
 
 **Response 200**
 ```json
 {
-  "educationId": "EDU-2025-001",
-  "userId": "EMP-12345",
-  "status": "IN_PROGRESS",
-  "progressPercent": 45.0,
-  "lastPositionSec": 270
+  "user_id": "EMP-12345",
+  "training_id": "EDU-2025-001",
+  "total_duration": 600,
+  "watched_seconds": 270,
+  "progress_percent": 45.0,
+  "last_position": 270,
+  "state": "IN_PROGRESS",
+  "seek_allowed": false,
+  "quiz_unlocked": false,
+  "is_mandatory_edu": true
 }
 ```
 
 #### GET /api/video/quiz/check
 
-**Query**: `?educationId={id}&userId={id}`
+**Query**: `?user_id={id}&training_id={id}`
 
 **Response 200**
 ```json
 {
-  "canStartQuiz": true,
-  "reason": null
+  "can_start": true,
+  "reason": "영상 시청을 완료했습니다."
 }
 ```
 
@@ -335,26 +407,6 @@ Milvus 직접 문서 인덱싱
 }
 ```
 
-#### POST /api/scripts/{script_id}/approve
-
-스크립트 승인
-
-**Request**
-```json
-{
-  "approvedBy": "ADMIN-001"
-}
-```
-
-**Response 200**
-```json
-{
-  "scriptId": "SCR-2025-001",
-  "status": "APPROVED",
-  "approvedAt": "2025-01-15T11:00:00Z"
-}
-```
-
 #### POST /api/v2/videos/{video_id}/render-jobs
 
 렌더 잡 생성 (Idempotent)
@@ -376,7 +428,7 @@ Milvus 직접 문서 인덱싱
 }
 ```
 
-#### GET /api/render-jobs/{job_id}
+#### GET /api/v2/videos/{video_id}/render-jobs/{job_id}
 
 렌더 잡 상태 조회
 
@@ -384,19 +436,50 @@ Milvus 직접 문서 인덱싱
 ```json
 {
   "jobId": "RJ-2025-001",
+  "videoId": "VID-001",
+  "scriptId": "SCR-001",
   "status": "RENDERING",
   "progress": 65,
-  "currentStep": "audio_synthesis"
+  "step": "GENERATE_TTS",
+  "message": "음성 합성 중..."
 }
 ```
 
 | Status | Description |
 |--------|-------------|
-| `QUEUED` | 대기 중 |
-| `RENDERING` | 렌더링 중 |
-| `COMPLETED` | 완료 |
+| `PENDING` | 대기 중 |
+| `RUNNING` | 렌더링 중 |
+| `SUCCEEDED` | 완료 |
 | `FAILED` | 실패 |
 | `CANCELLED` | 취소됨 |
+
+#### POST /api/render-jobs/{job_id}/start
+
+렌더 잡 시작 (Phase 38)
+
+**Response 200**
+```json
+{
+  "jobId": "RJ-2025-001",
+  "status": "RUNNING",
+  "started": true,
+  "message": "렌더 파이프라인을 시작합니다."
+}
+```
+
+#### POST /api/render-jobs/{job_id}/retry
+
+렌더 잡 재시도 (Phase 38)
+
+**Response 200**
+```json
+{
+  "jobId": "RJ-2025-001",
+  "status": "RUNNING",
+  "started": true,
+  "message": "렌더 파이프라인을 재시도합니다."
+}
+```
 
 #### POST /api/videos/{video_id}/publish
 
@@ -446,7 +529,9 @@ Milvus 직접 문서 인덱싱
 | 403 | 권한 없음 |
 | 404 | 리소스 없음 |
 | 409 | 상태 충돌 |
+| 422 | 유효성 검증 실패 |
 | 500 | 서버 오류 |
+| 502 | 업스트림 오류 |
 | 503 | 서비스 불가 |
 
 ### 3.2 에러 응답 형식
@@ -469,7 +554,10 @@ Milvus 직접 문서 인덱싱
 | `LLM_ERROR` | LLM 서비스 오류 |
 | `RAG_ERROR` | RAG 검색 오류 |
 | `RENDER_ERROR` | 렌더링 오류 |
-| `SCRIPT_NOT_APPROVED` | 스크립트 미승인 |
+| `SCRIPT_NOT_FOUND` | 스크립트 없음 |
+| `JOB_NOT_FOUND` | 렌더 잡 없음 |
+| `CANNOT_CANCEL` | 취소 불가 상태 |
+| `PERMISSION_DENIED` | 권한 없음 |
 
 ---
 
@@ -484,21 +572,26 @@ Milvus 직접 문서 인덱싱
 | 만료 교육 접근 | 클라이언트 검증만 | 서버 403 반환 |
 | 필드명 불일치 | snake_case/camelCase 혼용 | Internal API는 camelCase 통일 |
 
-### 4.2 스키마 통일
+### 4.2 스키마 컨벤션
 
-**Internal RAG API**: camelCase
+**Internal RAG API**: camelCase (백엔드 Spring 호환)
 ```
-jobId, documentId, versionNo, fileUrl, requestedBy
+jobId, documentId, versionNo, fileUrl, requestedBy, chunksProcessed
 ```
 
-**Chat API**: snake_case
+**Chat API**: snake_case (Python 표준)
 ```
 session_id, user_id, user_role
 ```
 
-**Video API**: camelCase
+**Video Progress API**: snake_case (Python 표준)
 ```
-educationId, userId, sessionToken, videoDurationSec
+training_id, user_id, current_position, watched_seconds, progress_percent
+```
+
+**Video Render API**: snake_case (Python 표준)
+```
+video_id, script_id, job_id
 ```
 
 ---
@@ -575,6 +668,8 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 | `/internal/rag/index` | 120s |
 | `/internal/rag/delete` | 30s |
 | `/ai/quiz/generate` | 60s |
+| `/ai/faq/generate` | 60s |
+| `/ai/faq/generate/batch` | 300s |
 | `/api/video/*` | 5s |
 | `/api/scripts/*` | 60s |
 | `/api/*/render-jobs` | 30s |
@@ -593,8 +688,24 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 | `MILVUS_HOST` | Milvus 호스트 | `localhost` |
 | `MILVUS_PORT` | Milvus 포트 | `19530` |
 | `BACKEND_BASE_URL` | Spring 백엔드 URL | - |
+| `FAQ_BATCH_CONCURRENCY` | FAQ 배치 동시성 | `3` |
 
 ---
 
-**문서 버전**: 2025-12-19
-**리팩토링 상태**: 완료 (레거시 제거, 연결성 검증 완료)
+---
+
+## 8. 수정 이력
+
+| 날짜 | 변경 내용 |
+|------|-----------|
+| 2025-12-19 | 초기 문서 작성 |
+| 2025-12-20 | Video Progress API 필드명 수정 (camelCase → snake_case) |
+| 2025-12-20 | 누락 API 추가 (FAQ Batch, Script Editor 등 7개) |
+| 2025-12-20 | Deprecated API 섹션 추가 |
+| 2025-12-20 | Chat Response meta 필드 보강 (PII, latency 등) |
+| 2025-12-20 | **V1 Render API 제거** (V2로 완전 이전) |
+
+---
+
+**문서 버전**: 2025-12-20
+**리팩토링 상태**: 완료 (V1 제거, V2 운영 중)

@@ -560,26 +560,9 @@ class TestRegression:
         assert response.status_code == 200
         assert response.json()["status"] == "DRAFT"
 
-    def test_approve_api_still_works(self, client, sample_script):
-        """기존 스크립트 승인 API 동작 확인."""
-        # 스크립트 생성
-        create_resp = client.post(
-            "/api/scripts",
-            json={
-                "video_id": "video-regression-002",
-                "raw_json": sample_script,
-            },
-        )
-        script_id = create_resp.json()["script_id"]
-
-        # 승인
-        approve_resp = client.post(f"/api/scripts/{script_id}/approve")
-        assert approve_resp.status_code == 200
-        assert approve_resp.json()["status"] == "APPROVED"
-
     def test_render_job_api_still_works(self, client, sample_script):
         """기존 렌더 잡 생성 API 동작 확인."""
-        # 스크립트 생성 및 승인
+        # 스크립트 생성
         create_resp = client.post(
             "/api/scripts",
             json={
@@ -588,7 +571,6 @@ class TestRegression:
             },
         )
         script_id = create_resp.json()["script_id"]
-        client.post(f"/api/scripts/{script_id}/approve")
 
         # 렌더 잡 생성
         render_resp = client.post(

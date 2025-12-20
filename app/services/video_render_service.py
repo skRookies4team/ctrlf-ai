@@ -5,7 +5,7 @@ Phase 27: Video Render Service
 
 주요 기능:
 - 렌더 잡 생성/조회/취소
-- 스크립트 관리 (생성/승인)
+- 스크립트 관리 (생성/조회)
 - 에셋 관리
 - 렌더링 파이프라인 실행
 
@@ -154,9 +154,8 @@ class VideoRenderService:
     Usage:
         service = VideoRenderService()
 
-        # 스크립트 생성 및 승인
+        # 스크립트 생성
         script = service.create_script(video_id, raw_json, user_id)
-        script = service.approve_script(script_id, reviewer_id)
 
         # 렌더 잡 생성 및 실행
         job = await service.create_render_job(video_id, script_id, user_id)
@@ -215,25 +214,6 @@ class VideoRenderService:
         """스크립트 조회."""
         return self._script_store.get(script_id)
 
-    def approve_script(self, script_id: str, reviewer_id: str) -> Optional[VideoScript]:
-        """스크립트 승인.
-
-        Args:
-            script_id: 스크립트 ID
-            reviewer_id: 검토자 ID
-
-        Returns:
-            승인된 스크립트 (없으면 None)
-        """
-        script = self._script_store.get(script_id)
-        if not script:
-            return None
-
-        script.status = ScriptStatus.APPROVED
-        self._script_store.save(script)
-        logger.info(f"Script approved: script_id={script_id}, reviewer={reviewer_id}")
-        return script
-
     # =========================================================================
     # Render Job Management
     # =========================================================================
@@ -255,15 +235,13 @@ class VideoRenderService:
             생성된 렌더 잡
 
         Raises:
-            ValueError: 스크립트가 없거나 APPROVED가 아닌 경우
+            ValueError: 스크립트가 없거나 video_id가 불일치하는 경우
             RuntimeError: 이미 활성 잡이 있는 경우
         """
         # 스크립트 검증
         script = self._script_store.get(script_id)
         if not script:
             raise ValueError(f"Script not found: {script_id}")
-        if not script.is_approved():
-            raise ValueError(f"Script is not approved: {script_id} (status={script.status.value})")
         if script.video_id != video_id:
             raise ValueError(f"Script video_id mismatch: {script.video_id} != {video_id}")
 

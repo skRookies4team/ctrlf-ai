@@ -383,16 +383,6 @@ class TestKBIndexing:
         assert result == KBIndexStatus.SUCCEEDED
 
     @pytest.mark.asyncio
-    async def test_index_fails_for_non_approved_script(self, kb_service, draft_script):
-        """미승인 스크립트 인덱싱 실패."""
-        # When/Then
-        with pytest.raises(ValueError, match="not approved"):
-            await kb_service.index_published_video(
-                video_id="video-001",
-                script=draft_script,
-            )
-
-    @pytest.mark.asyncio
     async def test_index_returns_failed_for_empty_chunks(self, kb_service):
         """청크 없으면 FAILED 반환."""
         # Given: 내용 없는 스크립트
