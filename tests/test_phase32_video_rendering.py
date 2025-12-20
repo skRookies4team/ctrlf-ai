@@ -560,8 +560,8 @@ class TestRegression:
         assert response.status_code == 200
         assert response.json()["status"] == "DRAFT"
 
-    def test_render_job_api_still_works(self, client, sample_script):
-        """기존 렌더 잡 생성 API 동작 확인."""
+    def test_render_job_api_v2_works(self, client, sample_script):
+        """V2 렌더 잡 생성 API 동작 확인 (V1 제거됨)."""
         # 스크립트 생성
         create_resp = client.post(
             "/api/scripts",
@@ -572,10 +572,11 @@ class TestRegression:
         )
         script_id = create_resp.json()["script_id"]
 
-        # 렌더 잡 생성
+        # V2 렌더 잡 생성 (idempotent)
         render_resp = client.post(
-            "/api/videos/video-regression-003/render-jobs",
+            "/api/v2/videos/video-regression-003/render-jobs",
             json={"script_id": script_id},
         )
-        assert render_resp.status_code == 200
-        assert render_resp.json()["status"] == "PENDING"
+        # V2는 202 (created) 또는 200 (existing) 반환
+        assert render_resp.status_code in (200, 202)
+        assert render_resp.json()["status"] in ("PENDING", "RUNNING")

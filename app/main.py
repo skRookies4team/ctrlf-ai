@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import admin, chat, chat_stream, faq, gap_suggestions, health, internal_rag, quiz_generate, script_editor, video, video_render, video_render_phase33, ws_render_progress
+from app.api.v1 import chat, chat_stream, faq, gap_suggestions, health, internal_rag, quiz_generate, script_editor, video_render, video_render_phase33, ws_render_progress
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -150,14 +150,6 @@ app.include_router(gap_suggestions.router, prefix="/ai", tags=["Gap Suggestions"
 app.include_router(quiz_generate.router, prefix="/ai", tags=["Quiz Generate"])
 app.include_router(faq.router, prefix="/ai", tags=["FAQ"])
 
-# Phase 22: Video Progress API (교육영상 상태전이 서버 검증)
-# - POST /api/video/play/start: 영상 재생 시작
-# - POST /api/video/progress: 진행률 업데이트
-# - POST /api/video/complete: 완료 요청
-# - GET /api/video/status: 상태 조회
-# - GET /api/video/quiz/check: 퀴즈 시작 가능 여부 확인
-app.include_router(video.router, tags=["Video Progress"])
-
 # Chat Stream API (HTTP 청크 스트리밍)
 # - POST /ai/chat/stream: 스트리밍 채팅 응답 생성 (NDJSON)
 # 백엔드(Spring)가 NDJSON을 줄 단위로 읽어서 SSE로 변환
@@ -170,19 +162,15 @@ app.include_router(chat_stream.router, tags=["Chat Stream"])
 # RAGFlow를 우회하고 AI 서버가 직접 Milvus에 upsert/delete 수행
 app.include_router(internal_rag.router, tags=["Internal RAG"])
 
-# Phase 26: Admin API (교육 재발행)
-# - POST /api/admin/education/reissue: 교육 재발행 (복제 발행)
-# - GET /api/admin/education/{education_id}: 교육 메타데이터 조회
-app.include_router(admin.router, tags=["Admin"])
-
-# Phase 27: Video Render API (영상 생성 파이프라인)
+# Phase 27/31/38: Video Render API (영상 생성 파이프라인)
+# Script 관리:
 # - POST /api/scripts: 스크립트 생성
-# - POST /api/scripts/{script_id}/approve: 스크립트 승인
 # - GET /api/scripts/{script_id}: 스크립트 조회
-# - POST /api/videos/{video_id}/render-jobs: 렌더 잡 생성
-# - GET /api/render-jobs/{job_id}: 잡 상태 조회
-# - POST /api/render-jobs/{job_id}/cancel: 잡 취소
-# - GET /api/videos/{video_id}/asset: 비디오 에셋 조회
+# - POST /api/videos/{video_id}/scripts/generate: 스크립트 자동 생성 (Phase 31)
+# Render Job 실행 (Phase 38):
+# - POST /api/render-jobs/{job_id}/start: 잡 시작 (스냅샷 기반)
+# - POST /api/render-jobs/{job_id}/retry: 잡 재시도
+# NOTE: V1 렌더 잡 생성/조회/취소/에셋 API는 V2로 이전됨 (Phase 33)
 app.include_router(video_render.router, tags=["Video Render"])
 
 # Phase 32: WebSocket Render Progress (실시간 렌더 진행률)
