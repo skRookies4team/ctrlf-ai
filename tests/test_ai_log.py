@@ -618,7 +618,7 @@ class TestBackendClientCamelCase:
             )
 
             # Authorization 헤더 생성 확인
-            headers = backend_client._get_auth_headers()
+            headers = backend_client._get_bearer_headers()
             assert headers["Authorization"] == "Bearer test-secret-token"
 
             # 토큰 없는 경우
@@ -626,5 +626,5 @@ class TestBackendClientCamelCase:
                 base_url="http://test-backend:8080",
                 api_token=None,
             )
-            headers_no_token = backend_client_no_token._get_auth_headers()
-            assert headers_no_token == {}
+            headers_no_token = backend_client_no_token._get_bearer_headers()
+            assert "Authorization" not in headers_no_token
