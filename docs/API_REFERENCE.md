@@ -2,10 +2,25 @@
 
 > **목적**: 기업 내부 정보보호 AI 어시스턴트 (LLM + RAG 기반)
 > **Base URL**: `http://{AI_GATEWAY_HOST}:{PORT}`
-> **문서 버전**: 2025-12-20 (V1 API 제거)
+> **문서 버전**: 2025-12-20 v2.1 (백엔드 제공 API 섹션 추가)
 > **상태**: 리팩토링 완료 (검증 완료, 백엔드 연동 준비)
 
 ---
+
+## 문서 구조
+
+이 문서는 두 가지 관점에서 API를 정의합니다:
+
+| Part | 설명 | 구현 주체 |
+|------|------|----------|
+| **Part 1** | AI 서버가 제공하는 API | AI 서버 (Python/FastAPI) |
+| **Part 2** | 백엔드가 AI를 위해 제공해야 할 API | 백엔드 (Spring) |
+
+---
+
+# Part 1: AI 서버가 제공하는 API
+
+> 백엔드(Spring)가 AI 서버를 호출할 때 사용하는 API입니다.
 
 ## 1. API 인벤토리
 
@@ -29,8 +44,8 @@
 | Script | GET | `/api/scripts/{id}/editor` | ✅ Active |
 | Script | PATCH | `/api/scripts/{id}/editor` | ✅ Active |
 | Script | POST | `/api/videos/{id}/scripts/generate` | ✅ Active |
-| Render | POST | `/api/render-jobs/{job_id}/start` | ✅ Active |
-| Render | POST | `/api/render-jobs/{job_id}/retry` | ✅ Active |
+| Render | POST | `/ai/video/job/{job_id}/start` | ✅ Active |
+| Render | POST | `/ai/video/job/{job_id}/retry` | ✅ Active |
 | Render V2 | POST | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
 | Render V2 | GET | `/api/v2/videos/{id}/render-jobs` | ✅ Active |
 | Render V2 | GET | `/api/v2/videos/{id}/render-jobs/{job_id}` | ✅ Active |
@@ -509,7 +524,383 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 
 ---
 
-## 8. 수정 이력
+# Part 2: 백엔드가 AI를 위해 제공해야 할 API
+
+> AI 서버가 백엔드를 호출할 때 사용하는 API입니다.
+> **⚠️ 백엔드 개발팀이 구현해야 합니다.**
+
+## 8. 백엔드 API 인벤토리
+
+### 8.1 필수 API
+
+| Category | Method | Endpoint | 용도 | AI 클라이언트 |
+|----------|--------|----------|------|--------------|
+| AI 로그 | POST | `/api/ai-logs` | AI 대화 로그 저장 | BackendClient |
+| 렌더 스펙 | GET | `/internal/scripts/{scriptId}/render-spec` | 영상 렌더 스펙 조회 | BackendScriptClient |
+| 스크립트 콜백 | POST | `/video/script/complete` | 스크립트 생성 완료 알림 | BackendCallbackClient |
+| 헬스체크 | GET | `/actuator/health` | 백엔드 상태 확인 | BackendClient |
+
+### 8.2 선택 API (라우팅에 따라 필요)
+
+> `BACKEND_API` 또는 `MIXED_BACKEND_RAG` 라우트 사용 시 필요
+
+| Category | Method | Endpoint | 용도 | AI 클라이언트 |
+|----------|--------|----------|------|--------------|
+| 교육 현황 | GET | `/api/edu/status` | 직원 교육 현황 조회 | BackendDataClient |
+| 교육 통계 | GET | `/api/edu/stats` | 부서 교육 통계 조회 | BackendDataClient |
+| 사고 통계 | GET | `/api/incidents/overview` | 사고 현황 요약 | BackendDataClient |
+| 사고 상세 | GET | `/api/incidents/{id}` | 사고 상세 조회 | BackendDataClient |
+| 신고 안내 | GET | `/api/incidents/report-guide` | 신고 절차 안내 | BackendDataClient |
+
+---
+
+## 9. 백엔드 API 상세 명세
+
+### 9.1 AI 로그 저장
+
+#### POST /api/ai-logs
+
+AI 대화 로그를 저장합니다.
+
+**Request Headers**
+```
+Content-Type: application/json
+Authorization: Bearer {BACKEND_API_TOKEN}  (선택)
+```
+
+**Request Body** (⚠️ **camelCase** 사용)
+```json
+{
+  "log": {
+    "sessionId": "sess-uuid-001",
+    "userId": "EMP-12345",
+    "turnIndex": 1,
+    "channel": "WEB",
+    "userRole": "EMPLOYEE",
+    "department": "개발팀",
+    "domain": "POLICY",
+    "intent": "POLICY_QA",
+    "route": "RAG_INTERNAL",
+    "hasPiiInput": false,
+    "hasPiiOutput": false,
+    "modelName": "gpt-4o-mini",
+    "ragUsed": true,
+    "ragSourceCount": 3,
+    "latencyMs": 1500,
+    "ragLatencyMs": 200,
+    "llmLatencyMs": 1200,
+    "backendLatencyMs": 0,
+    "ragGapCandidate": false,
+    "errorCode": null,
+    "errorMessage": null,
+    "questionMasked": "[마스킹된 질문]",
+    "answerMasked": "[마스킹된 응답]"
+  }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| sessionId | string | ✅ | 채팅 세션 ID |
+| userId | string | ✅ | 사용자 ID |
+| turnIndex | int | ❌ | 대화 턴 인덱스 |
+| channel | string | ✅ | WEB / MOBILE |
+| userRole | string | ✅ | 사용자 역할 |
+| department | string | ❌ | 부서명 |
+| domain | string | ✅ | POLICY / EDU / INCIDENT |
+| intent | string | ✅ | 분류된 의도 |
+| route | string | ✅ | 라우팅 경로 |
+| hasPiiInput | bool | ✅ | 입력 PII 검출 여부 |
+| hasPiiOutput | bool | ✅ | 출력 PII 검출 여부 |
+| modelName | string | ❌ | LLM 모델명 |
+| ragUsed | bool | ✅ | RAG 사용 여부 |
+| ragSourceCount | int | ✅ | RAG 검색 결과 수 |
+| latencyMs | int | ✅ | 전체 응답 시간 (ms) |
+| ragGapCandidate | bool | ✅ | RAG Gap 후보 여부 |
+| errorCode | string | ❌ | 에러 코드 |
+| errorMessage | string | ❌ | 에러 메시지 |
+| questionMasked | string | ❌ | PII 마스킹된 질문 (로그용) |
+| answerMasked | string | ❌ | PII 마스킹된 응답 (로그용) |
+
+**Response 200/201**
+```json
+{
+  "success": true,
+  "logId": "LOG-2025-001",
+  "message": "Log saved successfully"
+}
+```
+
+---
+
+### 9.2 렌더 스펙 조회
+
+#### GET /internal/scripts/{scriptId}/render-spec
+
+영상 렌더링에 필요한 스펙을 조회합니다. Job 시작 시 호출되어 스냅샷으로 저장됩니다.
+
+**Request Headers**
+```
+X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
+```
+
+**Response 200**
+```json
+{
+  "scriptId": "SCR-2025-001",
+  "videoId": "VID-001",
+  "title": "개인정보보호 교육",
+  "totalDurationSec": 180.0,
+  "scenes": [
+    {
+      "sceneId": "SCENE-001",
+      "sceneOrder": 1,
+      "chapterTitle": "1. 개요",
+      "purpose": "hook",
+      "narration": "안녕하세요, 오늘은 개인정보보호에 대해 알아보겠습니다.",
+      "caption": "개인정보보호의 중요성",
+      "durationSec": 15.0,
+      "visualSpec": {
+        "backgroundColor": "#1a1a2e",
+        "textColor": "#ffffff"
+      }
+    }
+  ]
+}
+```
+
+**에러 응답**
+
+| Status | 상황 |
+|--------|------|
+| 401 | 토큰 없음/잘못됨 |
+| 403 | 권한 없음 |
+| 404 | 스크립트 없음 |
+
+---
+
+### 9.3 스크립트 생성 완료 콜백
+
+#### POST /video/script/complete
+
+스크립트 자동 생성 완료를 알립니다. (비동기 콜백)
+
+**Request Headers**
+```
+Content-Type: application/json
+X-Internal-Token: {BACKEND_INTERNAL_TOKEN}
+```
+
+**Request Body** (⚠️ **camelCase** 사용)
+```json
+{
+  "materialId": "VID-001",
+  "scriptId": "SCR-2025-001",
+  "script": "{\"chapters\": [...]}",
+  "version": 1
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| materialId | string | ✅ | 자료/영상 ID |
+| scriptId | string | ✅ | 생성된 스크립트 ID |
+| script | string | ✅ | 스크립트 JSON (문자열) |
+| version | int | ✅ | 스크립트 버전 |
+
+**Response 200**
+```json
+{
+  "success": true,
+  "message": "Script registered"
+}
+```
+
+---
+
+### 9.4 교육 현황 조회
+
+#### GET /api/edu/status
+
+직원 본인의 교육 수료 현황을 조회합니다.
+
+**Query Parameters**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| userId | string | ✅ | 사용자 ID |
+| year | int | ❌ | 조회 연도 |
+
+**Response 200**
+```json
+{
+  "userId": "EMP-12345",
+  "totalRequired": 4,
+  "completed": 3,
+  "pending": 1,
+  "courses": [
+    {
+      "name": "정보보호교육",
+      "status": "completed",
+      "completedAt": "2025-03-15"
+    },
+    {
+      "name": "산업안전보건",
+      "status": "pending",
+      "deadline": "2025-12-31"
+    }
+  ],
+  "nextDeadline": "2025-12-31"
+}
+```
+
+---
+
+### 9.5 교육 통계 조회
+
+#### GET /api/edu/stats
+
+관리자용 부서별 교육 통계를 조회합니다.
+
+**Query Parameters**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| departmentId | string | ❌ | 부서 ID (없으면 전체) |
+| year | int | ❌ | 조회 연도 |
+
+**Response 200**
+```json
+{
+  "departmentId": "DEPT-001",
+  "departmentName": "개발팀",
+  "totalEmployees": 50,
+  "completionRate": 85.0,
+  "byCourse": [
+    {"name": "정보보호교육", "completed": 45, "pending": 5},
+    {"name": "개인정보보호교육", "completed": 42, "pending": 8}
+  ],
+  "pendingCount": 15
+}
+```
+
+---
+
+### 9.6 사고 통계 조회
+
+#### GET /api/incidents/overview
+
+사고/위반 요약 통계를 조회합니다.
+
+**Query Parameters**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| period | string | ❌ | month / quarter / year |
+| status | string | ❌ | open / closed / all |
+| type | string | ❌ | security / privacy / all |
+
+**Response 200**
+```json
+{
+  "period": "2025-Q4",
+  "totalIncidents": 15,
+  "byStatus": {
+    "open": 3,
+    "inProgress": 5,
+    "closed": 7
+  },
+  "byType": {
+    "security": 8,
+    "privacy": 5,
+    "compliance": 2
+  },
+  "trend": {
+    "previousPeriod": 12,
+    "changeRate": 25.0
+  }
+}
+```
+
+---
+
+### 9.7 사고 상세 조회
+
+#### GET /api/incidents/{incident_id}
+
+특정 사건의 상세 정보를 조회합니다.
+
+**Response 200**
+```json
+{
+  "incidentId": "INC-2025-001",
+  "type": "security",
+  "status": "in_progress",
+  "reportedAt": "2025-10-15T09:30:00Z",
+  "summary": "외부 이메일로 내부 문서 전송 건",
+  "severity": "medium",
+  "assignedTo": "보안팀",
+  "relatedPolicies": ["정보보안정책 제3조", "개인정보처리방침 제5조"]
+}
+```
+
+> ⚠️ 실명/사번 등 민감 정보는 익명화되어 반환해야 함
+
+---
+
+### 9.8 신고 안내 조회
+
+#### GET /api/incidents/report-guide
+
+신고 절차 안내 정보를 조회합니다.
+
+**Query Parameters**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | ❌ | security / privacy / harassment |
+
+**Response 200**
+```json
+{
+  "guideType": "security",
+  "title": "보안사고 신고 안내",
+  "steps": [
+    "1. 사고 발생 일시 및 장소 확인",
+    "2. 관련 증거 자료 수집",
+    "3. 공식 신고 채널을 통해 접수",
+    "4. 신고 접수 번호 수령 후 보관"
+  ],
+  "officialChannels": [
+    {"name": "보안팀 직통", "contact": "security@company.com"},
+    {"name": "신고 포털", "url": "https://report.company.com"}
+  ],
+  "warnings": [
+    "개인정보(주민번호, 연락처 등)를 신고 내용에 포함하지 마세요."
+  ]
+}
+```
+
+---
+
+## 10. 스키마 컨벤션 정리
+
+### 10.1 AI 서버 제공 API (Backend → AI 호출)
+
+| Category | Convention |
+|----------|------------|
+| Internal RAG API | camelCase (Spring 호환) |
+| Chat API | snake_case (Python 표준) |
+| Video Render API | snake_case |
+
+### 10.2 백엔드 제공 API (AI → Backend 호출)
+
+| Category | Convention |
+|----------|------------|
+| AI 로그 (`/api/ai-logs`) | camelCase (**중요**: `log` 객체 내부) |
+| 렌더 스펙 (`/internal/scripts/*/render-spec`) | camelCase |
+| 스크립트 콜백 (`/video/script/complete`) | camelCase |
+| 데이터 조회 (`/api/edu/*`, `/api/incidents/*`) | camelCase |
+
+---
+
+## 11. 수정 이력
 
 | 날짜 | 변경 내용 |
 |------|-----------|
@@ -520,8 +911,9 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 | 2025-12-20 | Chat Response meta 필드 보강 (PII, latency 등) |
 | 2025-12-20 | **V1 Render API 제거** (V2로 완전 이전) |
 | 2025-12-20 | **백엔드 책임 API 제거**: Video Progress, Admin, Publish API → Spring 백엔드로 이전 |
+| 2025-12-20 | **Part 2: 백엔드 제공 API 섹션 신규 추가** (AI 로그, 렌더 스펙, 콜백, 데이터 조회) |
 
 ---
 
-**문서 버전**: 2025-12-20
-**리팩토링 상태**: 완료 (AI 핵심 기능만 유지, 백엔드 책임 API 분리)
+**문서 버전**: 2025-12-20 v2.1
+**리팩토링 상태**: 완료 (AI 핵심 기능만 유지, 백엔드 책임 API 분리, 백엔드 제공 API 명세 추가)
