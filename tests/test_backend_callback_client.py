@@ -19,7 +19,7 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.clients.backend_callback_client import (
+from app.clients.backend_client import (
     BackendCallbackClient,
     ScriptCompleteCallbackError,
     ScriptCompleteRequest,
@@ -123,7 +123,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             result = await client.notify_script_complete(
                 **sample_script_complete_request
@@ -150,7 +150,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             result = await client.notify_script_complete(
                 **sample_script_complete_request
@@ -171,7 +171,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             result = await client.notify_script_complete(
                 **sample_script_complete_request
@@ -189,7 +189,7 @@ class TestBackendCallbackClient:
         mock_settings.BACKEND_INTERNAL_TOKEN = None
         mock_settings.BACKEND_TIMEOUT_SEC = 30.0
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient()
             result = await client.notify_script_complete(
                 **sample_script_complete_request
@@ -212,7 +212,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(ScriptCompleteCallbackError) as exc_info:
@@ -234,7 +234,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(ScriptCompleteCallbackError) as exc_info:
@@ -256,7 +256,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(ScriptCompleteCallbackError) as exc_info:
@@ -278,7 +278,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(ScriptCompleteCallbackError) as exc_info:
@@ -295,7 +295,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(ScriptCompleteCallbackError) as exc_info:
@@ -313,7 +313,7 @@ class TestBackendCallbackClient:
             side_effect=httpx.RequestError("Connection refused")
         )
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(ScriptCompleteCallbackError) as exc_info:
@@ -328,7 +328,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             await client.notify_script_complete(**sample_script_complete_request)
 
@@ -345,7 +345,7 @@ class TestBackendCallbackClient:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             await client.notify_script_complete(**sample_script_complete_request)
 
@@ -366,7 +366,7 @@ class TestSingleton:
 
     def test_get_singleton_instance(self):
         """싱글톤 인스턴스 반환."""
-        with patch("app.clients.backend_callback_client.get_settings") as mock:
+        with patch("app.clients.backend_client.get_settings") as mock:
             mock.return_value.backend_base_url = "http://test:8080"
             mock.return_value.BACKEND_INTERNAL_TOKEN = "token"
             mock.return_value.BACKEND_TIMEOUT_SEC = 30.0
@@ -378,7 +378,7 @@ class TestSingleton:
 
     def test_clear_singleton(self):
         """싱글톤 초기화."""
-        with patch("app.clients.backend_callback_client.get_settings") as mock:
+        with patch("app.clients.backend_client.get_settings") as mock:
             mock.return_value.backend_base_url = "http://test:8080"
             mock.return_value.BACKEND_INTERNAL_TOKEN = "token"
             mock.return_value.BACKEND_TIMEOUT_SEC = 30.0
@@ -413,7 +413,7 @@ class TestJobCompleteCallback:
         self, mock_settings, sample_job_complete_request
     ):
         """200 응답 - 잡 완료 콜백 성공."""
-        from app.clients.backend_callback_client import JobCompleteCallbackError
+        from app.clients.backend_client import JobCompleteCallbackError
 
         mock_response = httpx.Response(
             status_code=200,
@@ -423,7 +423,7 @@ class TestJobCompleteCallback:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             result = await client.notify_job_complete(**sample_job_complete_request)
 
@@ -447,7 +447,7 @@ class TestJobCompleteCallback:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             result = await client.notify_job_complete(**sample_job_complete_request)
 
@@ -463,7 +463,7 @@ class TestJobCompleteCallback:
         mock_settings.BACKEND_INTERNAL_TOKEN = None
         mock_settings.BACKEND_TIMEOUT_SEC = 30.0
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient()
             result = await client.notify_job_complete(**sample_job_complete_request)
 
@@ -474,7 +474,7 @@ class TestJobCompleteCallback:
         self, mock_settings, sample_job_complete_request
     ):
         """404 Not Found 에러."""
-        from app.clients.backend_callback_client import JobCompleteCallbackError
+        from app.clients.backend_client import JobCompleteCallbackError
 
         mock_response = httpx.Response(
             status_code=404,
@@ -484,7 +484,7 @@ class TestJobCompleteCallback:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(JobCompleteCallbackError) as exc_info:
@@ -498,7 +498,7 @@ class TestJobCompleteCallback:
         self, mock_settings, sample_job_complete_request
     ):
         """500 Server Error."""
-        from app.clients.backend_callback_client import JobCompleteCallbackError
+        from app.clients.backend_client import JobCompleteCallbackError
 
         mock_response = httpx.Response(
             status_code=500,
@@ -508,7 +508,7 @@ class TestJobCompleteCallback:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(JobCompleteCallbackError) as exc_info:
@@ -522,12 +522,12 @@ class TestJobCompleteCallback:
         self, mock_settings, sample_job_complete_request
     ):
         """네트워크 타임아웃."""
-        from app.clients.backend_callback_client import JobCompleteCallbackError
+        from app.clients.backend_client import JobCompleteCallbackError
 
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
 
             with pytest.raises(JobCompleteCallbackError) as exc_info:
@@ -544,7 +544,7 @@ class TestJobCompleteCallback:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("app.clients.backend_callback_client.get_settings", return_value=mock_settings):
+        with patch("app.clients.backend_client.get_settings", return_value=mock_settings):
             client = BackendCallbackClient(client=mock_client)
             await client.notify_job_complete(**sample_job_complete_request)
 

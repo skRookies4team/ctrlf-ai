@@ -19,7 +19,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import chat, chat_stream, faq, gap_suggestions, health, internal_rag, quiz_generate, script_editor, video_render, video_render_phase33, ws_render_progress
+from app.api.v1 import (
+    chat,
+    chat_stream,
+    faq,
+    gap_suggestions,
+    health,
+    internal_rag,
+    quiz_generate,
+    render_jobs,
+    scripts,
+    ws_render,
+)
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -141,10 +152,9 @@ app.include_router(health.router, prefix="", tags=["Health"])
 
 # AI API routers
 # - POST /ai/chat/messages: AI chat response generation
-# - POST /ai/gap/policy-edu/suggestions: RAG Gap 보완 제안 (Phase 15)
-# - POST /ai/quiz/generate: 퀴즈 자동 생성 (Phase 16)
-# - POST /ai/faq/generate: FAQ 초안 생성 (Phase 18)
-# NOTE: /ai/rag/process, /search, /ingest 제거됨 (Phase 25 internal_rag로 대체)
+# - POST /ai/gap/policy-edu/suggestions: RAG Gap 보완 제안
+# - POST /ai/quiz/generate: 퀴즈 자동 생성
+# - POST /ai/faq/generate: FAQ 초안 생성
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(gap_suggestions.router, prefix="/ai", tags=["Gap Suggestions"])
 app.include_router(quiz_generate.router, prefix="/ai", tags=["Quiz Generate"])
@@ -155,39 +165,33 @@ app.include_router(faq.router, prefix="/ai", tags=["FAQ"])
 # 백엔드(Spring)가 NDJSON을 줄 단위로 읽어서 SSE로 변환
 app.include_router(chat_stream.router, tags=["Chat Stream"])
 
-# Phase 25: Internal RAG API (Direct Milvus Integration)
+# Internal RAG API (Direct Milvus Integration)
 # - POST /internal/rag/index: 문서 인덱싱 요청
 # - POST /internal/rag/delete: 문서 삭제 요청
 # - GET /internal/jobs/{job_id}: 작업 상태 조회
-# RAGFlow를 우회하고 AI 서버가 직접 Milvus에 upsert/delete 수행
 app.include_router(internal_rag.router, tags=["Internal RAG"])
 
-# Phase 27/31/38: Video Render API (영상 생성 파이프라인)
-# Script 관리:
+# Scripts API (스크립트 CRUD + 편집)
 # - POST /api/scripts: 스크립트 생성
 # - GET /api/scripts/{script_id}: 스크립트 조회
-# - POST /api/videos/{video_id}/scripts/generate: 스크립트 자동 생성 (Phase 31)
-# NOTE: V1 렌더 잡 생성/조회/취소/에셋 API는 V2로 이전됨 (Phase 33)
-app.include_router(video_render.router, tags=["Video Render"])
+# - POST /api/videos/{video_id}/scripts/generate: 스크립트 자동 생성
+# - GET /api/scripts/{script_id}/editor: 편집용 뷰 조회
+# - PATCH /api/scripts/{script_id}/editor: 씬 부분 수정
+app.include_router(scripts.router, tags=["Scripts"])
+
+# Render Jobs API (렌더 잡 CRUD)
+# - POST /api/videos/{video_id}/render-jobs: 렌더 잡 생성 (idempotent)
+# - GET /api/videos/{video_id}/render-jobs: 잡 목록 조회
+# - GET /api/videos/{video_id}/render-jobs/{job_id}: 잡 상세 조회
+# - POST /api/videos/{video_id}/render-jobs/{job_id}/cancel: 잡 취소
+# - GET /api/videos/{video_id}/assets/published: 발행된 에셋 조회
+app.include_router(render_jobs.router, tags=["Render Jobs"])
 
 # Backend → AI 호출 API (영상 생성 시작/재시도)
 # - POST /ai/video/job/{job_id}/start: 영상 생성 시작
 # - POST /ai/video/job/{job_id}/retry: 영상 생성 재시도
-app.include_router(video_render.ai_router, prefix="/ai", tags=["Video Job (Backend → AI)"])
+app.include_router(render_jobs.ai_router, prefix="/ai", tags=["Video Job (Backend → AI)"])
 
-# Phase 32: WebSocket Render Progress (실시간 렌더 진행률)
+# WebSocket Render Progress (실시간 렌더 진행률)
 # - WS /ws/videos/{video_id}/render-progress: 렌더 진행률 실시간 구독
-app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
-
-# Phase 33: Video Render API V2 (렌더 잡 영속화 + idempotent)
-# - POST /api/v2/videos/{video_id}/render-jobs: 렌더 잡 생성 (idempotent)
-# - GET /api/v2/videos/{video_id}/render-jobs: 잡 목록 조회
-# - GET /api/v2/videos/{video_id}/render-jobs/{job_id}: 잡 상세 조회
-# - POST /api/v2/videos/{video_id}/render-jobs/{job_id}/cancel: 잡 취소
-# - GET /api/v2/videos/{video_id}/assets/published: 발행된 에셋 조회
-app.include_router(video_render_phase33.router, tags=["Video Render V2"])
-
-# Phase 42: Script Editor API (스크립트 편집)
-# - GET /api/scripts/{script_id}/editor: 편집용 뷰 조회
-# - PATCH /api/scripts/{script_id}/editor: 씬 부분 수정
-app.include_router(script_editor.router, tags=["Script Editor"])
+app.include_router(ws_render.router, prefix="/ws", tags=["WebSocket"])

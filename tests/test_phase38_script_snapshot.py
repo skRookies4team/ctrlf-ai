@@ -14,7 +14,7 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.clients.backend_script_client import (
+from app.clients.backend_client import (
     BackendScriptClient,
     EmptyRenderSpecError,
     ScriptFetchError,
