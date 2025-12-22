@@ -1,20 +1,11 @@
 """
-pytest conftest.py - Shared Test Configuration (Root)
+pytest conftest.py - Unit Test Configuration
 
-This is the ROOT conftest for backward compatibility with existing tests.
-New tests should be placed in:
-- tests/unit/ : Unit tests (no external services)
-- tests/integration/ : Integration tests (real LLM/RAGFlow/Milvus)
-
-This file maintains the unit test behavior (env clearing) for tests
-still in the tests/ root directory.
+Unit tests run WITHOUT external services.
+All service URLs are cleared to prevent accidental external calls.
 """
 
 import os
-
-# =============================================================================
-# Unit Test Mode (default for tests in root directory)
-# =============================================================================
 
 # Set environment variables BEFORE importing any app modules
 # This ensures Settings class uses these values
