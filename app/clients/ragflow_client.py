@@ -812,3 +812,36 @@ class RagflowClient:
         return self._dataset_to_kb_id(source_type)
 
     # NOTE: is_valid_source_type, ingest_document 제거됨 (Phase 25 internal_rag로 대체)
+
+
+# =============================================================================
+# 싱글톤 인스턴스
+# =============================================================================
+
+_ragflow_client: Optional["RagflowClient"] = None
+
+
+def get_ragflow_client() -> "RagflowClient":
+    """
+    RagflowClient 싱글톤 인스턴스를 반환합니다.
+
+    첫 호출 시 인스턴스를 생성하고, 이후에는 동일 인스턴스를 반환합니다.
+    테스트에서는 clear_ragflow_client()로 초기화할 수 있습니다.
+
+    Returns:
+        RagflowClient: 싱글톤 클라이언트 인스턴스
+    """
+    global _ragflow_client
+    if _ragflow_client is None:
+        _ragflow_client = RagflowClient()
+    return _ragflow_client
+
+
+def clear_ragflow_client() -> None:
+    """
+    RagflowClient 싱글톤 인스턴스를 제거합니다 (테스트용).
+
+    테스트 격리를 위해 각 테스트 후 호출하여 싱글톤을 초기화합니다.
+    """
+    global _ragflow_client
+    _ragflow_client = None
