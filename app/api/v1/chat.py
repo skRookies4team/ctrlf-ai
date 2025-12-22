@@ -6,12 +6,17 @@ Called by ctrlf-back (Spring backend) to generate AI responses.
 
 Endpoints:
     - POST /ai/chat/messages: Generate AI response for user query
+
+Phase 42 (A안 확정):
+- RAGFlow 단일 검색 엔진으로 확정
+- RAGFlow 장애 시 503 반환 (fallback 없음)
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.models.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
+from app.services.chat.rag_handler import RagSearchUnavailableError
 
 router = APIRouter(tags=["Chat"])
 
@@ -65,6 +70,7 @@ def get_chat_service() -> ChatService:
             },
         },
         422: {"description": "Validation error in request body"},
+        503: {"description": "RAG 검색 서비스 사용 불가 (RAGFlow 장애)"},
     },
 )
 async def create_chat_message(
@@ -92,9 +98,9 @@ async def create_chat_message(
     - `sources`: List of reference documents used
     - `meta`: Response metadata (model, route, etc.)
 
-    **Current Status:**
-    Returns dummy response. RAG and LLM integration will be
-    implemented in the next phase.
+    **Phase 42 (A안 확정):**
+    - RAGFlow 장애 시 503 Service Unavailable 반환
+    - fallback 없음 (RAGFlow 단일 검색 엔진)
 
     Args:
         req: Chat request with user info and conversation history
@@ -102,5 +108,17 @@ async def create_chat_message(
 
     Returns:
         ChatResponse with answer, sources, and metadata
+
+    Raises:
+        HTTPException 503: RAGFlow 장애 시
     """
-    return await service.handle_chat(req)
+    try:
+        return await service.handle_chat(req)
+    except RagSearchUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "RAG_SERVICE_UNAVAILABLE",
+                "message": e.message,
+            },
+        ) from e
