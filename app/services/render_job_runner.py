@@ -11,9 +11,13 @@ Phase 34: Render Job Runner
 - 임시 파일 정리 (cleanup)
 
 정책:
-- 같은 video_id에 RUNNING/PENDING 잡이 있으면 기존 잡 반환
+- 같은 video_id에 PROCESSING/QUEUED 잡이 있으면 기존 잡 반환
 - APPROVED 스크립트만 렌더 가능
 - 성공 시 assets 저장, 실패 시 error 저장
+
+상태 머신 (DB 정렬):
+- QUEUED → PROCESSING → COMPLETED | FAILED
+- 취소: FAILED + fail_reason="CANCELED"
 
 Phase 34 변경사항:
 - StorageUploadError 예외 처리 (error_code=STORAGE_UPLOAD_FAILED)
@@ -172,7 +176,7 @@ class RenderJobRunner:
     ) -> JobCreationResult:
         """렌더 잡 생성 (idempotent).
 
-        - 기존 RUNNING/PENDING 잡이 있으면 그 잡을 반환
+        - 기존 PROCESSING/QUEUED 잡이 있으면 그 잡을 반환
         - 새 잡 생성 시 백그라운드에서 실행 시작
 
         Args:
@@ -213,7 +217,7 @@ class RenderJobRunner:
             job_id=job_id,
             video_id=video_id,
             script_id=script_id,
-            status="PENDING",
+            status="QUEUED",
             progress=0,
             message="대기 중...",
             created_by=created_by,
@@ -244,7 +248,7 @@ class RenderJobRunner:
         이후 파이프라인을 실행합니다.
 
         Idempotent:
-        - 이미 render_spec_json이 있고 RUNNING/SUCCEEDED/FAILED면 no-op
+        - 이미 render_spec_json이 있고 PROCESSING/COMPLETED/FAILED면 no-op
 
         Args:
             job_id: 잡 ID
@@ -264,7 +268,7 @@ class RenderJobRunner:
             )
 
         # 2. Idempotency 체크: 이미 시작된 경우
-        if job.has_render_spec() and job.status in ("RUNNING", "SUCCEEDED", "FAILED"):
+        if job.has_render_spec() and job.status in ("PROCESSING", "COMPLETED", "FAILED"):
             logger.info(
                 f"Job already started: job_id={job_id}, status={job.status}"
             )
@@ -380,8 +384,8 @@ class RenderJobRunner:
                 error_code="NO_RENDER_SPEC_FOR_RETRY",
             )
 
-        # 3. RUNNING 중이면 재시도 불가
-        if job.status == "RUNNING":
+        # 3. PROCESSING 중이면 재시도 불가
+        if job.status == "PROCESSING":
             return JobStartResult(
                 job=job,
                 started=False,
@@ -391,7 +395,7 @@ class RenderJobRunner:
         # 4. 상태 초기화 및 재시작
         self._repository.update_status(
             job_id=job_id,
-            status="PENDING",
+            status="QUEUED",
             step=None,
             progress=0,
             message="재시도 대기 중...",
@@ -465,6 +469,8 @@ class RenderJobRunner:
     async def cancel_job(self, job_id: str) -> Optional[RenderJobEntity]:
         """잡 취소.
 
+        취소된 잡은 FAILED 상태 + error_code="CANCELED"로 표현됩니다.
+
         Args:
             job_id: 잡 ID
 
@@ -475,11 +481,11 @@ class RenderJobRunner:
         if not job or not job.is_active():
             return None
 
-        # DB 상태 업데이트
-        self._repository.update_status(
+        # DB 상태 업데이트 (FAILED + error_code=CANCELED)
+        self._repository.update_error(
             job_id=job_id,
-            status="CANCELED",
-            message="사용자에 의해 취소됨",
+            error_code="CANCELED",
+            error_message="사용자에 의해 취소됨",
         )
 
         # 실행 중인 태스크 취소
@@ -492,7 +498,7 @@ class RenderJobRunner:
         await notify_render_progress(
             job_id=job_id,
             video_id=job.video_id,
-            status=RenderJobStatus.CANCELED,
+            status=RenderJobStatus.FAILED,
             progress=job.progress,
             message="취소됨",
         )
@@ -517,15 +523,15 @@ class RenderJobRunner:
             logger.error(f"Job not found for execution: {job_id}")
             return
 
-        # 취소된 경우 스킵
-        if job.status == "CANCELED":
+        # 취소된 경우 스킵 (FAILED + error_code=CANCELED)
+        if job.status == "FAILED" and job.error_code == "CANCELED":
             logger.info(f"Job already canceled, skipping: {job_id}")
             return
 
-        # RUNNING 상태로 전환
+        # PROCESSING 상태로 전환
         self._repository.update_status(
             job_id=job_id,
-            status="RUNNING",
+            status="PROCESSING",
             step=RenderStep.VALIDATE_SCRIPT.value,
             progress=0,
             message="실행 중...",
@@ -534,7 +540,7 @@ class RenderJobRunner:
         await notify_render_progress(
             job_id=job_id,
             video_id=job.video_id,
-            status=RenderJobStatus.RUNNING,
+            status=RenderJobStatus.PROCESSING,
             step=RenderStep.VALIDATE_SCRIPT,
             progress=0,
             message="렌더링 시작...",
@@ -557,9 +563,9 @@ class RenderJobRunner:
             ]
 
             for step in steps:
-                # 취소 확인
+                # 취소 확인 (FAILED + error_code=CANCELED)
                 job = self._repository.get(job_id)
-                if job and job.status == "CANCELED":
+                if job and job.status == "FAILED" and job.error_code == "CANCELED":
                     logger.info(f"Job canceled during pipeline: {job_id}")
                     return
 
@@ -569,7 +575,7 @@ class RenderJobRunner:
                 # DB 업데이트
                 self._repository.update_status(
                     job_id=job_id,
-                    status="RUNNING",
+                    status="PROCESSING",
                     step=step.value,
                     progress=progress,
                     message=message,
@@ -579,7 +585,7 @@ class RenderJobRunner:
                 await notify_render_progress(
                     job_id=job_id,
                     video_id=job.video_id,
-                    status=RenderJobStatus.RUNNING,
+                    status=RenderJobStatus.PROCESSING,
                     step=step,
                     progress=progress,
                     message=message,
@@ -605,7 +611,7 @@ class RenderJobRunner:
             # 성공 상태로 전환
             self._repository.update_status(
                 job_id=job_id,
-                status="SUCCEEDED",
+                status="COMPLETED",
                 step=RenderStep.FINALIZE.value,
                 progress=100,
                 message="렌더링 완료!",
@@ -615,13 +621,13 @@ class RenderJobRunner:
             await notify_render_progress(
                 job_id=job_id,
                 video_id=job.video_id,
-                status=RenderJobStatus.SUCCEEDED,
+                status=RenderJobStatus.COMPLETED,
                 step=RenderStep.FINALIZE,
                 progress=100,
                 message="렌더링 완료!",
             )
 
-            logger.info(f"Render job succeeded: job_id={job_id}")
+            logger.info(f"Render job completed: job_id={job_id}")
 
             # 백엔드로 영상 생성 완료 콜백 (비동기, 실패해도 렌더링 성공에 영향 없음)
             asyncio.create_task(
@@ -721,8 +727,8 @@ class RenderJobRunner:
             )
             return
 
-        # 취소된 경우 스킵
-        if job.status == "CANCELED":
+        # 취소된 경우 스킵 (FAILED + error_code=CANCELED)
+        if job.status == "FAILED" and job.error_code == "CANCELED":
             logger.info(f"Job already canceled, skipping: {job_id}")
             return
 
@@ -731,10 +737,10 @@ class RenderJobRunner:
         # raw_json 형식으로 변환 (기존 파이프라인 호환)
         raw_json = render_spec.to_raw_json()
 
-        # RUNNING 상태로 전환
+        # PROCESSING 상태로 전환
         self._repository.update_status(
             job_id=job_id,
-            status="RUNNING",
+            status="PROCESSING",
             step=RenderStep.VALIDATE_SCRIPT.value,
             progress=0,
             message="실행 중...",
@@ -743,7 +749,7 @@ class RenderJobRunner:
         await notify_render_progress(
             job_id=job_id,
             video_id=job.video_id,
-            status=RenderJobStatus.RUNNING,
+            status=RenderJobStatus.PROCESSING,
             step=RenderStep.VALIDATE_SCRIPT,
             progress=0,
             message="렌더링 시작...",
@@ -766,9 +772,9 @@ class RenderJobRunner:
             ]
 
             for step in steps:
-                # 취소 확인
+                # 취소 확인 (FAILED + error_code=CANCELED)
                 job = self._repository.get(job_id)
-                if job and job.status == "CANCELED":
+                if job and job.status == "FAILED" and job.error_code == "CANCELED":
                     logger.info(f"Job canceled during pipeline: {job_id}")
                     return
 
@@ -778,7 +784,7 @@ class RenderJobRunner:
                 # DB 업데이트
                 self._repository.update_status(
                     job_id=job_id,
-                    status="RUNNING",
+                    status="PROCESSING",
                     step=step.value,
                     progress=progress,
                     message=message,
@@ -788,7 +794,7 @@ class RenderJobRunner:
                 await notify_render_progress(
                     job_id=job_id,
                     video_id=job.video_id,
-                    status=RenderJobStatus.RUNNING,
+                    status=RenderJobStatus.PROCESSING,
                     step=step,
                     progress=progress,
                     message=message,
@@ -814,7 +820,7 @@ class RenderJobRunner:
             # 성공 상태로 전환
             self._repository.update_status(
                 job_id=job_id,
-                status="SUCCEEDED",
+                status="COMPLETED",
                 step=RenderStep.FINALIZE.value,
                 progress=100,
                 message="렌더링 완료!",
@@ -824,13 +830,13 @@ class RenderJobRunner:
             await notify_render_progress(
                 job_id=job_id,
                 video_id=job.video_id,
-                status=RenderJobStatus.SUCCEEDED,
+                status=RenderJobStatus.COMPLETED,
                 step=RenderStep.FINALIZE,
                 progress=100,
                 message="렌더링 완료!",
             )
 
-            logger.info(f"Render job succeeded: job_id={job_id}")
+            logger.info(f"Render job completed: job_id={job_id}")
 
             # 백엔드로 영상 생성 완료 콜백 (비동기, 실패해도 렌더링 성공에 영향 없음)
             asyncio.create_task(

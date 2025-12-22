@@ -94,7 +94,7 @@ class VideoRenderJobStore:
         """비디오 ID로 최신 성공 잡 조회."""
         succeeded_jobs = [
             j for j in self._jobs.values()
-            if j.video_id == video_id and j.status == RenderJobStatus.SUCCEEDED
+            if j.video_id == video_id and j.status == RenderJobStatus.COMPLETED
         ]
         if not succeeded_jobs:
             return None
@@ -258,7 +258,7 @@ class VideoRenderService:
             job_id=f"job-{uuid.uuid4().hex[:12]}",
             video_id=video_id,
             script_id=script_id,
-            status=RenderJobStatus.PENDING,
+            status=RenderJobStatus.QUEUED,
             requested_by=requested_by,
             created_at=datetime.utcnow(),
         )
@@ -279,7 +279,7 @@ class VideoRenderService:
         job = self._job_store.get(job_id)
         if not job:
             return None, None
-        asset = self._asset_store.get_by_job_id(job_id) if job.status == RenderJobStatus.SUCCEEDED else None
+        asset = self._asset_store.get_by_job_id(job_id) if job.status == RenderJobStatus.COMPLETED else None
         return job, asset
 
     async def cancel_job(self, job_id: str) -> Optional[VideoRenderJob]:
@@ -297,7 +297,7 @@ class VideoRenderService:
         if not job.can_cancel():
             return None
 
-        job.status = RenderJobStatus.CANCELED
+        job.status = RenderJobStatus.FAILED
         job.finished_at = datetime.utcnow()
         self._job_store.save(job)
         logger.info(f"Render job canceled: job_id={job_id}")
@@ -335,12 +335,12 @@ class VideoRenderService:
             return
 
         # 이미 취소된 경우 스킵
-        if job.status == RenderJobStatus.CANCELED:
+        if job.status == RenderJobStatus.FAILED:
             logger.info(f"Job already canceled, skipping: {job_id}")
             return
 
         # RUNNING 상태로 전환
-        job.status = RenderJobStatus.RUNNING
+        job.status = RenderJobStatus.PROCESSING
         job.started_at = datetime.utcnow()
         self._job_store.save(job)
 
@@ -368,7 +368,7 @@ class VideoRenderService:
             for i, step in enumerate(steps):
                 # 취소 확인
                 job = self._job_store.get(job_id)
-                if job and job.status == RenderJobStatus.CANCELED:
+                if job and job.status == RenderJobStatus.FAILED:
                     logger.info(f"Job canceled during pipeline: {job_id}, step={step.value}")
                     return
 
@@ -398,7 +398,7 @@ class VideoRenderService:
             self._asset_store.save(asset)
 
             # 성공 상태로 전환
-            job.status = RenderJobStatus.SUCCEEDED
+            job.status = RenderJobStatus.COMPLETED
             job.step = RenderStep.FINALIZE
             job.progress = 100
             job.finished_at = datetime.utcnow()

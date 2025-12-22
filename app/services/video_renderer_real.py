@@ -234,7 +234,7 @@ class RealVideoRenderer(VideoRenderer):
         await notify_render_progress(
             job_id=ctx.job_id,
             video_id=ctx.video_id,
-            status=RenderJobStatus.RUNNING,
+            status=RenderJobStatus.PROCESSING,
             step=step,
             progress=progress,
             message=message,
@@ -262,7 +262,7 @@ class RealVideoRenderer(VideoRenderer):
             await notify_render_progress(
                 job_id=ctx.job_id,
                 video_id=ctx.video_id,
-                status=RenderJobStatus.RUNNING,
+                status=RenderJobStatus.PROCESSING,
                 step=step,
                 progress=progress,
                 message=f"{message} 완료",
@@ -472,7 +472,7 @@ class RealVideoRenderer(VideoRenderer):
         await notify_render_progress(
             job_id=ctx.job_id,
             video_id=ctx.video_id,
-            status=RenderJobStatus.SUCCEEDED,
+            status=RenderJobStatus.COMPLETED,
             step=RenderStep.FINALIZE,
             progress=100,
             message="렌더링 완료!",
