@@ -30,6 +30,7 @@ from typing import Optional
 
 import httpx
 
+from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.intent import MaskingStage, PiiMaskResult, PiiTag
@@ -169,12 +170,14 @@ class PiiService:
             이 상황은 로그/모니터링으로 빠르게 감지할 수 있도록 합니다.
         """
         # HTTP 클라이언트 준비
+        # 외부에서 주입된 클라이언트가 있으면 사용, 없으면 공용 클라이언트 사용
         client = self._client
         should_close = False
 
         if client is None:
-            client = httpx.AsyncClient(timeout=PII_SERVICE_TIMEOUT)
-            should_close = True
+            # 공용 HTTP 클라이언트 사용 (연결 풀 재사용, 세션 누수 방지)
+            client = get_async_http_client()
+            should_close = False  # 공용 클라이언트는 close하지 않음
 
         try:
             # 요청 URL 및 payload 구성
