@@ -90,14 +90,14 @@ from app.models.router_types import (
     TIER0_ROUTING_POLICY,
 )
 from app.clients.backend_client import BackendDataClient
-from app.clients.llm_client import LLMClient
+from app.clients.llm_client import LLMClient, get_llm_client
 from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
-from app.clients.ragflow_client import RagflowClient
+from app.clients.ragflow_client import RagflowClient, get_ragflow_client
 from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
 from app.services.intent_service import IntentService
-from app.services.pii_service import PiiService
+from app.services.pii_service import PiiService, get_pii_service
 from app.services.router_orchestrator import (
     OrchestrationResult,
     RouterOrchestrator,
@@ -388,9 +388,10 @@ class ChatService:
                               Pass custom services for testing or dependency injection.
             answer_guard_service: AnswerGuardService instance. If None, creates singleton. (Phase 39)
         """
-        self._ragflow = ragflow_client or RagflowClient()
-        self._llm = llm_client or LLMClient()
-        self._pii = pii_service or PiiService()
+        # Phase 싱글톤 리팩토링: 클라이언트/서비스 인스턴스 재사용
+        self._ragflow = ragflow_client or get_ragflow_client()
+        self._llm = llm_client or get_llm_client()
+        self._pii = pii_service or get_pii_service()
         self._intent = intent_service or IntentService()
         self._ai_log = ai_log_service or AILogService(pii_service=self._pii)
         self._guardrail = guardrail_service or GuardrailService()
