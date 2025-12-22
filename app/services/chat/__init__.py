@@ -31,6 +31,7 @@ from app.services.chat.response_factory import (
     create_system_help_response,
     create_unknown_route_response,
 )
+from app.services.chat.rag_handler import RagHandler
 
 __all__: list[str] = [
     # route_mapper
@@ -49,4 +50,6 @@ __all__: list[str] = [
     "create_router_response",
     "create_system_help_response",
     "create_unknown_route_response",
+    # rag_handler
+    "RagHandler",
 ]
