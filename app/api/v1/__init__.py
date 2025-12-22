@@ -14,6 +14,7 @@ Included routers:
     - scripts: 스크립트 CRUD + 편집 endpoints (/api/scripts/*)
     - render_jobs: 렌더 잡 CRUD + 실행 endpoints (/api/videos/*/render-jobs/*)
     - ws_render_progress: WebSocket 렌더 진행률 endpoints (/ws/videos/*/render-progress)
+    - source_sets: SourceSet 오케스트레이션 endpoints (/internal/ai/source-sets/*)
 """
 
 from app.api.v1 import (
@@ -26,6 +27,7 @@ from app.api.v1 import (
     quiz_generate,
     render_jobs,
     scripts,
+    source_sets,
     ws_render_progress,
 )
 
@@ -40,4 +42,5 @@ __all__ = [
     "scripts",
     "render_jobs",
     "ws_render_progress",
+    "source_sets",
 ]

@@ -29,6 +29,7 @@ from app.api.v1 import (
     quiz_generate,
     render_jobs,
     scripts,
+    source_sets,
     ws_render_progress,
 )
 from app.clients.http_client import close_async_http_client
@@ -195,3 +196,8 @@ app.include_router(render_jobs.ai_router, prefix="/ai", tags=["Video Job (Backen
 # WebSocket Render Progress (실시간 렌더 진행률)
 # - WS /ws/videos/{video_id}/render-progress: 렌더 진행률 실시간 구독
 app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
+
+# SourceSet Orchestration API (Spring → AI)
+# - POST /internal/ai/source-sets/{sourceSetId}/start: 소스셋 처리 시작
+# - GET /internal/ai/source-sets/{sourceSetId}/status: 처리 상태 조회
+app.include_router(source_sets.router, tags=["SourceSet Orchestration"])
