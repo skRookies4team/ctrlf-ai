@@ -243,7 +243,7 @@ class TestRenderAssetsPersisted:
         # 마지막 update_status 호출 확인
         calls = mock_repository.update_status.call_args_list
         final_call = calls[-1]
-        assert final_call.kwargs.get("status") == "SUCCEEDED"
+        assert final_call.kwargs.get("status") == "COMPLETED"
 
 
 # =============================================================================

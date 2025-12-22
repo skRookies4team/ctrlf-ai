@@ -97,7 +97,7 @@ class TestRenderJobRepository:
             job_id="job-test-001",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
             progress=0,
             created_by="user-001",
         )
@@ -107,27 +107,27 @@ class TestRenderJobRepository:
         assert loaded is not None
         assert loaded.job_id == "job-test-001"
         assert loaded.video_id == "video-001"
-        assert loaded.status == "PENDING"
+        assert loaded.status == "QUEUED"
 
     def test_get_active_by_video_id(self, repository):
         """video_id로 활성 잡 조회."""
         from app.repositories.render_job_repository import RenderJobEntity
 
-        # RUNNING 잡 생성
+        # PROCESSING 잡 생성
         running_job = RenderJobEntity(
             job_id="job-running",
             video_id="video-001",
             script_id="script-001",
-            status="RUNNING",
+            status="PROCESSING",
         )
         repository.save(running_job)
 
-        # SUCCEEDED 잡 생성 (같은 video_id)
+        # COMPLETED 잡 생성 (같은 video_id)
         succeeded_job = RenderJobEntity(
             job_id="job-succeeded",
             video_id="video-001",
             script_id="script-001",
-            status="SUCCEEDED",
+            status="COMPLETED",
         )
         repository.save(succeeded_job)
 
@@ -146,7 +146,7 @@ class TestRenderJobRepository:
                 job_id=f"job-{i}",
                 video_id="video-001",
                 script_id="script-001",
-                status="SUCCEEDED" if i < 2 else "PENDING",
+                status="COMPLETED" if i < 2 else "QUEUED",
             )
             repository.save(job)
 
@@ -161,21 +161,21 @@ class TestRenderJobRepository:
             job_id="job-update",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
         )
         repository.save(job)
 
         # 상태 업데이트
         repository.update_status(
             job_id="job-update",
-            status="RUNNING",
+            status="PROCESSING",
             step="GENERATE_TTS",
             progress=25,
             message="TTS 생성 중...",
         )
 
         updated = repository.get("job-update")
-        assert updated.status == "RUNNING"
+        assert updated.status == "PROCESSING"
         assert updated.step == "GENERATE_TTS"
         assert updated.progress == 25
         assert updated.started_at is not None
@@ -188,7 +188,7 @@ class TestRenderJobRepository:
             job_id="job-assets",
             video_id="video-001",
             script_id="script-001",
-            status="SUCCEEDED",
+            status="COMPLETED",
         )
         repository.save(job)
 
@@ -210,7 +210,7 @@ class TestRenderJobRepository:
             job_id="job-error",
             video_id="video-001",
             script_id="script-001",
-            status="RUNNING",
+            status="PROCESSING",
         )
         repository.save(job)
 
@@ -238,7 +238,7 @@ class TestRenderJobRepository:
             job_id="job-persist",
             video_id="video-001",
             script_id="script-001",
-            status="SUCCEEDED",
+            status="COMPLETED",
         )
         repo1.save(job)
         repo1.close()
@@ -277,21 +277,21 @@ class TestRenderJobRunner:
         )
 
         assert result.created is True
-        assert result.job.status == "PENDING"
+        assert result.job.status == "QUEUED"
         assert result.job.video_id == mock_script.video_id
 
     @pytest.mark.asyncio
     async def test_create_job_idempotent(self, repository, mock_script, mock_renderer):
-        """기존 RUNNING 잡이 있으면 기존 잡 반환 (idempotency)."""
+        """기존 PROCESSING 잡이 있으면 기존 잡 반환 (idempotency)."""
         from app.repositories.render_job_repository import RenderJobEntity
         from app.services.render_job_runner import RenderJobRunner
 
-        # 기존 RUNNING 잡 생성
+        # 기존 PROCESSING 잡 생성
         existing_job = RenderJobEntity(
             job_id="job-existing",
             video_id=mock_script.video_id,
             script_id=mock_script.script_id,
-            status="RUNNING",
+            status="PROCESSING",
         )
         repository.save(existing_job)
 
@@ -315,12 +315,12 @@ class TestRenderJobRunner:
         from app.repositories.render_job_repository import RenderJobEntity
         from app.services.render_job_runner import RenderJobRunner
 
-        # SUCCEEDED 잡 생성 with assets
+        # COMPLETED 잡 생성 with assets
         job = RenderJobEntity(
             job_id="job-published",
             video_id="video-001",
             script_id="script-001",
-            status="SUCCEEDED",
+            status="COMPLETED",
             assets={
                 "video_url": "http://example.com/video.mp4",
                 "subtitle_url": "http://example.com/sub.srt",
@@ -358,12 +358,12 @@ class TestRenderJobRunner:
         from app.repositories.render_job_repository import RenderJobEntity
         from app.services.render_job_runner import RenderJobRunner
 
-        # PENDING 잡 생성
+        # QUEUED 잡 생성
         job = RenderJobEntity(
             job_id="job-to-cancel",
             video_id=mock_script.video_id,
             script_id=mock_script.script_id,
-            status="PENDING",
+            status="QUEUED",
         )
         repository.save(job)
 
@@ -374,7 +374,8 @@ class TestRenderJobRunner:
 
         canceled = await runner.cancel_job("job-to-cancel")
         assert canceled is not None
-        assert canceled.status == "CANCELED"
+        # Cancel now sets status to FAILED with error_code="CANCELED"
+        assert canceled.status == "FAILED"
 
 
 # =============================================================================
@@ -445,7 +446,7 @@ class TestRenderJobAPI:
                 job_id=f"job-list-{i}",
                 video_id=mock_script.video_id,
                 script_id=mock_script.script_id,
-                status="SUCCEEDED",
+                status="COMPLETED",
             )
             repo.save(job)
 
@@ -470,7 +471,7 @@ class TestRenderJobAPI:
             job_id="job-detail-test",
             video_id=mock_script.video_id,
             script_id=mock_script.script_id,
-            status="SUCCEEDED",
+            status="COMPLETED",
             progress=100,
             message="완료",
         )
@@ -483,7 +484,7 @@ class TestRenderJobAPI:
         assert response.status_code == 200
         data = response.json()
         assert data["job_id"] == "job-detail-test"
-        assert data["status"] == "SUCCEEDED"
+        assert data["status"] == "COMPLETED"
         assert data["progress"] == 100
 
     def test_get_published_assets(self, test_client, mock_script, temp_db_path):
@@ -498,7 +499,7 @@ class TestRenderJobAPI:
             job_id="job-published-test",
             video_id=mock_script.video_id,
             script_id=mock_script.script_id,
-            status="SUCCEEDED",
+            status="COMPLETED",
             assets={
                 "video_url": "http://example.com/video.mp4",
                 "subtitle_url": "http://example.com/sub.srt",
@@ -563,7 +564,7 @@ class TestWebSocketJobFilter:
         event1 = RenderProgressEvent(
             job_id="job-001",
             video_id="video-001",
-            status="RUNNING",
+            status="PROCESSING",
             progress=50,
             message="진행 중",
             timestamp=datetime.utcnow().isoformat(),
@@ -581,7 +582,7 @@ class TestWebSocketJobFilter:
         event2 = RenderProgressEvent(
             job_id="job-002",
             video_id="video-001",
-            status="RUNNING",
+            status="PROCESSING",
             progress=30,
             message="진행 중",
             timestamp=datetime.utcnow().isoformat(),
@@ -600,7 +601,7 @@ class TestWebSocketJobFilter:
         event = RenderProgressEvent.create(
             job_id="job-test",
             video_id="video-test",
-            status=RenderJobStatus.RUNNING,
+            status=RenderJobStatus.PROCESSING,
             step=RenderStep.GENERATE_TTS,
             progress=25,
             message="TTS 생성 중",
@@ -645,7 +646,7 @@ class TestIntegration:
         # 3. 잡 상태 확인
         job = runner.get_job(job_id)
         # 아직 실행 중이거나 완료됨
-        assert job.status in ("RUNNING", "SUCCEEDED", "PENDING")
+        assert job.status in ("PROCESSING", "COMPLETED", "QUEUED")
 
     def test_regression_existing_api(self, temp_db_path, mock_script):
         """기존 API 회귀 테스트."""

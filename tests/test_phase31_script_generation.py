@@ -363,11 +363,10 @@ class TestScriptGenerateAPI:
         from app.main import app
         return TestClient(app)
 
-    @pytest.mark.asyncio
-    async def test_generate_endpoint_success(self, client, valid_script_json):
+    def test_generate_endpoint_success(self, client, valid_script_json):
         """POST /api/videos/{video_id}/scripts/generate 성공."""
         with patch(
-            "app.services.video_script_generation_service.get_video_script_generation_service"
+            "app.api.v1.scripts.get_video_script_generation_service"
         ) as mock_get_service:
             # Mock 서비스 설정
             mock_service = MagicMock()
@@ -394,7 +393,7 @@ class TestScriptGenerateAPI:
     def test_generate_endpoint_expired_education(self, client):
         """EXPIRED 교육은 404 차단."""
         with patch(
-            "app.api.v1.video_render.get_education_catalog_service"
+            "app.api.v1.scripts.get_education_catalog_service"
         ) as mock_catalog:
             mock_service = MagicMock()
             mock_service.is_expired.return_value = True
@@ -413,7 +412,7 @@ class TestScriptGenerateAPI:
     def test_generate_endpoint_generation_failure(self, client):
         """스크립트 생성 실패 시 422 반환."""
         with patch(
-            "app.api.v1.video_render.get_video_script_generation_service"
+            "app.api.v1.scripts.get_video_script_generation_service"
         ) as mock_get_service:
             mock_service = MagicMock()
             mock_service.generate_script = AsyncMock(
@@ -478,11 +477,10 @@ class TestE2EScriptGenerationFlow:
         from app.main import app
         return TestClient(app)
 
-    @pytest.mark.asyncio
-    async def test_full_flow_generate_render(self, client, valid_script_json):
+    def test_full_flow_generate_render(self, client, valid_script_json):
         """전체 흐름: 생성 → 렌더 잡 생성."""
         with patch(
-            "app.services.video_script_generation_service.get_video_script_generation_service"
+            "app.api.v1.scripts.get_video_script_generation_service"
         ) as mock_get_service:
             # Mock 서비스 설정
             mock_service = MagicMock()
@@ -498,13 +496,15 @@ class TestE2EScriptGenerationFlow:
             script_id = gen_response.json()["script_id"]
             assert gen_response.json()["status"] == "DRAFT"
 
-            # Step 2: 렌더 잡 생성
+            # Step 2: 렌더 잡 생성 (V2 API)
             render_response = client.post(
-                "/api/videos/video-e2e/render-jobs",
+                "/api/v2/videos/video-e2e/render-jobs",
                 json={"script_id": script_id},
             )
-            assert render_response.status_code == 200
-            assert render_response.json()["status"] == "PENDING"
+            # 202 (created) 또는 200 (existing)
+            assert render_response.status_code in (200, 202)
+            # 타이밍에 따라 QUEUED 또는 PROCESSING (백그라운드 태스크 시작 후)
+            assert render_response.json()["status"] in ("QUEUED", "PROCESSING")
 
 
 # =============================================================================

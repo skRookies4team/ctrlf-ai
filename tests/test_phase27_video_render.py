@@ -135,7 +135,7 @@ class TestScriptValidation:
             script_id=script.script_id,
             requested_by="reviewer-001",
         )
-        assert job.status == RenderJobStatus.PENDING
+        assert job.status == RenderJobStatus.QUEUED
         assert job.video_id == "video-001"
         assert job.script_id == script.script_id
 
@@ -221,7 +221,7 @@ class TestDuplicateJobCheck:
 
         # 잡 상태 확인 (SUCCEEDED)
         job1_updated = render_service.get_job(job1.job_id)
-        assert job1_updated.status == RenderJobStatus.SUCCEEDED
+        assert job1_updated.status == RenderJobStatus.COMPLETED
 
         # 두 번째 잡 생성 가능
         job2 = await render_service.create_render_job(
@@ -300,14 +300,14 @@ class TestJobStateTransitions:
             script_id=script.script_id,
             requested_by="reviewer-001",
         )
-        assert job.status == RenderJobStatus.PENDING
+        assert job.status == RenderJobStatus.QUEUED
 
         # 파이프라인 완료 대기
         await asyncio.sleep(0.5)
 
         # 최종 상태 확인
         job_updated = render_service.get_job(job.job_id)
-        assert job_updated.status == RenderJobStatus.SUCCEEDED
+        assert job_updated.status == RenderJobStatus.COMPLETED
         assert job_updated.progress == 100
         assert job_updated.finished_at is not None
 
@@ -413,10 +413,10 @@ class TestCancelFunctionality:
             requested_by="reviewer-001",
         )
 
-        # 즉시 취소
+        # 즉시 취소 - 취소된 잡은 FAILED 상태 + error_code="CANCELED"
         canceled_job = await render_service.cancel_job(job.job_id)
         assert canceled_job is not None
-        assert canceled_job.status == RenderJobStatus.CANCELED
+        assert canceled_job.status == RenderJobStatus.FAILED
         assert canceled_job.finished_at is not None
 
     @pytest.mark.asyncio
@@ -445,7 +445,7 @@ class TestCancelFunctionality:
 
         # 상태 변경 없음
         job_updated = render_service.get_job(job.job_id)
-        assert job_updated.status == RenderJobStatus.SUCCEEDED
+        assert job_updated.status == RenderJobStatus.COMPLETED
 
 
 # =============================================================================
@@ -505,11 +505,11 @@ class TestVideoRenderModels:
 
     def test_render_job_status_enum(self):
         """RenderJobStatus enum 값 확인."""
-        assert RenderJobStatus.PENDING.value == "PENDING"
-        assert RenderJobStatus.RUNNING.value == "RUNNING"
-        assert RenderJobStatus.SUCCEEDED.value == "SUCCEEDED"
+        # Canonical status values (Phase 7)
+        assert RenderJobStatus.QUEUED.value == "QUEUED"
+        assert RenderJobStatus.PROCESSING.value == "PROCESSING"
+        assert RenderJobStatus.COMPLETED.value == "COMPLETED"
         assert RenderJobStatus.FAILED.value == "FAILED"
-        assert RenderJobStatus.CANCELED.value == "CANCELED"
 
     def test_render_step_enum(self):
         """RenderStep enum 값 확인."""
@@ -544,34 +544,28 @@ class TestVideoRenderModels:
             job_id="job-001",
             video_id="video-001",
             script_id="script-001",
-            status=RenderJobStatus.PENDING,
+            status=RenderJobStatus.QUEUED,
         )
 
-        # PENDING 상태
+        # QUEUED 상태
         assert job.is_active() is True
         assert job.is_terminal() is False
         assert job.can_cancel() is True
 
-        # RUNNING 상태
-        job.status = RenderJobStatus.RUNNING
+        # PROCESSING 상태
+        job.status = RenderJobStatus.PROCESSING
         assert job.is_active() is True
         assert job.is_terminal() is False
         assert job.can_cancel() is True
 
-        # SUCCEEDED 상태
-        job.status = RenderJobStatus.SUCCEEDED
+        # COMPLETED 상태
+        job.status = RenderJobStatus.COMPLETED
         assert job.is_active() is False
         assert job.is_terminal() is True
         assert job.can_cancel() is False
 
         # FAILED 상태
         job.status = RenderJobStatus.FAILED
-        assert job.is_active() is False
-        assert job.is_terminal() is True
-        assert job.can_cancel() is False
-
-        # CANCELED 상태
-        job.status = RenderJobStatus.CANCELED
         assert job.is_active() is False
         assert job.is_terminal() is True
         assert job.can_cancel() is False
