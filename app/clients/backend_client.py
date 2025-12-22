@@ -77,6 +77,12 @@ BACKEND_JOB_COMPLETE_PATH = "/video/job/{job_id}/complete"
 # render-spec
 BACKEND_RENDER_SPEC_PATH = "/internal/scripts/{script_id}/render-spec"
 
+# SourceSet 관련 (FastAPI → Spring)
+BACKEND_SOURCE_SET_DOCUMENTS_PATH = "/internal/source-sets/{source_set_id}/documents"
+BACKEND_SOURCE_SET_COMPLETE_PATH = "/internal/callbacks/source-sets/{source_set_id}/complete"
+BACKEND_CHUNK_BULK_UPSERT_PATH = "/internal/rag/documents/{document_id}/chunks:bulk"
+BACKEND_FAIL_CHUNK_BULK_UPSERT_PATH = "/internal/rag/documents/{document_id}/fail-chunks:bulk"
+
 
 # =============================================================================
 # Request/Response Models
@@ -215,6 +221,82 @@ class EmptyRenderSpecError(Exception):
         self.script_id = script_id
         self.error_code = "EMPTY_RENDER_SPEC"
         super().__init__(f"EMPTY_RENDER_SPEC: No scenes in render-spec (script_id={script_id})")
+
+
+class SourceSetDocumentsFetchError(BackendClientError):
+    """소스셋 문서 목록 조회 실패 예외."""
+
+    def __init__(
+        self,
+        source_set_id: str,
+        status_code: int,
+        message: str,
+        error_code: str = "SOURCE_SET_DOCS_FETCH_FAILED",
+    ):
+        super().__init__(
+            endpoint=f"/internal/source-sets/{source_set_id}/documents",
+            status_code=status_code,
+            message=message,
+            error_code=error_code,
+        )
+        self.source_set_id = source_set_id
+
+
+class SourceSetCompleteCallbackError(CallbackError):
+    """소스셋 완료 콜백 실패 예외."""
+
+    def __init__(
+        self,
+        source_set_id: str,
+        status_code: int,
+        message: str,
+        error_code: str = "SOURCE_SET_COMPLETE_CALLBACK_FAILED",
+    ):
+        super().__init__(
+            endpoint=f"/internal/callbacks/source-sets/{source_set_id}/complete",
+            status_code=status_code,
+            message=message,
+            error_code=error_code,
+        )
+        self.source_set_id = source_set_id
+
+
+class ChunkBulkUpsertError(BackendClientError):
+    """청크 벌크 업서트 실패 예외."""
+
+    def __init__(
+        self,
+        document_id: str,
+        status_code: int,
+        message: str,
+        error_code: str = "CHUNK_BULK_UPSERT_FAILED",
+    ):
+        super().__init__(
+            endpoint=f"/internal/rag/documents/{document_id}/chunks:bulk",
+            status_code=status_code,
+            message=message,
+            error_code=error_code,
+        )
+        self.document_id = document_id
+
+
+class FailChunkBulkUpsertError(BackendClientError):
+    """실패 청크 벌크 업서트 실패 예외."""
+
+    def __init__(
+        self,
+        document_id: str,
+        status_code: int,
+        message: str,
+        error_code: str = "FAIL_CHUNK_BULK_UPSERT_FAILED",
+    ):
+        super().__init__(
+            endpoint=f"/internal/rag/documents/{document_id}/fail-chunks:bulk",
+            status_code=status_code,
+            message=message,
+            error_code=error_code,
+        )
+        self.document_id = document_id
 
 
 # =============================================================================
@@ -928,6 +1010,530 @@ class BackendClient:
                 status_code=0,
                 message=f"Unexpected error: {str(e)[:200]}",
                 error_code="SCRIPT_FETCH_FAILED",
+            )
+
+    # =========================================================================
+    # SourceSet 오케스트레이션 (FastAPI → Spring)
+    # =========================================================================
+
+    async def get_source_set_documents(self, source_set_id: str):
+        """소스셋의 문서 목록을 조회합니다.
+
+        GET /internal/source-sets/{sourceSetId}/documents
+
+        Args:
+            source_set_id: 소스셋 ID
+
+        Returns:
+            SourceSetDocumentsResponse: 문서 목록
+
+        Raises:
+            SourceSetDocumentsFetchError: 조회 실패 시
+        """
+        from app.models.source_set import SourceSetDocumentsResponse
+
+        if not self._base_url:
+            raise SourceSetDocumentsFetchError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message="BACKEND_BASE_URL not configured",
+                error_code="BACKEND_NOT_CONFIGURED",
+            )
+
+        url = f"{self._base_url}/internal/source-sets/{source_set_id}/documents"
+        headers = self._get_internal_headers()
+
+        logger.info(f"Fetching source-set documents: source_set_id={source_set_id}")
+
+        try:
+            if self._external_client:
+                response = await self._external_client.get(
+                    url,
+                    headers=headers,
+                    timeout=self._timeout,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        url,
+                        headers=headers,
+                        timeout=self._timeout,
+                    )
+
+            if response.status_code == 401:
+                raise SourceSetDocumentsFetchError(
+                    source_set_id=source_set_id,
+                    status_code=401,
+                    message="Unauthorized - invalid or missing token",
+                    error_code="SOURCE_SET_DOCS_UNAUTHORIZED",
+                )
+            elif response.status_code == 403:
+                raise SourceSetDocumentsFetchError(
+                    source_set_id=source_set_id,
+                    status_code=403,
+                    message="Forbidden",
+                    error_code="SOURCE_SET_DOCS_FORBIDDEN",
+                )
+            elif response.status_code == 404:
+                raise SourceSetDocumentsFetchError(
+                    source_set_id=source_set_id,
+                    status_code=404,
+                    message="SourceSet not found",
+                    error_code="SOURCE_SET_NOT_FOUND",
+                )
+            elif response.status_code >= 500:
+                raise SourceSetDocumentsFetchError(
+                    source_set_id=source_set_id,
+                    status_code=response.status_code,
+                    message=f"Backend server error: {response.text[:200]}",
+                    error_code="SOURCE_SET_DOCS_SERVER_ERROR",
+                )
+            elif response.status_code != 200:
+                raise SourceSetDocumentsFetchError(
+                    source_set_id=source_set_id,
+                    status_code=response.status_code,
+                    message=f"Unexpected status: {response.text[:200]}",
+                    error_code="SOURCE_SET_DOCS_FETCH_FAILED",
+                )
+
+            data = response.json()
+            result = SourceSetDocumentsResponse(**data)
+
+            logger.info(
+                f"Source-set documents fetched: source_set_id={source_set_id}, "
+                f"count={len(result.documents)}"
+            )
+
+            return result
+
+        except SourceSetDocumentsFetchError:
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(f"Source-set documents fetch timeout: source_set_id={source_set_id}")
+            raise SourceSetDocumentsFetchError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message=f"Timeout after {self._timeout}s",
+                error_code="SOURCE_SET_DOCS_TIMEOUT",
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Source-set documents fetch network error: source_set_id={source_set_id}")
+            raise SourceSetDocumentsFetchError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message=f"Network error: {str(e)[:200]}",
+                error_code="SOURCE_SET_DOCS_NETWORK_ERROR",
+            )
+        except Exception as e:
+            logger.error(f"Source-set documents fetch error: source_set_id={source_set_id}, error={e}")
+            raise SourceSetDocumentsFetchError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message=f"Unexpected error: {str(e)[:200]}",
+                error_code="SOURCE_SET_DOCS_FETCH_FAILED",
+            )
+
+    async def notify_source_set_complete(
+        self,
+        source_set_id: str,
+        request,  # SourceSetCompleteRequest
+    ):
+        """소스셋 완료 콜백을 백엔드에 전송합니다.
+
+        POST /internal/callbacks/source-sets/{sourceSetId}/complete
+
+        Args:
+            source_set_id: 소스셋 ID
+            request: SourceSetCompleteRequest
+
+        Returns:
+            SourceSetCompleteResponse
+
+        Raises:
+            SourceSetCompleteCallbackError: 콜백 실패 시
+        """
+        from app.models.source_set import SourceSetCompleteResponse
+
+        if not self._base_url:
+            raise SourceSetCompleteCallbackError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message="BACKEND_BASE_URL not configured",
+                error_code="BACKEND_NOT_CONFIGURED",
+            )
+
+        url = f"{self._base_url}/internal/callbacks/source-sets/{source_set_id}/complete"
+        headers = self._get_internal_headers()
+
+        logger.info(
+            f"Sending source-set complete callback: "
+            f"source_set_id={source_set_id}, status={request.status}"
+        )
+
+        try:
+            payload = request.model_dump(by_alias=True, exclude_none=True)
+
+            if self._external_client:
+                response = await self._external_client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self._timeout,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self._timeout,
+                    )
+
+            if response.status_code == 401:
+                raise SourceSetCompleteCallbackError(
+                    source_set_id=source_set_id,
+                    status_code=401,
+                    message="Unauthorized - invalid or missing token",
+                    error_code="SOURCE_SET_COMPLETE_UNAUTHORIZED",
+                )
+            elif response.status_code == 403:
+                raise SourceSetCompleteCallbackError(
+                    source_set_id=source_set_id,
+                    status_code=403,
+                    message="Forbidden",
+                    error_code="SOURCE_SET_COMPLETE_FORBIDDEN",
+                )
+            elif response.status_code == 404:
+                raise SourceSetCompleteCallbackError(
+                    source_set_id=source_set_id,
+                    status_code=404,
+                    message="SourceSet not found on backend",
+                    error_code="SOURCE_SET_NOT_FOUND",
+                )
+            elif response.status_code >= 500:
+                raise SourceSetCompleteCallbackError(
+                    source_set_id=source_set_id,
+                    status_code=response.status_code,
+                    message=f"Backend server error: {response.text[:200]}",
+                    error_code="SOURCE_SET_COMPLETE_SERVER_ERROR",
+                )
+            elif response.status_code not in (200, 201, 204):
+                raise SourceSetCompleteCallbackError(
+                    source_set_id=source_set_id,
+                    status_code=response.status_code,
+                    message=f"Unexpected status: {response.text[:200]}",
+                    error_code="SOURCE_SET_COMPLETE_FAILED",
+                )
+
+            logger.info(
+                f"Source-set complete callback succeeded: "
+                f"source_set_id={source_set_id}"
+            )
+
+            if response.status_code == 204 or not response.text.strip():
+                return SourceSetCompleteResponse(saved=True)
+
+            try:
+                data = response.json()
+                return SourceSetCompleteResponse(**data) if data else SourceSetCompleteResponse(saved=True)
+            except Exception:
+                return SourceSetCompleteResponse(saved=True)
+
+        except SourceSetCompleteCallbackError:
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(f"Source-set complete callback timeout: source_set_id={source_set_id}")
+            raise SourceSetCompleteCallbackError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message=f"Timeout after {self._timeout}s",
+                error_code="SOURCE_SET_COMPLETE_TIMEOUT",
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Source-set complete callback network error: source_set_id={source_set_id}")
+            raise SourceSetCompleteCallbackError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message=f"Network error: {str(e)[:200]}",
+                error_code="SOURCE_SET_COMPLETE_NETWORK_ERROR",
+            )
+        except Exception as e:
+            logger.error(f"Source-set complete callback error: source_set_id={source_set_id}, error={e}")
+            raise SourceSetCompleteCallbackError(
+                source_set_id=source_set_id,
+                status_code=0,
+                message=f"Unexpected error: {str(e)[:200]}",
+                error_code="SOURCE_SET_COMPLETE_FAILED",
+            )
+
+    async def bulk_upsert_chunks(
+        self,
+        document_id: str,
+        request,  # ChunkBulkUpsertRequest
+    ):
+        """문서 청크를 백엔드 DB에 벌크 업서트합니다.
+
+        POST /internal/rag/documents/{documentId}/chunks:bulk
+
+        Args:
+            document_id: 문서 ID
+            request: ChunkBulkUpsertRequest
+
+        Returns:
+            ChunkBulkUpsertResponse
+
+        Raises:
+            ChunkBulkUpsertError: 업서트 실패 시
+        """
+        from app.models.source_set import ChunkBulkUpsertResponse
+
+        if not self._base_url:
+            raise ChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message="BACKEND_BASE_URL not configured",
+                error_code="BACKEND_NOT_CONFIGURED",
+            )
+
+        url = f"{self._base_url}/internal/rag/documents/{document_id}/chunks:bulk"
+        headers = self._get_internal_headers()
+
+        logger.info(
+            f"Bulk upserting chunks: document_id={document_id}, "
+            f"count={len(request.chunks)}"
+        )
+
+        try:
+            payload = request.model_dump(by_alias=True, exclude_none=True)
+
+            if self._external_client:
+                response = await self._external_client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self._timeout,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self._timeout,
+                    )
+
+            if response.status_code == 401:
+                raise ChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=401,
+                    message="Unauthorized - invalid or missing token",
+                    error_code="CHUNK_UPSERT_UNAUTHORIZED",
+                )
+            elif response.status_code == 403:
+                raise ChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=403,
+                    message="Forbidden",
+                    error_code="CHUNK_UPSERT_FORBIDDEN",
+                )
+            elif response.status_code == 404:
+                raise ChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=404,
+                    message="Document not found on backend",
+                    error_code="DOCUMENT_NOT_FOUND",
+                )
+            elif response.status_code >= 500:
+                raise ChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=response.status_code,
+                    message=f"Backend server error: {response.text[:200]}",
+                    error_code="CHUNK_UPSERT_SERVER_ERROR",
+                )
+            elif response.status_code not in (200, 201, 204):
+                raise ChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=response.status_code,
+                    message=f"Unexpected status: {response.text[:200]}",
+                    error_code="CHUNK_UPSERT_FAILED",
+                )
+
+            logger.info(
+                f"Chunks bulk upsert succeeded: document_id={document_id}, "
+                f"count={len(request.chunks)}"
+            )
+
+            if response.status_code == 204 or not response.text.strip():
+                return ChunkBulkUpsertResponse(saved=True, count=len(request.chunks))
+
+            try:
+                data = response.json()
+                return ChunkBulkUpsertResponse(**data) if data else ChunkBulkUpsertResponse(
+                    saved=True, count=len(request.chunks)
+                )
+            except Exception:
+                return ChunkBulkUpsertResponse(saved=True, count=len(request.chunks))
+
+        except ChunkBulkUpsertError:
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(f"Chunks bulk upsert timeout: document_id={document_id}")
+            raise ChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message=f"Timeout after {self._timeout}s",
+                error_code="CHUNK_UPSERT_TIMEOUT",
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Chunks bulk upsert network error: document_id={document_id}")
+            raise ChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message=f"Network error: {str(e)[:200]}",
+                error_code="CHUNK_UPSERT_NETWORK_ERROR",
+            )
+        except Exception as e:
+            logger.error(f"Chunks bulk upsert error: document_id={document_id}, error={e}")
+            raise ChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message=f"Unexpected error: {str(e)[:200]}",
+                error_code="CHUNK_UPSERT_FAILED",
+            )
+
+    async def bulk_upsert_fail_chunks(
+        self,
+        document_id: str,
+        request,  # FailChunkBulkUpsertRequest
+    ):
+        """임베딩 실패 로그를 백엔드 DB에 벌크 업서트합니다.
+
+        POST /internal/rag/documents/{documentId}/fail-chunks:bulk
+
+        Args:
+            document_id: 문서 ID
+            request: FailChunkBulkUpsertRequest
+
+        Returns:
+            FailChunkBulkUpsertResponse
+
+        Raises:
+            FailChunkBulkUpsertError: 업서트 실패 시
+        """
+        from app.models.source_set import FailChunkBulkUpsertResponse
+
+        if not self._base_url:
+            raise FailChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message="BACKEND_BASE_URL not configured",
+                error_code="BACKEND_NOT_CONFIGURED",
+            )
+
+        url = f"{self._base_url}/internal/rag/documents/{document_id}/fail-chunks:bulk"
+        headers = self._get_internal_headers()
+
+        logger.info(
+            f"Bulk upserting fail chunks: document_id={document_id}, "
+            f"count={len(request.fails)}"
+        )
+
+        try:
+            payload = request.model_dump(by_alias=True, exclude_none=True)
+
+            if self._external_client:
+                response = await self._external_client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self._timeout,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self._timeout,
+                    )
+
+            if response.status_code == 401:
+                raise FailChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=401,
+                    message="Unauthorized - invalid or missing token",
+                    error_code="FAIL_CHUNK_UPSERT_UNAUTHORIZED",
+                )
+            elif response.status_code == 403:
+                raise FailChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=403,
+                    message="Forbidden",
+                    error_code="FAIL_CHUNK_UPSERT_FORBIDDEN",
+                )
+            elif response.status_code == 404:
+                raise FailChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=404,
+                    message="Document not found on backend",
+                    error_code="DOCUMENT_NOT_FOUND",
+                )
+            elif response.status_code >= 500:
+                raise FailChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=response.status_code,
+                    message=f"Backend server error: {response.text[:200]}",
+                    error_code="FAIL_CHUNK_UPSERT_SERVER_ERROR",
+                )
+            elif response.status_code not in (200, 201, 204):
+                raise FailChunkBulkUpsertError(
+                    document_id=document_id,
+                    status_code=response.status_code,
+                    message=f"Unexpected status: {response.text[:200]}",
+                    error_code="FAIL_CHUNK_UPSERT_FAILED",
+                )
+
+            logger.info(
+                f"Fail chunks bulk upsert succeeded: document_id={document_id}, "
+                f"count={len(request.fails)}"
+            )
+
+            if response.status_code == 204 or not response.text.strip():
+                return FailChunkBulkUpsertResponse(saved=True, count=len(request.fails))
+
+            try:
+                data = response.json()
+                return FailChunkBulkUpsertResponse(**data) if data else FailChunkBulkUpsertResponse(
+                    saved=True, count=len(request.fails)
+                )
+            except Exception:
+                return FailChunkBulkUpsertResponse(saved=True, count=len(request.fails))
+
+        except FailChunkBulkUpsertError:
+            raise
+        except httpx.TimeoutException as e:
+            logger.error(f"Fail chunks bulk upsert timeout: document_id={document_id}")
+            raise FailChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message=f"Timeout after {self._timeout}s",
+                error_code="FAIL_CHUNK_UPSERT_TIMEOUT",
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Fail chunks bulk upsert network error: document_id={document_id}")
+            raise FailChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message=f"Network error: {str(e)[:200]}",
+                error_code="FAIL_CHUNK_UPSERT_NETWORK_ERROR",
+            )
+        except Exception as e:
+            logger.error(f"Fail chunks bulk upsert error: document_id={document_id}, error={e}")
+            raise FailChunkBulkUpsertError(
+                document_id=document_id,
+                status_code=0,
+                message=f"Unexpected error: {str(e)[:200]}",
+                error_code="FAIL_CHUNK_UPSERT_FAILED",
             )
 
     # =========================================================================
