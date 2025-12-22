@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.logging import get_logger
-from app.models.video_render import RenderJobStatus, RenderStep
+from app.models.video_render import RenderJobStatus, RenderStep, normalize_job_status
 
 logger = get_logger(__name__)
 
@@ -36,7 +36,7 @@ class RenderJobEntity:
         job_id: 잡 고유 ID (UUID)
         video_id: 비디오 ID (FK)
         script_id: 스크립트 ID (FK or string)
-        status: 잡 상태 (PENDING | RUNNING | SUCCEEDED | FAILED | CANCELED)
+        status: 잡 상태 (QUEUED | PROCESSING | COMPLETED | FAILED)
         step: 현재 진행 단계
         progress: 진행률 (0-100)
         message: 진행 메시지
@@ -56,7 +56,7 @@ class RenderJobEntity:
         job_id: str,
         video_id: str,
         script_id: str,
-        status: str = "PENDING",
+        status: str = "QUEUED",
         step: Optional[str] = None,
         progress: int = 0,
         message: str = "",
@@ -73,7 +73,11 @@ class RenderJobEntity:
         self.job_id = job_id
         self.video_id = video_id
         self.script_id = script_id
-        self.status = status
+        # 상태는 항상 정규화하여 저장
+        try:
+            self.status = normalize_job_status(status)
+        except ValueError:
+            self.status = status  # 유효하지 않은 상태는 그대로 유지 (조회 시)
         self.step = step
         self.progress = progress
         self.message = message
@@ -88,12 +92,12 @@ class RenderJobEntity:
         self.finished_at = finished_at
 
     def is_active(self) -> bool:
-        """활성 상태(PENDING/RUNNING)인지 확인."""
-        return self.status in ("PENDING", "RUNNING")
+        """활성 상태(QUEUED/PROCESSING)인지 확인."""
+        return self.status in ("QUEUED", "PROCESSING")
 
     def is_terminal(self) -> bool:
         """종료 상태인지 확인."""
-        return self.status in ("SUCCEEDED", "FAILED", "CANCELED")
+        return self.status in ("COMPLETED", "FAILED")
 
     def has_render_spec(self) -> bool:
         """렌더 스펙 스냅샷이 있는지 확인 (Phase 38)."""
@@ -251,6 +255,9 @@ class RenderJobRepository:
         # Phase 38: 기존 DB에 render_spec_json 컬럼 추가 (마이그레이션)
         self._migrate_add_render_spec_json()
 
+        # 상태값 정규화 마이그레이션 (RUNNING → PROCESSING 등)
+        self._migrate_normalize_status_values()
+
         logger.info(f"RenderJobRepository initialized: {self._db_path}")
 
     def _migrate_add_render_spec_json(self) -> None:
@@ -268,9 +275,51 @@ class RenderJobRepository:
         except Exception as e:
             logger.warning(f"Migration check failed (may already exist): {e}")
 
+    def _migrate_normalize_status_values(self) -> None:
+        """상태값 정규화 마이그레이션.
+
+        기존 DB의 레거시 상태값을 정규 상태값으로 변환합니다:
+        - PENDING → QUEUED
+        - RUNNING → PROCESSING
+        - SUCCEEDED → COMPLETED
+        - CANCELED, CANCELLED → FAILED
+        """
+        migrations = [
+            ("PENDING", "QUEUED"),
+            ("RUNNING", "PROCESSING"),
+            ("SUCCEEDED", "COMPLETED"),
+            ("CANCELED", "FAILED"),
+            ("CANCELLED", "FAILED"),
+        ]
+
+        try:
+            with self._get_cursor() as cursor:
+                for old_status, new_status in migrations:
+                    cursor.execute(
+                        "UPDATE render_jobs SET status = ? WHERE status = ?",
+                        (new_status, old_status),
+                    )
+                    if cursor.rowcount > 0:
+                        logger.info(
+                            f"Migration: Updated {cursor.rowcount} jobs "
+                            f"from {old_status} to {new_status}"
+                        )
+        except Exception as e:
+            logger.warning(f"Status migration failed: {e}")
+
     def save(self, job: RenderJobEntity) -> None:
-        """잡 저장 (upsert)."""
+        """잡 저장 (upsert).
+
+        상태는 저장 전 정규화됩니다 (RUNNING → PROCESSING 등).
+        """
         job.updated_at = datetime.utcnow()
+
+        # 상태 정규화 (DB 저장 전 필수)
+        try:
+            normalized_status = normalize_job_status(job.status)
+        except ValueError:
+            normalized_status = job.status
+            logger.warning(f"Invalid status value on save: {job.status}")
 
         sql = """
         INSERT OR REPLACE INTO render_jobs (
@@ -285,7 +334,7 @@ class RenderJobRepository:
                 job.job_id,
                 job.video_id,
                 job.script_id,
-                job.status,
+                normalized_status,
                 job.step,
                 job.progress,
                 job.message,
@@ -300,7 +349,7 @@ class RenderJobRepository:
                 job.finished_at.isoformat() if job.finished_at else None,
             ))
 
-        logger.debug(f"RenderJob saved: job_id={job.job_id}, status={job.status}")
+        logger.debug(f"RenderJob saved: job_id={job.job_id}, status={normalized_status}")
 
     def get(self, job_id: str) -> Optional[RenderJobEntity]:
         """잡 조회."""
@@ -344,13 +393,13 @@ class RenderJobRepository:
         return jobs
 
     def get_active_by_video_id(self, video_id: str) -> Optional[RenderJobEntity]:
-        """비디오 ID로 활성 잡(PENDING/RUNNING) 조회."""
+        """비디오 ID로 활성 잡(QUEUED/PROCESSING) 조회."""
         sql = """
         SELECT job_id, video_id, script_id, status, step,
                progress, message, error_code, error_message, assets,
                render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
-        WHERE video_id = ? AND status IN ('PENDING', 'RUNNING')
+        WHERE video_id = ? AND status IN ('QUEUED', 'PROCESSING')
         ORDER BY created_at DESC
         LIMIT 1
         """
@@ -369,7 +418,7 @@ class RenderJobRepository:
                progress, message, error_code, error_message, assets,
                render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
-        WHERE video_id = ? AND status = 'SUCCEEDED'
+        WHERE video_id = ? AND status = 'COMPLETED'
         ORDER BY finished_at DESC
         LIMIT 1
         """
@@ -388,7 +437,7 @@ class RenderJobRepository:
                progress, message, error_code, error_message, assets,
                render_spec_json, created_by, created_at, updated_at, started_at, finished_at
         FROM render_jobs
-        WHERE video_id = ? AND status = 'SUCCEEDED' AND assets IS NOT NULL
+        WHERE video_id = ? AND status = 'COMPLETED' AND assets IS NOT NULL
         ORDER BY finished_at DESC
         LIMIT 1
         """
@@ -411,9 +460,19 @@ class RenderJobRepository:
         progress: Optional[int] = None,
         message: Optional[str] = None,
     ) -> bool:
-        """잡 상태 업데이트 (부분 업데이트)."""
+        """잡 상태 업데이트 (부분 업데이트).
+
+        상태는 정규화되어 저장됩니다 (RUNNING → PROCESSING 등).
+        """
+        # 상태 정규화 (DB 저장 전 필수)
+        try:
+            normalized_status = normalize_job_status(status)
+        except ValueError:
+            normalized_status = status
+            logger.warning(f"Invalid status value on update: {status}")
+
         updates = ["status = ?", "updated_at = ?"]
-        params = [status, datetime.utcnow().isoformat()]
+        params: List[Any] = [normalized_status, datetime.utcnow().isoformat()]
 
         if step is not None:
             updates.append("step = ?")
@@ -425,13 +484,13 @@ class RenderJobRepository:
             updates.append("message = ?")
             params.append(message)
 
-        # RUNNING 시작 시 started_at 설정
-        if status == "RUNNING":
+        # PROCESSING 시작 시 started_at 설정
+        if normalized_status == "PROCESSING":
             updates.append("started_at = COALESCE(started_at, ?)")
             params.append(datetime.utcnow().isoformat())
 
         # 종료 상태 시 finished_at 설정
-        if status in ("SUCCEEDED", "FAILED", "CANCELED"):
+        if normalized_status in ("COMPLETED", "FAILED"):
             updates.append("finished_at = ?")
             params.append(datetime.utcnow().isoformat())
 

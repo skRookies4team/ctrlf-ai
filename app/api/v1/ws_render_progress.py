@@ -6,11 +6,13 @@ WebSocket 렌더 진행률 API
 엔드포인트:
 - WS /ws/videos/{video_id}/render-progress
 
+상태 머신: QUEUED → PROCESSING → COMPLETED | FAILED
+
 이벤트 형식:
 {
     "job_id": "job-xxx",
     "video_id": "video-xxx",
-    "status": "RUNNING",
+    "status": "PROCESSING",
     "step": "GENERATE_TTS",
     "progress": 25,
     "message": "TTS 음성 생성 중...",

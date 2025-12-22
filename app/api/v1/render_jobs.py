@@ -12,8 +12,12 @@
 - POST /ai/video/job/{job_id}/start : 잡 시작 (Backend → AI)
 - POST /ai/video/job/{job_id}/retry : 잡 재시도 (Backend → AI)
 
+상태 머신 (DB 정렬):
+- QUEUED → PROCESSING → COMPLETED | FAILED
+- 취소: FAILED + error_code="CANCELED"
+
 정책:
-- RUNNING/PENDING 잡이 있으면 기존 잡 반환 (idempotency)
+- PROCESSING/QUEUED 잡이 있으면 기존 잡 반환 (idempotency)
 - APPROVED 스크립트만 렌더 가능
 - 잡 상태는 DB에 영속화
 """
@@ -116,7 +120,7 @@ def verify_reviewer_role(user_role: Optional[str] = None) -> None:
 - 해당 교육이 EXPIRED면 404
 
 **중복 방지**:
-- 동일 video_id에 RUNNING/PENDING 잡이 있으면 기존 잡 반환 (200)
+- 동일 video_id에 PROCESSING/QUEUED 잡이 있으면 기존 잡 반환 (200)
 - 없으면 새 잡 생성 (202)
 
 **응답**:
@@ -286,7 +290,7 @@ async def list_render_jobs(
     response_model=PublishedAssetsResponse,
     summary="발행된 에셋 조회",
     description="""
-비디오의 발행된(SUCCEEDED) 에셋을 조회합니다.
+비디오의 발행된(COMPLETED) 에셋을 조회합니다.
 
 **FE 사용 시나리오**:
 1. POST /render-jobs로 잡 생성
@@ -392,7 +396,7 @@ async def cancel_render_job(
 3. 파이프라인 실행 시작
 
 **Idempotent**:
-- 이미 render_spec_json이 있고 RUNNING/SUCCEEDED/FAILED 상태면 no-op
+- 이미 render_spec_json이 있고 PROCESSING/COMPLETED/FAILED 상태면 no-op
 - 같은 잡에 여러 번 호출해도 안전
 
 **에러 코드**:
@@ -466,7 +470,7 @@ async def start_render_job(
 
 **조건**:
 - render_spec_json이 있어야 함 (start 이후)
-- RUNNING 상태가 아니어야 함
+- PROCESSING 상태가 아니어야 함
 """,
 )
 async def retry_render_job(

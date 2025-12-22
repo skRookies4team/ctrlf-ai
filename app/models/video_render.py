@@ -48,15 +48,86 @@ class KBDocumentStatus(str, Enum):
 
 
 class RenderJobStatus(str, Enum):
-    """렌더 잡 상태 (상태 머신).
+    """렌더 잡 상태 (상태 머신, DB 정렬).
 
-    PENDING → RUNNING → (SUCCEEDED | FAILED | CANCELED)
+    정규 상태: QUEUED → PROCESSING → (COMPLETED | FAILED)
+
+    DB 컬럼: education.video_generation_job.status
+    허용 값: QUEUED, PROCESSING, COMPLETED, FAILED
+
+    Legacy aliases (normalize_job_status 함수에서 변환):
+    - PENDING → QUEUED
+    - RUNNING → PROCESSING
+    - SUCCEEDED → COMPLETED
+    - CANCELED → FAILED (fail_reason="CANCELED"로 표현)
     """
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCEEDED = "SUCCEEDED"
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    CANCELED = "CANCELED"
+
+
+# 상태 정규화 맵핑 (legacy → canonical)
+_STATUS_NORMALIZE_MAP = {
+    "PENDING": "QUEUED",
+    "RUNNING": "PROCESSING",
+    "SUCCEEDED": "COMPLETED",
+    "CANCELED": "FAILED",
+    "CANCELLED": "FAILED",
+}
+
+
+def normalize_job_status(status: str) -> str:
+    """잡 상태를 정규 상태로 변환합니다.
+
+    입력: PENDING, RUNNING, SUCCEEDED, CANCELED 등 legacy alias 허용
+    출력: QUEUED, PROCESSING, COMPLETED, FAILED 중 하나
+
+    Args:
+        status: 입력 상태 (legacy 또는 정규)
+
+    Returns:
+        정규 상태 문자열
+
+    Raises:
+        ValueError: None, 빈 문자열, 또는 유효하지 않은 상태값
+
+    Examples:
+        >>> normalize_job_status("RUNNING")
+        'PROCESSING'
+        >>> normalize_job_status("pending")
+        'QUEUED'
+        >>> normalize_job_status("CANCELED")
+        'FAILED'
+    """
+    if not status or not status.strip():
+        raise ValueError("Status cannot be None or empty")
+
+    normalized = status.strip().upper()
+    result = _STATUS_NORMALIZE_MAP.get(normalized, normalized)
+
+    # 유효한 정규 상태인지 확인
+    valid_statuses = {"QUEUED", "PROCESSING", "COMPLETED", "FAILED"}
+    if result not in valid_statuses:
+        raise ValueError(f"Invalid status: {status}. Valid statuses: {valid_statuses}")
+
+    return result
+
+
+def normalize_to_enum(status: str) -> RenderJobStatus:
+    """잡 상태를 정규화된 RenderJobStatus Enum으로 변환합니다.
+
+    Args:
+        status: 입력 상태 (legacy 또는 정규)
+
+    Returns:
+        RenderJobStatus enum 값
+
+    Raises:
+        ValueError: 유효하지 않은 상태값
+    """
+    normalized = normalize_job_status(status)
+    return RenderJobStatus(normalized)
 
 
 class RenderStep(str, Enum):
@@ -126,10 +197,11 @@ class VideoRenderJob:
         job_id: 잡 고유 ID
         video_id: 비디오 ID
         script_id: 스크립트 ID
-        status: 잡 상태
+        status: 잡 상태 (QUEUED → PROCESSING → COMPLETED | FAILED)
         step: 현재 진행 단계
         progress: 진행률 (0-100)
         error_message: 에러 메시지 (FAILED 시)
+        fail_reason: 실패 사유 (CANCELED 등)
         started_at: 시작 시각
         finished_at: 종료 시각
         requested_by: 요청자 ID
@@ -138,10 +210,11 @@ class VideoRenderJob:
     job_id: str
     video_id: str
     script_id: str
-    status: RenderJobStatus = RenderJobStatus.PENDING
+    status: RenderJobStatus = RenderJobStatus.QUEUED
     step: Optional[RenderStep] = None
     progress: int = 0
     error_message: Optional[str] = None
+    fail_reason: Optional[str] = None  # "CANCELED" 등
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     requested_by: str = ""
@@ -150,21 +223,24 @@ class VideoRenderJob:
     def is_terminal(self) -> bool:
         """종료 상태인지 확인."""
         return self.status in (
-            RenderJobStatus.SUCCEEDED,
+            RenderJobStatus.COMPLETED,
             RenderJobStatus.FAILED,
-            RenderJobStatus.CANCELED,
         )
 
     def is_active(self) -> bool:
-        """활성 상태(PENDING/RUNNING)인지 확인."""
+        """활성 상태(QUEUED/PROCESSING)인지 확인."""
         return self.status in (
-            RenderJobStatus.PENDING,
-            RenderJobStatus.RUNNING,
+            RenderJobStatus.QUEUED,
+            RenderJobStatus.PROCESSING,
         )
 
     def can_cancel(self) -> bool:
         """취소 가능한지 확인."""
         return self.is_active()
+
+    def is_canceled(self) -> bool:
+        """취소된 상태인지 확인 (FAILED + fail_reason='CANCELED')."""
+        return self.status == RenderJobStatus.FAILED and self.fail_reason == "CANCELED"
 
 
 @dataclass
