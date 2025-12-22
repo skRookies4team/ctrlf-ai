@@ -118,6 +118,7 @@ from app.services.chat.response_factory import (
     create_unknown_route_response,
 )
 from app.services.chat.rag_handler import RagHandler
+from app.services.chat.backend_handler import BackendHandler
 from app.services.router_orchestrator import (
     OrchestrationResult,
     RouterOrchestrator,
@@ -409,6 +410,12 @@ class ChatService:
             ragflow_client=self._ragflow,
             milvus_client=self._milvus,
             milvus_enabled=self._milvus_enabled,
+        )
+
+        # Phase 2 리팩토링: BackendHandler 초기화
+        self._backend_handler = BackendHandler(
+            backend_data_client=self._backend_data,
+            context_formatter=self._context_formatter,
         )
 
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
@@ -1292,7 +1299,7 @@ class ChatService:
         )
 
     # =========================================================================
-    # Phase 11: Backend 데이터 조회 헬퍼
+    # Phase 11: Backend 데이터 조회 헬퍼 (BackendHandler로 위임)
     # =========================================================================
 
     async def _fetch_backend_data_for_api(
@@ -1303,56 +1310,10 @@ class ChatService:
         user_id: str,
         department: Optional[str] = None,
     ) -> str:
-        """
-        BACKEND_API 라우트용 백엔드 데이터를 조회합니다.
-
-        역할×도메인×의도 조합에 따라 적절한 BackendDataClient 메서드를 호출하고,
-        결과를 LLM 컨텍스트 텍스트로 변환합니다.
-
-        Args:
-            user_role: 사용자 역할
-            domain: 도메인
-            intent: 의도
-            user_id: 사용자 ID
-            department: 부서 ID
-
-        Returns:
-            str: LLM 컨텍스트용 텍스트
-
-        Phase 11 역할×도메인×의도 매핑:
-        - EMPLOYEE × EDU_STATUS → get_employee_edu_status(user_id)
-        - EMPLOYEE × INCIDENT_REPORT → get_report_guide()
-        - ADMIN × EDU_STATUS → get_department_edu_stats(department)
-        """
-        try:
-            # EMPLOYEE × EDU_STATUS: 본인 교육 현황
-            if user_role == UserRole.EMPLOYEE and intent == IntentType.EDU_STATUS:
-                response = await self._backend_data.get_employee_edu_status(user_id)
-                if response.success:
-                    return self._context_formatter.format_edu_status_for_llm(response.data)
-
-            # EMPLOYEE × INCIDENT_REPORT: 신고 안내
-            elif user_role == UserRole.EMPLOYEE and intent == IntentType.INCIDENT_REPORT:
-                response = await self._backend_data.get_report_guide()
-                if response.success:
-                    return self._context_formatter.format_report_guide_for_llm(response.data)
-
-            # ADMIN × EDU_STATUS: 부서 교육 통계
-            elif user_role == UserRole.ADMIN and intent == IntentType.EDU_STATUS:
-                response = await self._backend_data.get_department_edu_stats(department)
-                if response.success:
-                    return self._context_formatter.format_edu_stats_for_llm(response.data)
-
-            # 기타 조합: 데이터 없음
-            logger.debug(
-                f"No backend data mapping for: role={user_role.value}, "
-                f"domain={domain}, intent={intent.value}"
-            )
-            return ""
-
-        except Exception as e:
-            logger.warning(f"Backend data fetch failed: {e}")
-            return ""
+        """BACKEND_API 라우트용 백엔드 데이터를 조회합니다 (위임)."""
+        return await self._backend_handler.fetch_for_api(
+            user_role, domain, intent, user_id, department
+        )
 
     async def _fetch_backend_data_for_mixed(
         self,
@@ -1362,53 +1323,10 @@ class ChatService:
         user_id: str,
         department: Optional[str] = None,
     ) -> str:
-        """
-        MIXED_BACKEND_RAG 라우트용 백엔드 데이터를 조회합니다.
-
-        Args:
-            user_role: 사용자 역할
-            domain: 도메인
-            intent: 의도
-            user_id: 사용자 ID
-            department: 부서 ID
-
-        Returns:
-            str: LLM 컨텍스트용 텍스트
-
-        Phase 11 역할×도메인×의도 매핑:
-        - ADMIN × INCIDENT → get_incident_overview()
-        - ADMIN × EDU_STATUS → get_department_edu_stats()
-        - INCIDENT_MANAGER × INCIDENT → get_incident_overview()
-        """
-        try:
-            # ADMIN × INCIDENT: 사고 현황 통계
-            if user_role == UserRole.ADMIN and domain == "INCIDENT":
-                response = await self._backend_data.get_incident_overview()
-                if response.success:
-                    return self._context_formatter.format_incident_overview_for_llm(response.data)
-
-            # ADMIN × EDU_STATUS: 부서 교육 통계 (MIXED에서도 사용 가능)
-            elif user_role == UserRole.ADMIN and intent == IntentType.EDU_STATUS:
-                response = await self._backend_data.get_department_edu_stats(department)
-                if response.success:
-                    return self._context_formatter.format_edu_stats_for_llm(response.data)
-
-            # INCIDENT_MANAGER × INCIDENT: 사고 현황
-            elif user_role == UserRole.INCIDENT_MANAGER and domain == "INCIDENT":
-                response = await self._backend_data.get_incident_overview()
-                if response.success:
-                    return self._context_formatter.format_incident_overview_for_llm(response.data)
-
-            # 기타 조합: 데이터 없음
-            logger.debug(
-                f"No mixed backend data mapping for: role={user_role.value}, "
-                f"domain={domain}, intent={intent.value}"
-            )
-            return ""
-
-        except Exception as e:
-            logger.warning(f"Mixed backend data fetch failed: {e}")
-            return ""
+        """MIXED_BACKEND_RAG 라우트용 백엔드 데이터를 조회합니다 (위임)."""
+        return await self._backend_handler.fetch_for_mixed(
+            user_role, domain, intent, user_id, department
+        )
 
     # =========================================================================
     # Phase 11: MIXED_BACKEND_RAG용 LLM 메시지 빌더
