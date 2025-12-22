@@ -152,6 +152,17 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
         # Milvus 관련 속성 추가
         service._milvus_enabled = False
         service._milvus = None
+        # Answer guard mock 추가
+        service._answer_guard = MagicMock()
+        service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        service._answer_guard.check_answerability = MagicMock(return_value=(True, None))
+        service._answer_guard.create_debug_info = MagicMock(return_value={})
+        service._answer_guard.apply_citation_check = MagicMock(return_value=("테스트 응답입니다.", False))
+        service._answer_guard.validate_citation = MagicMock(return_value=(True, "테스트 응답입니다."))
+        service._answer_guard.apply_language_check = MagicMock(return_value=("테스트 응답입니다.", False))
+        service._answer_guard.enforce_korean_output = AsyncMock(return_value=(True, "테스트 응답입니다."))
+        # Phase 39: last error reason
+        service._last_error_reason = None
 
         # Act
         response = await service.handle_chat(mock_chat_request)
@@ -217,6 +228,11 @@ async def test_chat_returns_clarify_response(mock_chat_request):
         service._backend_data = MagicMock()
         service._context_formatter = MagicMock()
         service._video_progress = MagicMock()
+        # Answer guard mock 추가
+        service._answer_guard = MagicMock()
+        service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 39: last error reason
+        service._last_error_reason = None
 
         # ChatRequest with 교육 관련 질문
         request = ChatRequest(
@@ -291,6 +307,11 @@ async def test_chat_returns_confirmation_response(mock_chat_request):
         service._backend_data = MagicMock()
         service._context_formatter = MagicMock()
         service._video_progress = MagicMock()
+        # Answer guard mock 추가
+        service._answer_guard = MagicMock()
+        service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 39: last error reason
+        service._last_error_reason = None
 
         request = ChatRequest(
             session_id="test-session-003",
@@ -357,6 +378,11 @@ async def test_chat_returns_system_help(mock_chat_request):
         service._backend_data = MagicMock()
         service._context_formatter = MagicMock()
         service._video_progress = MagicMock()
+        # Answer guard mock 추가
+        service._answer_guard = MagicMock()
+        service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 39: last error reason
+        service._last_error_reason = None
 
         request = ChatRequest(
             session_id="test-session-004",
@@ -425,6 +451,11 @@ async def test_chat_returns_unknown_response(mock_chat_request):
         service._backend_data = MagicMock()
         service._context_formatter = MagicMock()
         service._video_progress = MagicMock()
+        # Answer guard mock 추가
+        service._answer_guard = MagicMock()
+        service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 39: last error reason
+        service._last_error_reason = None
 
         request = ChatRequest(
             session_id="test-session-005",

@@ -18,12 +18,41 @@ import httpx
 import pytest
 
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
-from app.models.intent import MaskingStage, PiiMaskResult
+from app.models.intent import IntentResult, IntentType, MaskingStage, PiiMaskResult, RouteType, UserRole
 from app.clients.llm_client import LLMClient
 from app.clients.ragflow_client import RagflowClient
 from app.services.chat_service import ChatService
 from app.services.intent_service import IntentService
 from app.services.pii_service import PiiService
+
+
+# =============================================================================
+# FakeIntentService for testing without AnswerGuard blocking
+# =============================================================================
+
+
+class FakeIntentService(IntentService):
+    """테스트용 Fake IntentService. LLM_ONLY 라우트로 AnswerGuard 블록 우회."""
+
+    def __init__(
+        self,
+        intent: IntentType = IntentType.GENERAL_CHAT,
+        domain: str = "GENERAL",
+        route: RouteType = RouteType.LLM_ONLY,
+        user_role: UserRole = UserRole.EMPLOYEE,
+    ):
+        self._fake_intent = intent
+        self._fake_domain = domain
+        self._fake_route = route
+        self._fake_user_role = user_role
+
+    def classify(self, req: ChatRequest, user_query: str) -> IntentResult:
+        return IntentResult(
+            user_role=self._fake_user_role,
+            intent=self._fake_intent,
+            domain=self._fake_domain,
+            route=self._fake_route,
+        )
 
 
 @pytest.fixture
@@ -400,7 +429,13 @@ async def test_chat_service_uses_pii_http_service_when_configured() -> None:
     # Create other services (fallback mode)
     ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
-    intent_service = IntentService()
+    # Use FakeIntentService with LLM_ONLY route to avoid AnswerGuard blocking
+    intent_service = FakeIntentService(
+        intent=IntentType.GENERAL_CHAT,
+        domain="GENERAL",
+        route=RouteType.LLM_ONLY,
+        user_role=UserRole.EMPLOYEE,
+    )
 
     chat_service = ChatService(
         ragflow_client=ragflow_client,

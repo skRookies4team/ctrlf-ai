@@ -375,8 +375,8 @@ async def test_chat_service_no_rag_results(
     assert response.meta.rag_source_count == 0
     assert response.answer != ""
 
-    # RAG 결과 없을 때 안내 문구가 포함되어야 함
-    assert "관련 문서를 찾지 못" in response.answer or "담당 부서" in response.answer
+    # RAG 결과 없을 때 안내 문구가 포함되어야 함 (Phase 39 AnswerGuard 템플릿)
+    assert "찾지 못했" in response.answer or "관련 내용을" in response.answer
 
 
 # =============================================================================
@@ -424,7 +424,10 @@ async def test_chat_service_rag_failure_fallback(
     assert response.meta.rag_used is False
     assert response.meta.rag_source_count == 0
     assert response.answer != ""
-    assert "RAG 없이 생성된 응답" in response.answer
+
+    # Phase 39: RAG 실패 시 AnswerGuard가 no-evidence 템플릿 반환
+    # LLM 응답 대신 "찾지 못했" 템플릿이 나옴
+    assert "찾지 못했" in response.answer or "관련 내용을" in response.answer
 
     # RAG 실패해도 route는 원래 의도대로 유지
     assert response.meta.route == "RAG_INTERNAL"
