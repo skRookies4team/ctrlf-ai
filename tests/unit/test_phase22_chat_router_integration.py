@@ -152,6 +152,17 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
         # Milvus 관련 속성 추가
         service._milvus_enabled = False
         service._milvus = None
+        # Phase 2 리팩토링: 핸들러 mock 추가
+        service._rag_handler = MagicMock()
+        service._rag_handler.perform_search_with_fallback = AsyncMock(return_value=([], False))
+        service._backend_handler = MagicMock()
+        service._backend_handler.fetch_for_api = AsyncMock(return_value="")
+        service._backend_handler.fetch_for_mixed = AsyncMock(return_value="")
+        service._message_builder = MagicMock()
+        service._message_builder.build_rag_messages = MagicMock(return_value=[
+            {"role": "system", "content": "test"},
+            {"role": "user", "content": "test"}
+        ])
         # Answer guard mock 추가
         service._answer_guard = MagicMock()
         service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)

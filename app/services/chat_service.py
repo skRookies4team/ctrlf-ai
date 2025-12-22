@@ -91,7 +91,6 @@ from app.models.router_types import (
 )
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, get_llm_client
-from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
 from app.clients.ragflow_client import RagflowClient, get_ragflow_client
 from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
@@ -119,6 +118,15 @@ from app.services.chat.response_factory import (
 )
 from app.services.chat.rag_handler import RagHandler
 from app.services.chat.backend_handler import BackendHandler
+from app.services.chat.message_builder import (
+    MessageBuilder,
+    # 프롬프트 상수 (역호환을 위해 re-export)
+    SYSTEM_PROMPT_WITH_RAG,
+    SYSTEM_PROMPT_NO_RAG,
+    SYSTEM_PROMPT_MIXED_BACKEND_RAG,
+    SYSTEM_PROMPT_BACKEND_API,
+    NO_RAG_RESULTS_NOTICE,
+)
 from app.services.router_orchestrator import (
     OrchestrationResult,
     RouterOrchestrator,
@@ -231,68 +239,10 @@ def is_rag_gap_candidate(
     return rag_max_score < score_threshold
 
 
-# System prompt template for LLM (RAG context가 있는 경우)
-# Phase 13: 조항 근거 명시 지침 추가
-SYSTEM_PROMPT_WITH_RAG = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
-아래의 참고 문서 목록을 바탕으로 사용자의 질문에 한국어로 정확하고 친절하게 답변해 주세요.
-
-답변 시 반드시 출처 문서와 해당 조항을 인용해 주세요.
-가능하다면 답변 마지막에 "[참고 근거]" 섹션을 추가해서:
-- 문서명
-- 조문/항 번호 또는 위치 (예: 제10조 제2항, 제3장 > 제5조)
-를 bullet으로 정리해 주세요.
-
-예시:
-[참고 근거]
-- 연차휴가 관리 규정 제10조 (연차 이월) 제2항
-- 인사관리 규정 제3장 근태관리 제5조 (지각/조퇴 처리 기준)
-
-만약 참고 문서에서 답을 찾을 수 없다면, 솔직하게 "해당 내용은 참고 문서에서 찾을 수 없습니다"라고 말해 주세요.
-추측이나 거짓 정보를 제공하지 마세요.
-"""
-
-# System prompt template for LLM (RAG context가 없는 경우)
-SYSTEM_PROMPT_NO_RAG = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
-현재 관련 문서를 찾지 못했습니다. 일반적인 지식을 바탕으로 답변하되,
-구체적인 사내 규정이나 정책에 대해서는 "관련 문서를 찾지 못했으므로, 담당 부서에 직접 문의해 주세요"라고 안내해 주세요.
-추측이나 거짓 정보를 제공하지 마세요.
-"""
-
-# RAG 검색 결과가 없을 때 사용자에게 안내할 메시지
-NO_RAG_RESULTS_NOTICE = (
-    "\n\n※ 참고: 관련 문서를 찾지 못하여 일반적인 답변을 드립니다. "
-    "정확한 정보는 담당 부서에 확인해 주세요."
-)
-
-# Phase 11: MIXED_BACKEND_RAG용 LLM 시스템 프롬프트
-SYSTEM_PROMPT_MIXED_BACKEND_RAG = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
-
-아래에 두 가지 정보가 제공됩니다:
-1. [정책/규정 근거]: 관련 사내 규정/정책 문서
-2. [실제 현황/통계]: 백엔드 시스템에서 조회한 실제 데이터
-
-두 정보를 모두 고려하여 질문에 답변해 주세요:
-1) 정책상 어떻게 규정되어 있는지
-2) 현재 조직/부서의 실제 상황이 어떠한지
-3) 다음에 취할 수 있는 일반적인 조치나 권고
-
-주의사항:
-- 구체적인 인사/징계 조치를 단정적으로 말하지 마세요.
-- 개인 식별이 가능한 정보(실명, 사번 등)는 언급하지 마세요.
-- 추측이나 거짓 정보를 제공하지 마세요.
-"""
-
-# Phase 11: BACKEND_API용 LLM 시스템 프롬프트
-SYSTEM_PROMPT_BACKEND_API = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
-
-아래에 백엔드 시스템에서 조회한 실제 데이터가 제공됩니다.
-이 데이터를 바탕으로 사용자의 질문에 친절하고 정확하게 답변해 주세요.
-
-주의사항:
-- 제공된 데이터 범위 내에서만 답변하세요.
-- 추측이나 거짓 정보를 제공하지 마세요.
-- 개인 식별이 가능한 정보는 언급하지 마세요.
-"""
+# =============================================================================
+# Phase 2 리팩토링: SYSTEM_PROMPT_* 상수는 message_builder.py에서 import됨
+# (역호환을 위해 이 모듈에서 re-export됨)
+# =============================================================================
 
 
 # =============================================================================
@@ -352,7 +302,6 @@ class ChatService:
         backend_data_client: Optional[BackendDataClient] = None,
         router_orchestrator: Optional[RouterOrchestrator] = None,
         video_progress_service: Optional[VideoProgressService] = None,
-        milvus_client: Optional[MilvusSearchClient] = None,
         answer_guard_service: Optional[AnswerGuardService] = None,
     ) -> None:
         """
@@ -368,8 +317,6 @@ class ChatService:
             backend_data_client: BackendDataClient instance. If None, creates a new instance.
             router_orchestrator: RouterOrchestrator instance. If None, creates a new instance. (Phase 22)
             video_progress_service: VideoProgressService instance. If None, creates a new instance. (Phase 22)
-            milvus_client: MilvusSearchClient instance. If None and MILVUS_ENABLED=True, creates singleton. (Phase 24)
-                              Pass custom services for testing or dependency injection.
             answer_guard_service: AnswerGuardService instance. If None, creates singleton. (Phase 39)
         """
         # Phase 싱글톤 리팩토링: 클라이언트/서비스 인스턴스 재사용
@@ -395,26 +342,20 @@ class ChatService:
         # Phase 39: 마지막 에러 사유 저장 (불만 빠른 경로용)
         self._last_error_reason: Optional[str] = None
 
-        # Phase 24: Milvus Vector Search Client
-        # MILVUS_ENABLED=True 설정 시 RAGFlow 대신 Milvus 사용
-        settings = get_settings()
-        self._milvus_enabled = settings.MILVUS_ENABLED
-        if self._milvus_enabled:
-            self._milvus = milvus_client or get_milvus_client()
-            logger.info("Milvus vector search enabled (Phase 24)")
-        else:
-            self._milvus = None
-
-        # Phase 2 리팩토링: RagHandler 초기화
+        # Phase 42 (A안 확정): RagHandler 초기화 (RAGFlow 단일 검색)
         self._rag_handler = RagHandler(
             ragflow_client=self._ragflow,
-            milvus_client=self._milvus,
-            milvus_enabled=self._milvus_enabled,
         )
 
         # Phase 2 리팩토링: BackendHandler 초기화
         self._backend_handler = BackendHandler(
             backend_data_client=self._backend_data,
+            context_formatter=self._context_formatter,
+        )
+
+        # Phase 2 리팩토링: MessageBuilder 초기화
+        self._message_builder = MessageBuilder(
+            guardrail_service=self._guardrail,
             context_formatter=self._context_formatter,
         )
 
@@ -1147,122 +1088,27 @@ class ChatService:
         intent: Optional["IntentType"] = None,
     ) -> List[Dict[str, str]]:
         """
-        Build message list for LLM chat completion.
+        Build message list for LLM chat completion (위임).
 
-        Constructs a message array with:
-        1. Guardrail prefix (Phase 10: 역할별 가드레일)
-        2. System prompt with instructions (RAG context 유무에 따라 다름)
-        3. RAG context (if sources available)
-        4. User's actual question
-
-        Args:
-            user_query: The user's question text (masked if PII was detected)
-            sources: List of ChatSource from RAG search
-            req: Original ChatRequest for context
-            rag_attempted: Whether RAG search was attempted
-            user_role: User role for guardrails (Phase 10)
-            domain: Domain for guardrails (Phase 10)
-            intent: Intent type for guardrails (Phase 10)
-
-        Returns:
-            List of message dicts with 'role' and 'content' keys
+        Phase 2 리팩토링: MessageBuilder로 로직 위임.
         """
-        from app.models.intent import IntentType, UserRole
-
-        messages: List[Dict[str, str]] = []
-
-        # Phase 10: 역할별 가드레일을 system prompt 앞에 추가
-        guardrail_prefix = ""
-        if user_role and domain and intent:
-            guardrail_prefix = self._guardrail.get_system_prompt_prefix(
-                user_role=user_role,
-                domain=domain,
-                intent=intent,
-            )
-
-        # System message - RAG context 유무에 따라 다른 프롬프트 사용
-        if sources:
-            # RAG 결과가 있는 경우
-            system_content = SYSTEM_PROMPT_WITH_RAG
-            context_text = self._format_sources_for_prompt(sources)
-            system_content += f"\n\n참고 문서:\n{context_text}"
-        elif rag_attempted:
-            # RAG 시도했지만 결과 없는 경우
-            system_content = SYSTEM_PROMPT_NO_RAG
-        else:
-            # RAG 시도하지 않은 경우 (LLM_ONLY 등)
-            system_content = SYSTEM_PROMPT_WITH_RAG
-            system_content += "\n\n참고 문서: (검색 대상 아님)"
-
-        # Combine guardrail prefix with system content
-        if guardrail_prefix:
-            system_content = guardrail_prefix + "\n\n" + system_content
-
-        messages.append({
-            "role": "system",
-            "content": system_content,
-        })
-
-        # Add conversation history (optional: include previous messages for context)
-        # For now, just include the latest user query
-        # TODO: Consider including recent conversation history for multi-turn context
-
-        messages.append({
-            "role": "user",
-            "content": user_query,
-        })
-
-        return messages
+        return self._message_builder.build_rag_messages(
+            user_query=user_query,
+            sources=sources,
+            req=req,
+            rag_attempted=rag_attempted,
+            user_role=user_role,
+            domain=domain,
+            intent=intent,
+        )
 
     def _format_sources_for_prompt(self, sources: List[ChatSource]) -> str:
         """
-        Format RAG sources as text for LLM prompt.
+        Format RAG sources as text for LLM prompt (위임).
 
-        Phase 13: 조항 정보(article_label, article_path) 포함하도록 확장.
-        Creates a numbered list of sources with doc_id, title, article location, and snippet.
-
-        Args:
-            sources: List of ChatSource from RAG search
-
-        Returns:
-            Formatted string with source information
-
-        Example output:
-            [근거 1]
-            - 문서: 연차휴가 관리 규정 (2025.01 개정)
-            - 위치: 제10조 (연차 이월) 제2항
-            - 내용: "연차는 다음 해 말일까지 최대 10일까지 이월할 수 있다..."
+        Phase 2 리팩토링: MessageBuilder로 로직 위임.
         """
-        lines: List[str] = []
-
-        for i, source in enumerate(sources, start=1):
-            lines.append(f"[근거 {i}]")
-
-            # 문서 제목
-            doc_line = f"- 문서: {source.title}"
-            if source.page:
-                doc_line += f" (p.{source.page})"
-            lines.append(doc_line)
-
-            # Phase 13: 조항 위치 정보
-            if source.article_label or source.article_path:
-                location = source.article_path or source.article_label
-                lines.append(f"- 위치: {location}")
-
-            # 관련도 점수 (디버깅용, 선택적)
-            if source.score:
-                lines.append(f"- 관련도: {source.score:.2f}")
-
-            # 발췌 내용
-            if source.snippet:
-                snippet = source.snippet[:400]
-                if len(source.snippet) > 400:
-                    snippet += "..."
-                lines.append(f"- 내용: {snippet}")
-
-            lines.append("")  # 빈 줄로 구분
-
-        return "\n".join(lines).strip()
+        return self._message_builder.format_sources_for_prompt(sources)
 
     def _create_fallback_response(
         self,
@@ -1342,60 +1188,18 @@ class ChatService:
         intent: IntentType,
     ) -> List[Dict[str, str]]:
         """
-        MIXED_BACKEND_RAG용 LLM 메시지를 구성합니다.
+        MIXED_BACKEND_RAG용 LLM 메시지를 구성합니다 (위임).
 
-        RAG 결과와 백엔드 데이터를 통합하여 LLM 프롬프트를 구성합니다.
-
-        Args:
-            user_query: 사용자 질문
-            sources: RAG 검색 결과
-            backend_context: 백엔드 데이터 포맷팅 결과
-            domain: 도메인
-            user_role: 사용자 역할
-            intent: 의도
-
-        Returns:
-            List[Dict[str, str]]: LLM 메시지 목록
+        Phase 2 리팩토링: MessageBuilder로 로직 위임.
         """
-        messages: List[Dict[str, str]] = []
-
-        # 가드레일 prefix
-        guardrail_prefix = self._guardrail.get_system_prompt_prefix(
-            user_role=user_role,
-            domain=domain,
-            intent=intent,
-        )
-
-        # RAG 컨텍스트 포맷팅
-        rag_context = ""
-        if sources:
-            rag_context = self._format_sources_for_prompt(sources)
-
-        # RAG + Backend 통합 컨텍스트
-        mixed_context = self._context_formatter.format_mixed_context(
-            rag_context=rag_context,
+        return self._message_builder.build_mixed_messages(
+            user_query=user_query,
+            sources=sources,
             backend_context=backend_context,
             domain=domain,
+            user_role=user_role,
+            intent=intent,
         )
-
-        # 시스템 프롬프트 구성
-        system_content = SYSTEM_PROMPT_MIXED_BACKEND_RAG
-        system_content += f"\n\n{mixed_context}"
-
-        if guardrail_prefix:
-            system_content = guardrail_prefix + "\n\n" + system_content
-
-        messages.append({
-            "role": "system",
-            "content": system_content,
-        })
-
-        messages.append({
-            "role": "user",
-            "content": user_query,
-        })
-
-        return messages
 
     # =========================================================================
     # Phase 22: Router Orchestrator Helper Methods
@@ -1455,48 +1259,14 @@ class ChatService:
         intent: IntentType,
     ) -> List[Dict[str, str]]:
         """
-        BACKEND_API용 LLM 메시지를 구성합니다.
+        BACKEND_API용 LLM 메시지를 구성합니다 (위임).
 
-        백엔드 데이터만 사용하여 LLM 프롬프트를 구성합니다.
-
-        Args:
-            user_query: 사용자 질문
-            backend_context: 백엔드 데이터 포맷팅 결과
-            user_role: 사용자 역할
-            domain: 도메인
-            intent: 의도
-
-        Returns:
-            List[Dict[str, str]]: LLM 메시지 목록
+        Phase 2 리팩토링: MessageBuilder로 로직 위임.
         """
-        messages: List[Dict[str, str]] = []
-
-        # 가드레일 prefix
-        guardrail_prefix = self._guardrail.get_system_prompt_prefix(
+        return self._message_builder.build_backend_api_messages(
+            user_query=user_query,
+            backend_context=backend_context,
             user_role=user_role,
             domain=domain,
             intent=intent,
         )
-
-        # 시스템 프롬프트 구성
-        system_content = SYSTEM_PROMPT_BACKEND_API
-
-        if backend_context:
-            system_content += f"\n\n[조회된 데이터]\n{backend_context}"
-        else:
-            system_content += "\n\n[조회된 데이터]\n(데이터를 조회하지 못했습니다)"
-
-        if guardrail_prefix:
-            system_content = guardrail_prefix + "\n\n" + system_content
-
-        messages.append({
-            "role": "system",
-            "content": system_content,
-        })
-
-        messages.append({
-            "role": "user",
-            "content": user_query,
-        })
-
-        return messages
