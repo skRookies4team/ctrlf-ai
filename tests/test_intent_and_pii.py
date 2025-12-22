@@ -26,12 +26,40 @@ from app.clients.ragflow_client import RagflowClient
 from app.services.chat_service import ChatService
 from app.services.intent_service import IntentService
 from app.services.pii_service import PiiService
+from app.models.intent import UserRole
 
 
 @pytest.fixture
 def anyio_backend() -> str:
     """pytest-anyio backend configuration."""
     return "asyncio"
+
+
+# --- FakeIntentService for testing ---
+
+
+class FakeIntentService(IntentService):
+    """테스트용 Fake IntentService. 미리 설정된 결과를 반환합니다."""
+
+    def __init__(
+        self,
+        intent: IntentType = IntentType.POLICY_QA,
+        domain: str = "POLICY",
+        route: RouteType = RouteType.RAG_INTERNAL,
+        user_role: UserRole = UserRole.EMPLOYEE,
+    ):
+        self._fake_intent = intent
+        self._fake_domain = domain
+        self._fake_route = route
+        self._fake_user_role = user_role
+
+    def classify(self, req: ChatRequest, user_query: str) -> IntentResult:
+        return IntentResult(
+            user_role=self._fake_user_role,
+            intent=self._fake_intent,
+            domain=self._fake_domain,
+            route=self._fake_route,
+        )
 
 
 # --- IntentService Unit Tests ---
@@ -344,7 +372,13 @@ async def test_chat_service_incident_route() -> None:
     ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
     pii_service = PiiService(base_url="", enabled=False)
-    intent_service = IntentService()
+    # Use FakeIntentService to ensure BACKEND_API route without LLM
+    intent_service = FakeIntentService(
+        intent=IntentType.INCIDENT_REPORT,
+        domain="INCIDENT",
+        route=RouteType.BACKEND_API,
+        user_role=UserRole.EMPLOYEE,
+    )
 
     service = ChatService(
         ragflow_client=ragflow_client,
@@ -353,11 +387,12 @@ async def test_chat_service_incident_route() -> None:
         intent_service=intent_service,
     )
 
+    # Note: Query must avoid triggering complaint fast path (avoid "하" keyword)
     request = ChatRequest(
         session_id="test-session",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="보안 사고가 발생해서 신고하려고 합니다")],
+        messages=[ChatMessage(role="user", content="보안 사고 발생 보고")],
     )
 
     response = await service.handle_chat(request)

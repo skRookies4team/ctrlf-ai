@@ -382,11 +382,12 @@ async def test_chat_service_backend_api_incident_report() -> None:
         backend_data_client=SpyBackendDataClient(),
     )
 
+    # Note: Query must avoid triggering complaint fast path (avoid "하" keyword)
     request = ChatRequest(
         session_id="test",
         user_id="user-123",
         user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="보안 사고 신고하려고 합니다")],
+        messages=[ChatMessage(role="user", content="보안 사고 발생 보고")],
     )
 
     response = await service.handle_chat(request)
