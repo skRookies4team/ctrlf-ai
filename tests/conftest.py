@@ -1,48 +1,21 @@
 """
 pytest conftest.py - Shared Test Configuration (Root)
 
-This is the ROOT conftest for backward compatibility with existing tests.
-New tests should be placed in:
-- tests/unit/ : Unit tests (no external services)
-- tests/integration/ : Integration tests (real LLM/RAGFlow/Milvus)
+공통 fixture만 포함합니다. env 조작은 하지 않습니다.
 
-This file maintains the unit test behavior (env clearing) for tests
-still in the tests/ root directory.
+- tests/unit/conftest.py: env 비움 (외부 서비스 차단)
+- tests/integration/conftest.py: env 유지 (실제 서비스 사용)
+
+주의: 이 파일에서 os.environ을 수정하면 integration 테스트까지 영향받습니다.
 """
 
-import os
-
-# =============================================================================
-# Unit Test Mode (default for tests in root directory)
-# =============================================================================
-
-# Set environment variables BEFORE importing any app modules
-# This ensures Settings class uses these values
-
-# Disable mock URLs for unit tests (no external services required)
-os.environ["RAGFLOW_BASE_URL_MOCK"] = ""
-os.environ["LLM_BASE_URL_MOCK"] = ""
-os.environ["BACKEND_BASE_URL_MOCK"] = ""
-
-# Remove direct URL env vars (HttpUrl type doesn't accept empty string)
-# So we need to unset them entirely
-for key in ["RAGFLOW_BASE_URL", "LLM_BASE_URL", "BACKEND_BASE_URL"]:
-    os.environ.pop(key, None)
-
-# Set AI_ENV to mock mode (but with empty mock URLs = no external calls)
-os.environ["AI_ENV"] = "mock"
-
-# Now clear the settings cache so Settings reloads with new values
-# Import AFTER setting env vars to ensure clean state
-from app.core.config import clear_settings_cache
-clear_settings_cache()
-
-
-# =============================================================================
-# Singleton cleanup fixtures
-# =============================================================================
-
+import asyncio
 import pytest
+
+
+# =============================================================================
+# Singleton cleanup fixtures (공통)
+# =============================================================================
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +45,6 @@ def cleanup_http_client():
     """
     yield
     # 세션 종료 시 1회 close
-    import asyncio
     from app.clients.http_client import close_async_http_client
 
     try:
