@@ -813,6 +813,261 @@ class RagflowClient:
 
     # NOTE: is_valid_source_type, ingest_document 제거됨 (Phase 25 internal_rag로 대체)
 
+    # ========================================
+    # Step 3: SourceSet 오케스트레이션용 메서드
+    # ========================================
+
+    async def get_document_status(
+        self,
+        dataset_id: str,
+        document_id: str,
+    ) -> Dict[str, Any]:
+        """
+        RAGFlow에서 문서 파싱 상태를 조회합니다.
+
+        GET /api/v1/datasets/{dataset_id}/documents?id={document_id}
+
+        Args:
+            dataset_id: RAGFlow 데이터셋 ID
+            document_id: RAGFlow 문서 ID
+
+        Returns:
+            Dict[str, Any]: 문서 상태 정보
+                - id: 문서 ID
+                - name: 파일명
+                - run: 상태 (UNSTART, RUNNING, CANCEL, DONE, FAIL)
+                - progress: 진행률 (0.0 ~ 1.0)
+                - chunk_count: 생성된 청크 수
+                - token_count: 토큰 수
+
+        Raises:
+            RagflowError: API 호출 실패 시
+        """
+        if not self._base_url:
+            raise RagflowError("RAGFLOW_BASE_URL is not configured")
+
+        url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
+        params = {"id": document_id}
+        headers = self._get_auth_headers()
+
+        try:
+            response = await self._client.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("code") != 0:
+                raise RagflowError(f"RAGFlow API error: {data.get('message', 'Unknown error')}")
+
+            docs = data.get("data", {}).get("docs", [])
+            if not docs:
+                raise RagflowError(f"Document not found: {document_id}")
+
+            return docs[0]
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"RAGFlow get_document_status HTTP error: {e.response.status_code}")
+            raise RagflowError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+
+        except httpx.RequestError as e:
+            logger.error(f"RAGFlow get_document_status request error: {e}")
+            raise RagflowConnectionError(f"Connection failed: {type(e).__name__}")
+
+    async def get_document_chunks(
+        self,
+        dataset_id: str,
+        document_id: str,
+        page: int = 1,
+        page_size: int = 1000,
+    ) -> Dict[str, Any]:
+        """
+        RAGFlow에서 문서의 청크 목록을 조회합니다.
+
+        GET /api/v1/datasets/{dataset_id}/documents/{document_id}/chunks
+
+        Args:
+            dataset_id: RAGFlow 데이터셋 ID
+            document_id: RAGFlow 문서 ID
+            page: 페이지 번호 (1부터 시작)
+            page_size: 페이지당 청크 수 (기본 1000)
+
+        Returns:
+            Dict[str, Any]: 청크 목록 정보
+                - total: 전체 청크 수
+                - chunks: 청크 리스트
+                    - id: RAGFlow 청크 ID
+                    - content: 청크 텍스트
+                    - document_id: 문서 ID
+                    - positions: [[page, x1, y1, x2, y2], ...]
+                    - important_keywords: [...]
+                    - questions: [...]
+
+        Raises:
+            RagflowError: API 호출 실패 시
+        """
+        if not self._base_url:
+            raise RagflowError("RAGFLOW_BASE_URL is not configured")
+
+        url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks"
+        params = {"page": page, "page_size": page_size}
+        headers = self._get_auth_headers()
+
+        try:
+            response = await self._client.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("code") != 0:
+                raise RagflowError(f"RAGFlow API error: {data.get('message', 'Unknown error')}")
+
+            return data.get("data", {"total": 0, "chunks": []})
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"RAGFlow get_document_chunks HTTP error: {e.response.status_code}")
+            raise RagflowError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+
+        except httpx.RequestError as e:
+            logger.error(f"RAGFlow get_document_chunks request error: {e}")
+            raise RagflowConnectionError(f"Connection failed: {type(e).__name__}")
+
+    async def trigger_parsing(
+        self,
+        dataset_id: str,
+        document_ids: List[str],
+    ) -> bool:
+        """
+        RAGFlow에서 문서 파싱을 트리거합니다.
+
+        POST /api/v1/datasets/{dataset_id}/chunks
+        Body: {"document_ids": [...]}
+
+        Args:
+            dataset_id: RAGFlow 데이터셋 ID
+            document_ids: 파싱할 문서 ID 리스트
+
+        Returns:
+            bool: 트리거 성공 여부
+
+        Raises:
+            RagflowError: API 호출 실패 시
+        """
+        if not self._base_url:
+            raise RagflowError("RAGFLOW_BASE_URL is not configured")
+
+        url = f"{self._base_url}/api/v1/datasets/{dataset_id}/chunks"
+        headers = self._get_auth_headers()
+        headers["Content-Type"] = "application/json"
+        payload = {"document_ids": document_ids}
+
+        logger.info(f"Triggering RAGFlow parsing: dataset={dataset_id}, docs={document_ids}")
+
+        try:
+            response = await self._client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("code") != 0:
+                raise RagflowError(f"RAGFlow API error: {data.get('message', 'Unknown error')}")
+
+            logger.info(f"RAGFlow parsing triggered successfully: {document_ids}")
+            return True
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"RAGFlow trigger_parsing HTTP error: {e.response.status_code}")
+            raise RagflowError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+
+        except httpx.RequestError as e:
+            logger.error(f"RAGFlow trigger_parsing request error: {e}")
+            raise RagflowConnectionError(f"Connection failed: {type(e).__name__}")
+
+    async def upload_document(
+        self,
+        dataset_id: str,
+        file_url: str,
+        file_name: str,
+    ) -> Dict[str, Any]:
+        """
+        RAGFlow 데이터셋에 문서를 업로드합니다.
+
+        POST /api/v1/datasets/{dataset_id}/documents
+        (URL 기반 업로드 또는 파일 업로드)
+
+        Args:
+            dataset_id: RAGFlow 데이터셋 ID
+            file_url: 문서 파일 URL (S3 presigned URL 등)
+            file_name: 파일명
+
+        Returns:
+            Dict[str, Any]: 업로드된 문서 정보
+                - id: RAGFlow 문서 ID
+                - name: 파일명
+
+        Raises:
+            RagflowError: API 호출 실패 시
+        """
+        if not self._base_url:
+            raise RagflowError("RAGFLOW_BASE_URL is not configured")
+
+        # RAGFlow는 URL 기반 업로드를 직접 지원하지 않을 수 있음
+        # 이 경우 파일을 다운로드 후 multipart로 업로드해야 함
+        # TODO: RAGFlow API 스펙에 맞게 구현 필요
+
+        url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
+        headers = self._get_auth_headers()
+
+        logger.info(f"Uploading document to RAGFlow: dataset={dataset_id}, file={file_name}")
+
+        try:
+            # URL 기반 업로드 시도 (RAGFlow가 지원하는 경우)
+            # 지원하지 않으면 파일 다운로드 후 multipart 업로드 필요
+            async with httpx.AsyncClient() as download_client:
+                file_response = await download_client.get(file_url, timeout=60.0)
+                file_response.raise_for_status()
+                file_content = file_response.content
+
+            # Multipart 업로드
+            files = {"file": (file_name, file_content)}
+            response = await self._client.post(
+                url,
+                files=files,
+                headers=headers,
+                timeout=60.0,  # 업로드는 더 긴 타임아웃
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("code") != 0:
+                raise RagflowError(f"RAGFlow API error: {data.get('message', 'Unknown error')}")
+
+            docs = data.get("data", [])
+            if not docs:
+                raise RagflowError("Upload succeeded but no document info returned")
+
+            logger.info(f"Document uploaded to RAGFlow: {docs[0].get('id')}")
+            return docs[0]
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"RAGFlow upload_document HTTP error: {e.response.status_code}")
+            raise RagflowError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+
+        except httpx.RequestError as e:
+            logger.error(f"RAGFlow upload_document request error: {e}")
+            raise RagflowConnectionError(f"Connection failed: {type(e).__name__}")
+
 
 # =============================================================================
 # 싱글톤 인스턴스

@@ -28,7 +28,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.clients.backend_client import (
     BackendClient,
@@ -101,6 +101,7 @@ class DocumentProcessingResult:
     chunks_count: int = 0
     fail_chunks_count: int = 0
     fail_reason: Optional[str] = None
+    chunks: List[Dict[str, Any]] = field(default_factory=list)  # Step 3: 스크립트 생성용
 
 
 # =============================================================================
@@ -252,14 +253,16 @@ class SourceSetOrchestrator:
                 f"Found {len(job.documents)} documents: source_set_id={source_set_id}"
             )
 
-            # 2. 각 문서 처리
-            all_chunks: List[Dict[str, Any]] = []
+            # 2. 각 문서 처리 및 청크 수집
+            all_document_chunks: Dict[str, List[Dict[str, Any]]] = {}  # doc_id → chunks
             document_results: List[DocumentResult] = []
+            processing_results: List[DocumentProcessingResult] = []
             has_failure = False
 
             for doc in job.documents:
                 try:
                     result = await self._process_document(source_set_id, doc, job)
+                    processing_results.append(result)
                     document_results.append(
                         DocumentResult(
                             document_id=doc.document_id,
@@ -267,6 +270,8 @@ class SourceSetOrchestrator:
                             fail_reason=result.fail_reason,
                         )
                     )
+                    if result.success and result.chunks:
+                        all_document_chunks[doc.document_id] = result.chunks
                     if not result.success:
                         has_failure = True
                 except Exception as e:
@@ -293,9 +298,19 @@ class SourceSetOrchestrator:
                 )
                 return
 
-            # 4. 스크립트 생성
-            logger.info(f"Generating script: source_set_id={source_set_id}")
-            script = await self._generate_script(job)
+            # 4. 청크가 없으면 실패 처리
+            total_chunks = sum(len(chunks) for chunks in all_document_chunks.values())
+            if total_chunks == 0:
+                await self._send_failure_callback(
+                    job,
+                    error_code="NO_CHUNKS_GENERATED",
+                    error_message="문서 처리는 성공했으나 청크가 생성되지 않았습니다.",
+                )
+                return
+
+            # 5. 스크립트 생성
+            logger.info(f"Generating script: source_set_id={source_set_id}, total_chunks={total_chunks}")
+            script = await self._generate_script(job, all_document_chunks)
             job.generated_script = script
 
             # 5. 성공 콜백 전송
@@ -342,12 +357,13 @@ class SourceSetOrchestrator:
         doc: SourceSetDocument,
         job: ProcessingJob,
     ) -> DocumentProcessingResult:
-        """개별 문서를 RAGFlow로 처리합니다.
+        """개별 문서를 RAGFlow로 처리합니다 (Step 3 구현).
 
-        1. RAGFlow에 ingest 요청
-        2. 처리 결과 (청크) 수신
-        3. Milvus에 벡터 저장 (RAGFlow가 처리)
-        4. Spring DB에 chunk_text 저장
+        1. RAGFlow에 문서 업로드
+        2. 파싱 트리거
+        3. Polling으로 완료 대기 (DONE/FAIL/CANCEL)
+        4. 완료 시 청크 조회
+        5. Spring DB에 chunk_text + chunk_meta 저장
 
         Args:
             source_set_id: 소스셋 ID
@@ -357,64 +373,234 @@ class SourceSetOrchestrator:
         Returns:
             DocumentProcessingResult: 처리 결과
         """
+        from app.core.config import get_settings
+        from app.clients.ragflow_client import RagflowError, RagflowConnectionError
+
+        settings = get_settings()
         logger.info(
             f"Processing document: source_set_id={source_set_id}, "
-            f"doc_id={doc.document_id}"
+            f"doc_id={doc.document_id}, url={doc.source_url[:50]}..."
         )
 
         try:
-            # 1. RAGFlow에 문서 처리 요청
-            from app.models.rag import RagProcessRequest
+            # dataset_id 결정 (domain → dataset_id 매핑)
+            dataset_id = self._ragflow_client._dataset_to_kb_id(doc.domain)
 
-            rag_request = RagProcessRequest(
-                doc_id=doc.document_id,
+            # 1. RAGFlow에 문서 업로드
+            logger.info(f"Uploading document to RAGFlow: doc_id={doc.document_id}")
+            file_name = doc.source_url.split("/")[-1].split("?")[0] or f"{doc.document_id}.pdf"
+
+            upload_result = await self._ragflow_client.upload_document(
+                dataset_id=dataset_id,
                 file_url=doc.source_url,
-                domain=doc.domain,
+                file_name=file_name,
             )
+            ragflow_doc_id = upload_result.get("id")
 
-            response = await self._ragflow_client.process_document_request(rag_request)
-
-            if not response.success:
-                logger.warning(
-                    f"RAGFlow processing failed: doc_id={doc.document_id}, "
-                    f"message={response.message}"
-                )
+            if not ragflow_doc_id:
                 return DocumentProcessingResult(
                     document_id=doc.document_id,
                     success=False,
-                    fail_reason=response.message,
+                    fail_reason="RAGFlow document upload failed: no document ID returned",
                 )
 
-            # 2. 청크 텍스트를 Spring DB에 저장
-            # NOTE: RAGFlow가 처리 완료 시 청크 정보를 반환하거나,
-            # 별도의 API로 청크를 조회해야 함.
-            # 현재는 RAGFlow 응답에 청크 정보가 없으므로 스킵.
-            # 실제 구현 시 RAGFlow의 청크 반환 API 연동 필요.
+            logger.info(f"Document uploaded: doc_id={doc.document_id}, ragflow_id={ragflow_doc_id}")
 
-            # 임시: 청크 저장 시뮬레이션
-            # TODO: RAGFlow에서 청크 정보 반환 시 아래 로직 활성화
-            # chunks = await self._get_chunks_from_ragflow(doc.document_id)
-            # await self._save_chunks_to_backend(doc.document_id, chunks, job)
+            # 2. 파싱 트리거
+            await self._ragflow_client.trigger_parsing(
+                dataset_id=dataset_id,
+                document_ids=[ragflow_doc_id],
+            )
+
+            # 3. Polling으로 완료 대기
+            final_status, chunk_count = await self._poll_document_status(
+                dataset_id=dataset_id,
+                document_id=ragflow_doc_id,
+                poll_interval=settings.RAGFLOW_POLL_INTERVAL_SEC,
+                timeout=settings.RAGFLOW_POLL_TIMEOUT_SEC,
+            )
+
+            if final_status != "DONE":
+                fail_reason = f"RAGFlow parsing {final_status}"
+                logger.warning(f"Document parsing failed: doc_id={doc.document_id}, status={final_status}")
+                return DocumentProcessingResult(
+                    document_id=doc.document_id,
+                    success=False,
+                    fail_reason=fail_reason,
+                )
+
+            # 4. 청크 조회
+            logger.info(f"Fetching chunks: doc_id={doc.document_id}, count={chunk_count}")
+            chunks = await self._fetch_all_chunks(
+                dataset_id=dataset_id,
+                document_id=ragflow_doc_id,
+                page_size=settings.RAGFLOW_CHUNK_PAGE_SIZE,
+            )
+
+            if not chunks:
+                logger.warning(f"No chunks found: doc_id={doc.document_id}")
+                return DocumentProcessingResult(
+                    document_id=doc.document_id,
+                    success=False,
+                    fail_reason="RAGFlow parsing completed but no chunks generated",
+                )
+
+            # 5. Spring DB에 청크 저장
+            await self._save_chunks_to_backend(doc.document_id, chunks, job)
 
             logger.info(
-                f"Document processed via RAGFlow: doc_id={doc.document_id}"
+                f"Document processed: doc_id={doc.document_id}, chunks={len(chunks)}"
             )
 
             return DocumentProcessingResult(
                 document_id=doc.document_id,
                 success=True,
-                chunks_count=0,  # TODO: 실제 청크 수
+                chunks_count=len(chunks),
+                chunks=chunks,  # 스크립트 생성용으로 청크 포함
+            )
+
+        except RagflowConnectionError as e:
+            logger.error(f"RAGFlow connection error: doc_id={doc.document_id}, error={e}")
+            return DocumentProcessingResult(
+                document_id=doc.document_id,
+                success=False,
+                fail_reason=f"RAGFlow connection failed: {str(e)[:100]}",
+            )
+
+        except RagflowError as e:
+            logger.error(f"RAGFlow error: doc_id={doc.document_id}, error={e}")
+            return DocumentProcessingResult(
+                document_id=doc.document_id,
+                success=False,
+                fail_reason=f"RAGFlow error: {str(e)[:100]}",
             )
 
         except Exception as e:
-            logger.error(
-                f"Document processing error: doc_id={doc.document_id}, error={e}"
-            )
+            logger.exception(f"Document processing error: doc_id={doc.document_id}")
             return DocumentProcessingResult(
                 document_id=doc.document_id,
                 success=False,
                 fail_reason=str(e)[:200],
             )
+
+    async def _poll_document_status(
+        self,
+        dataset_id: str,
+        document_id: str,
+        poll_interval: float = 3.0,
+        timeout: float = 900.0,
+    ) -> Tuple[str, int]:
+        """RAGFlow 문서 파싱 완료를 폴링합니다.
+
+        Args:
+            dataset_id: RAGFlow 데이터셋 ID
+            document_id: RAGFlow 문서 ID
+            poll_interval: 폴링 간격 (초)
+            timeout: 최대 대기 시간 (초)
+
+        Returns:
+            Tuple[str, int]: (최종 상태, 청크 수)
+                - 상태: DONE, FAIL, CANCEL, TIMEOUT
+        """
+        import time
+        start_time = time.time()
+        terminal_states = {"DONE", "FAIL", "CANCEL"}
+
+        logger.info(
+            f"Starting polling: dataset={dataset_id}, doc={document_id}, "
+            f"interval={poll_interval}s, timeout={timeout}s"
+        )
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed >= timeout:
+                logger.warning(f"Polling timeout: doc={document_id}, elapsed={elapsed:.1f}s")
+                return ("TIMEOUT", 0)
+
+            try:
+                status_info = await self._ragflow_client.get_document_status(
+                    dataset_id=dataset_id,
+                    document_id=document_id,
+                )
+
+                run_status = status_info.get("run", "UNSTART")
+                progress = status_info.get("progress", 0.0)
+                chunk_count = status_info.get("chunk_count", 0)
+
+                logger.debug(
+                    f"Polling status: doc={document_id}, run={run_status}, "
+                    f"progress={progress:.1%}, chunks={chunk_count}"
+                )
+
+                if run_status in terminal_states:
+                    logger.info(
+                        f"Polling complete: doc={document_id}, status={run_status}, "
+                        f"chunks={chunk_count}, elapsed={elapsed:.1f}s"
+                    )
+                    return (run_status, chunk_count)
+
+            except Exception as e:
+                logger.warning(f"Polling error (will retry): doc={document_id}, error={e}")
+
+            await asyncio.sleep(poll_interval)
+
+    async def _fetch_all_chunks(
+        self,
+        dataset_id: str,
+        document_id: str,
+        page_size: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """RAGFlow에서 모든 청크를 조회합니다 (페이지네이션 지원).
+
+        Args:
+            dataset_id: RAGFlow 데이터셋 ID
+            document_id: RAGFlow 문서 ID
+            page_size: 페이지당 청크 수
+
+        Returns:
+            List[Dict[str, Any]]: 청크 리스트 (chunkIndex 포함)
+        """
+        all_chunks: List[Dict[str, Any]] = []
+        page = 1
+
+        while True:
+            result = await self._ragflow_client.get_document_chunks(
+                dataset_id=dataset_id,
+                document_id=document_id,
+                page=page,
+                page_size=page_size,
+            )
+
+            chunks = result.get("chunks", [])
+            total = result.get("total", 0)
+
+            if not chunks:
+                break
+
+            # 청크 인덱스 부여 (0부터 시작, 응답 순서 기준)
+            for chunk in chunks:
+                chunk_index = len(all_chunks)
+                all_chunks.append({
+                    "chunk_index": chunk_index,
+                    "chunk_text": chunk.get("content", ""),
+                    "chunk_meta": {
+                        "ragflow_chunk_id": chunk.get("id"),
+                        "positions": chunk.get("positions", []),
+                        "important_keywords": chunk.get("important_keywords", []),
+                        "questions": chunk.get("questions", []),
+                        "image_id": chunk.get("image_id", ""),
+                        "docnm_kwd": chunk.get("docnm_kwd", ""),
+                    },
+                })
+
+            # 모든 페이지 조회 완료 확인
+            if len(all_chunks) >= total:
+                break
+
+            page += 1
+
+        logger.info(f"Fetched {len(all_chunks)} chunks from RAGFlow")
+        return all_chunks
 
     async def _save_chunks_to_backend(
         self,
@@ -497,40 +683,221 @@ class SourceSetOrchestrator:
     # Script Generation
     # =========================================================================
 
-    async def _generate_script(self, job: ProcessingJob) -> GeneratedScript:
-        """스크립트를 생성합니다.
-
-        TODO: 실제 LLM 연동 구현 필요
-        현재는 더미 스크립트 반환
+    async def _generate_script(
+        self,
+        job: ProcessingJob,
+        document_chunks: Dict[str, List[Dict[str, Any]]],
+    ) -> GeneratedScript:
+        """스크립트를 생성합니다 (Step 3: LLM 연동).
 
         Args:
             job: 처리 작업 상태
+            document_chunks: 문서별 청크 (doc_id → chunks)
 
         Returns:
             GeneratedScript: 생성된 스크립트
         """
-        # TODO: 실제 구현 시 기존 video_script_generation_service 활용 또는
-        # LLM 직접 호출하여 스크립트 생성
+        from app.clients.llm_client import LLMClient
+        from app.core.config import get_settings
+        import json
 
+        settings = get_settings()
         script_id = f"script-{uuid.uuid4().hex[:12]}"
 
-        # 더미 스크립트 생성
+        # 1. 청크 텍스트를 하나의 컨텍스트로 합치기
+        context_parts = []
+        chunk_mapping: List[Tuple[str, int]] = []  # (doc_id, chunk_index) for sourceRefs
+
+        for doc_id, chunks in document_chunks.items():
+            doc_title = next(
+                (d.title for d in job.documents if d.document_id == doc_id),
+                "문서"
+            )
+            context_parts.append(f"\n### 문서: {doc_title}\n")
+            for chunk in chunks:
+                chunk_index = chunk.get("chunk_index", 0)
+                chunk_text = chunk.get("chunk_text", "")
+                if chunk_text.strip():
+                    context_parts.append(f"[청크 {len(chunk_mapping)}] {chunk_text}\n")
+                    chunk_mapping.append((doc_id, chunk_index))
+
+        full_context = "".join(context_parts)
+
+        # 2. LLM 프롬프트 구성
+        system_prompt = """당신은 법정의무교육 영상 스크립트 전문 작성자입니다.
+주어진 교육 자료를 바탕으로 교육 영상 스크립트를 JSON 형식으로 생성해주세요.
+
+출력 JSON 스키마:
+{
+  "title": "교육 제목",
+  "chapters": [
+    {
+      "chapter_index": 1,
+      "title": "챕터 제목",
+      "scenes": [
+        {
+          "scene_index": 1,
+          "purpose": "씬 목적 (도입/설명/사례/정리 등)",
+          "narration": "나레이션 텍스트",
+          "caption": "화면 자막",
+          "visual": "시각 자료 설명",
+          "duration_sec": 15,
+          "source_chunk_indexes": [0, 1]
+        }
+      ]
+    }
+  ]
+}
+
+중요 규칙:
+1. 나레이션은 자연스러운 구어체로 작성
+2. 각 씬은 10-30초 분량으로 구성
+3. source_chunk_indexes에는 해당 씬의 내용과 관련된 청크 번호([청크 N])를 기재
+4. 전체 영상 길이는 3-10분 목표
+5. 반드시 유효한 JSON만 출력 (설명 없이)"""
+
+        user_prompt = f"""다음 교육 자료를 바탕으로 교육 영상 스크립트를 생성해주세요:
+
+{full_context[:15000]}  # 토큰 제한 고려
+
+JSON 스크립트:"""
+
+        # 3. LLM 호출
+        llm_client = LLMClient()
+        model = job.llm_model_hint or "qwen2.5-14b-instruct"
+
+        try:
+            response = await llm_client.generate_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                model=model,
+                temperature=0.3,
+                max_tokens=4096,
+            )
+
+            # 4. JSON 파싱
+            script_json = self._parse_script_json(response)
+
+            if not script_json:
+                logger.warning("Failed to parse LLM response, using fallback")
+                return self._generate_fallback_script(job, document_chunks)
+
+            # 5. GeneratedScript 모델로 변환 (sourceRefs 후처리)
+            chapters = []
+            total_duration = 0.0
+
+            for ch_idx, chapter_data in enumerate(script_json.get("chapters", [])):
+                scenes = []
+                chapter_duration = 0.0
+
+                for sc_idx, scene_data in enumerate(chapter_data.get("scenes", [])):
+                    duration = scene_data.get("duration_sec", 15.0)
+                    chapter_duration += duration
+
+                    # sourceRefs 후처리: source_chunk_indexes → SourceRef 변환
+                    source_refs = []
+                    for chunk_idx in scene_data.get("source_chunk_indexes", []):
+                        if 0 <= chunk_idx < len(chunk_mapping):
+                            doc_id, original_idx = chunk_mapping[chunk_idx]
+                            source_refs.append(SourceRef(
+                                document_id=doc_id,
+                                chunk_index=original_idx,
+                            ))
+
+                    scenes.append(GeneratedScene(
+                        scene_id=f"scene-{uuid.uuid4().hex[:8]}",
+                        scene_index=sc_idx + 1,
+                        purpose=scene_data.get("purpose", ""),
+                        narration=scene_data.get("narration", ""),
+                        caption=scene_data.get("caption"),
+                        visual=scene_data.get("visual"),
+                        duration_sec=duration,
+                        confidence_score=0.8,
+                        source_refs=source_refs,
+                    ))
+
+                total_duration += chapter_duration
+                chapters.append(GeneratedChapter(
+                    chapter_id=f"chapter-{uuid.uuid4().hex[:8]}",
+                    chapter_index=ch_idx + 1,
+                    title=chapter_data.get("title", f"챕터 {ch_idx + 1}"),
+                    duration_sec=chapter_duration,
+                    scenes=scenes,
+                ))
+
+            script = GeneratedScript(
+                script_id=script_id,
+                education_id=job.education_id,
+                source_set_id=job.source_set_id,
+                title=script_json.get("title", "교육 스크립트"),
+                total_duration_sec=total_duration,
+                version=1,
+                llm_model=model,
+                chapters=chapters,
+            )
+
+            logger.info(
+                f"Script generated: script_id={script_id}, "
+                f"chapters={len(chapters)}, duration={total_duration:.1f}s"
+            )
+
+            return script
+
+        except Exception as e:
+            logger.exception(f"LLM script generation failed: {e}")
+            return self._generate_fallback_script(job, document_chunks)
+
+    def _parse_script_json(self, response: str) -> Optional[Dict[str, Any]]:
+        """LLM 응답에서 JSON을 파싱합니다."""
+        import json
+        import re
+
+        # JSON 블록 추출 시도
+        json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+        if json_match:
+            response = json_match.group(1)
+
+        # { } 블록 추출
+        brace_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if brace_match:
+            response = brace_match.group(0)
+
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse error: {e}")
+            return None
+
+    def _generate_fallback_script(
+        self,
+        job: ProcessingJob,
+        document_chunks: Dict[str, List[Dict[str, Any]]],
+    ) -> GeneratedScript:
+        """LLM 실패 시 폴백 스크립트를 생성합니다."""
+        script_id = f"script-{uuid.uuid4().hex[:12]}"
+
+        # 첫 번째 문서의 첫 번째 청크로 기본 씬 생성
+        first_doc_id = list(document_chunks.keys())[0] if document_chunks else None
+        first_chunk = document_chunks.get(first_doc_id, [{}])[0] if first_doc_id else {}
+
         scenes = [
             GeneratedScene(
                 scene_id=f"scene-{uuid.uuid4().hex[:8]}",
                 scene_index=1,
                 purpose="도입",
-                narration="안녕하세요. 오늘은 법정의무교육에 대해 알아보겠습니다.",
-                caption="법정의무교육 소개",
+                narration=first_chunk.get("chunk_text", "교육 내용을 시작합니다.")[:200],
+                caption="교육 시작",
                 visual="타이틀 슬라이드",
                 duration_sec=15.0,
-                confidence_score=0.85,
+                confidence_score=0.5,
                 source_refs=[
                     SourceRef(
-                        document_id=job.documents[0].document_id if job.documents else "unknown",
+                        document_id=first_doc_id or "unknown",
                         chunk_index=0,
                     )
-                ],
+                ] if first_doc_id else [],
             ),
         ]
 
@@ -538,26 +905,22 @@ class SourceSetOrchestrator:
             GeneratedChapter(
                 chapter_id=f"chapter-{uuid.uuid4().hex[:8]}",
                 chapter_index=1,
-                title="도입",
+                title="교육 내용",
                 duration_sec=15.0,
                 scenes=scenes,
             ),
         ]
 
-        script = GeneratedScript(
+        return GeneratedScript(
             script_id=script_id,
             education_id=job.education_id,
             source_set_id=job.source_set_id,
-            title="법정의무교육 스크립트",
+            title="교육 스크립트 (자동 생성 실패 - 폴백)",
             total_duration_sec=15.0,
             version=1,
-            llm_model=job.llm_model_hint or "default",
+            llm_model="fallback",
             chapters=chapters,
         )
-
-        logger.info(f"Script generated: script_id={script_id}")
-
-        return script
 
     # =========================================================================
     # Callbacks

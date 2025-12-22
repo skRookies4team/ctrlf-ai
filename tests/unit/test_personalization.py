@@ -446,12 +446,12 @@ class TestOrchestratorPersonalization:
         assert result.router_result.tier0_intent == Tier0Intent.BACKEND_STATUS
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not bool(__import__("os").environ.get("LLM_BASE_URL")),
-        reason="Requires LLM to be configured for intent classification"
-    )
     async def test_quiz_comparison_requires_clarify(self):
         """퀴즈 비교 조회는 되묻기가 필요함."""
+        import os
+        if not os.environ.get("LLM_BASE_URL"):
+            pytest.skip("Requires LLM to be configured for intent classification")
+
         from app.services.router_orchestrator import RouterOrchestrator
 
         orchestrator = RouterOrchestrator()
