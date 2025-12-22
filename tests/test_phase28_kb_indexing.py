@@ -129,7 +129,7 @@ def succeeded_job():
         job_id="job-001",
         video_id="video-001",
         script_id="script-001",
-        status=RenderJobStatus.SUCCEEDED,
+        status=RenderJobStatus.COMPLETED,
         requested_by="reviewer-001",
         finished_at=datetime.utcnow(),
     )
@@ -179,7 +179,7 @@ class TestPublishSuccess:
         assert script is not None
         assert script.is_approved()
         assert job is not None
-        assert job.status == RenderJobStatus.SUCCEEDED
+        assert job.status == RenderJobStatus.COMPLETED
 
     def test_publish_changes_status_to_published(
         self, render_service, approved_script, succeeded_job
@@ -231,14 +231,14 @@ class TestPublishValidation:
     def test_publish_fails_when_job_pending(
         self, render_service, approved_script
     ):
-        """렌더 잡이 PENDING이면 발행 실패."""
+        """렌더 잡이 QUEUED이면 발행 실패."""
         # Given
         render_service._script_store.save(approved_script)
         pending_job = VideoRenderJob(
             job_id="job-pending",
             video_id="video-001",
             script_id="script-001",
-            status=RenderJobStatus.PENDING,
+            status=RenderJobStatus.QUEUED,
             requested_by="reviewer-001",
         )
         render_service._job_store.save(pending_job)

@@ -365,7 +365,7 @@ class TestWebSocketProgress:
         event = RenderProgressEvent.create(
             job_id="job-123",
             video_id="video-456",
-            status=RenderJobStatus.RUNNING,
+            status=RenderJobStatus.PROCESSING,
             step=RenderStep.GENERATE_TTS,
             progress=25,
             message="TTS 생성 중...",
@@ -373,7 +373,7 @@ class TestWebSocketProgress:
 
         assert event.job_id == "job-123"
         assert event.video_id == "video-456"
-        assert event.status == "RUNNING"
+        assert event.status == "PROCESSING"
         assert event.step == "GENERATE_TTS"
         assert event.progress == 25
         assert event.timestamp.endswith("Z")
@@ -579,4 +579,4 @@ class TestRegression:
         )
         # V2는 202 (created) 또는 200 (existing) 반환
         assert render_resp.status_code in (200, 202)
-        assert render_resp.json()["status"] in ("PENDING", "RUNNING")
+        assert render_resp.json()["status"] in ("QUEUED", "PROCESSING")

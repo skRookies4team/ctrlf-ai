@@ -337,7 +337,7 @@ class TestRenderJobRunnerStartJob:
             job_id="job-001",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
         )
         mock_repository.save(job)
 
@@ -411,7 +411,7 @@ class TestRenderJobRunnerStartJob:
             job_id="job-003",
             video_id="video-003",
             script_id="script-003",
-            status="RUNNING",
+            status="PROCESSING",
             render_spec_json=sample_render_spec_response,
         )
         mock_repository.save(job)
@@ -428,7 +428,7 @@ class TestRenderJobRunnerStartJob:
 
         # 검증: 시작되지 않음 (idempotent)
         assert result.started is False
-        assert "already RUNNING" in result.message
+        assert "already PROCESSING" in result.message or "already RUNNING" in result.message
         mock_client.get_render_spec.assert_not_called()
 
     @pytest.mark.asyncio
@@ -438,7 +438,7 @@ class TestRenderJobRunnerStartJob:
             job_id="job-404",
             video_id="video-404",
             script_id="script-not-found",
-            status="PENDING",
+            status="QUEUED",
         )
         mock_repository.save(job)
 
@@ -476,7 +476,7 @@ class TestRenderJobRunnerStartJob:
             job_id="job-401",
             video_id="video-401",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
         )
         mock_repository.save(job)
 
@@ -511,7 +511,7 @@ class TestRenderJobRunnerStartJob:
             job_id="job-500",
             video_id="video-500",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
         )
         mock_repository.save(job)
 
@@ -546,7 +546,7 @@ class TestRenderJobRunnerStartJob:
             job_id="job-empty",
             video_id="video-empty",
             script_id="script-empty",
-            status="PENDING",
+            status="QUEUED",
         )
         mock_repository.save(job)
 
@@ -626,7 +626,7 @@ class TestRenderJobRepository:
             job_id="job-repo-001",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
             render_spec_json=sample_render_spec_response,
         )
         mock_repository.save(job)
@@ -645,7 +645,7 @@ class TestRenderJobRepository:
             job_id="job-repo-002",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
         )
         mock_repository.save(job)
 
@@ -668,7 +668,7 @@ class TestRenderJobRepository:
             job_id="job-repo-003",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
             render_spec_json=None,
         )
         mock_repository.save(job)
@@ -682,7 +682,7 @@ class TestRenderJobRepository:
             job_id="job-repo-004",
             video_id="video-001",
             script_id="script-001",
-            status="PENDING",
+            status="QUEUED",
             render_spec_json={},
         )
         mock_repository.save(job)
