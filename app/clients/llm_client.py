@@ -388,3 +388,36 @@ class LLMClient:
         resp = await self._client.post(url, json=payload)
         resp.raise_for_status()
         return resp.json()
+
+
+# =============================================================================
+# 싱글톤 인스턴스
+# =============================================================================
+
+_llm_client: Optional["LLMClient"] = None
+
+
+def get_llm_client() -> "LLMClient":
+    """
+    LLMClient 싱글톤 인스턴스를 반환합니다.
+
+    첫 호출 시 인스턴스를 생성하고, 이후에는 동일 인스턴스를 반환합니다.
+    테스트에서는 clear_llm_client()로 초기화할 수 있습니다.
+
+    Returns:
+        LLMClient: 싱글톤 클라이언트 인스턴스
+    """
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LLMClient()
+    return _llm_client
+
+
+def clear_llm_client() -> None:
+    """
+    LLMClient 싱글톤 인스턴스를 제거합니다 (테스트용).
+
+    테스트 격리를 위해 각 테스트 후 호출하여 싱글톤을 초기화합니다.
+    """
+    global _llm_client
+    _llm_client = None
