@@ -289,3 +289,36 @@ class PiiService:
             has_pii=False,
             tags=[],
         )
+
+
+# =============================================================================
+# 싱글톤 인스턴스
+# =============================================================================
+
+_pii_service: Optional["PiiService"] = None
+
+
+def get_pii_service() -> "PiiService":
+    """
+    PiiService 싱글톤 인스턴스를 반환합니다.
+
+    첫 호출 시 인스턴스를 생성하고, 이후에는 동일 인스턴스를 반환합니다.
+    테스트에서는 clear_pii_service()로 초기화할 수 있습니다.
+
+    Returns:
+        PiiService: 싱글톤 서비스 인스턴스
+    """
+    global _pii_service
+    if _pii_service is None:
+        _pii_service = PiiService()
+    return _pii_service
+
+
+def clear_pii_service() -> None:
+    """
+    PiiService 싱글톤 인스턴스를 제거합니다 (테스트용).
+
+    테스트 격리를 위해 각 테스트 후 호출하여 싱글톤을 초기화합니다.
+    """
+    global _pii_service
+    _pii_service = None
