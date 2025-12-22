@@ -380,27 +380,29 @@ async def test_chat_service_no_rag_results(
 
 
 # =============================================================================
-# 시나리오 3: RAG 호출 실패 (Fallback)
+# 시나리오 3: RAG 호출 실패 → 503 에러 (Phase 42 A안 확정)
 # =============================================================================
 
 
 @pytest.mark.anyio
-async def test_chat_service_rag_failure_fallback(
+async def test_chat_service_rag_failure_raises_error(
     sample_chat_request: ChatRequest,
 ) -> None:
     """
-    시나리오 3: RAG 호출 실패 시 Fallback
+    시나리오 3: RAG 호출 실패 시 RagSearchUnavailableError 발생
+
+    Phase 42 (A안 확정):
+    - RAGFlow 장애 시 fallback 없이 예외 발생
+    - API 레벨에서 503 Service Unavailable 반환
 
     Given:
         - RagflowClient.search에서 예외 발생
 
     Then:
-        - RAG 없이 LLM-only로 진행
-        - response.sources == []
-        - meta.rag_used == False
-        - meta.rag_source_count == 0
-        - answer는 빈 문자열이 아님 (LLM 응답)
+        - RagSearchUnavailableError 예외 발생
     """
+    from app.services.chat.rag_handler import RagSearchUnavailableError
+
     # Arrange
     fake_ragflow = FakeRagflowClient(documents=[], should_fail=True)
     fake_llm = FakeLLMClient(response="RAG 없이 생성된 응답입니다.")
@@ -416,21 +418,9 @@ async def test_chat_service_rag_failure_fallback(
         intent_service=fake_intent,
     )
 
-    # Act
-    response = await service.handle_chat(sample_chat_request)
-
-    # Assert
-    assert response.sources == []
-    assert response.meta.rag_used is False
-    assert response.meta.rag_source_count == 0
-    assert response.answer != ""
-
-    # Phase 39: RAG 실패 시 AnswerGuard가 no-evidence 템플릿 반환
-    # LLM 응답 대신 "찾지 못했" 템플릿이 나옴
-    assert "찾지 못했" in response.answer or "관련 내용을" in response.answer
-
-    # RAG 실패해도 route는 원래 의도대로 유지
-    assert response.meta.route == "RAG_INTERNAL"
+    # Act & Assert: A안에서는 RAG 실패 시 예외 발생
+    with pytest.raises(RagSearchUnavailableError):
+        await service.handle_chat(sample_chat_request)
 
 
 # =============================================================================

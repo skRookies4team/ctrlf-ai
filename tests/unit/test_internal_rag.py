@@ -233,34 +233,23 @@ class TestJobService:
 class TestInternalRagAPI:
     """Internal RAG API 엔드포인트 테스트."""
 
-    def test_index_endpoint_accepts_request(self):
-        """인덱싱 엔드포인트가 요청을 수락함."""
-        from app.models.internal_rag import InternalRagIndexResponse
+    def test_index_endpoint_returns_410_deprecated(self):
+        """인덱싱 엔드포인트가 410 Gone 반환 (Phase 42 A안 확정 - Deprecated)."""
+        response = client.post(
+            "/internal/rag/index",
+            json={
+                "documentId": "DOC-001",
+                "versionNo": 1,
+                "domain": "POLICY",
+                "fileUrl": "https://example.com/doc.pdf",
+                "jobId": "test-job",
+            },
+        )
 
-        with patch("app.api.v1.internal_rag.get_indexing_service") as mock_get:
-            mock_service = MagicMock()
-            mock_service.index_document = AsyncMock(return_value=InternalRagIndexResponse(
-                job_id="test-job",
-                status=JobStatus.QUEUED,
-                message="Job queued",
-            ))
-            mock_get.return_value = mock_service
-
-            response = client.post(
-                "/internal/rag/index",
-                json={
-                    "documentId": "DOC-001",
-                    "versionNo": 1,
-                    "domain": "POLICY",
-                    "fileUrl": "https://example.com/doc.pdf",
-                    "jobId": "test-job",
-                },
-            )
-
-            assert response.status_code == 202
-            data = response.json()
-            assert data["jobId"] == "test-job"
-            assert data["status"] == "queued"
+        assert response.status_code == 410
+        data = response.json()
+        assert data["detail"]["error"] == "ENDPOINT_DEPRECATED"
+        assert "alternative" in data["detail"]
 
     def test_delete_endpoint_success(self):
         """삭제 엔드포인트 성공 테스트."""

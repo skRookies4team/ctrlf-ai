@@ -398,40 +398,29 @@ class TestInternalRagAPI:
     """Internal RAG API 엔드포인트 테스트."""
 
     @pytest.mark.asyncio
-    async def test_index_endpoint_returns_202(self):
-        """POST /internal/rag/index가 202 반환."""
+    async def test_index_endpoint_returns_410_deprecated(self):
+        """POST /internal/rag/index가 410 Gone 반환 (Phase 42 A안 확정 - Deprecated)."""
         from fastapi.testclient import TestClient
         from app.main import app
 
-        with patch("app.api.v1.internal_rag.get_indexing_service") as mock_get_svc:
-            mock_service = AsyncMock()
-            mock_service.index_document = AsyncMock(
-                return_value=InternalRagIndexResponse(
-                    job_id="job-api-001",
-                    status=JobStatus.QUEUED,
-                    message="Indexing job queued",
-                )
-            )
-            mock_get_svc.return_value = mock_service
+        client = TestClient(app)
+        response = client.post(
+            "/internal/rag/index",
+            json={
+                "documentId": "DOC-001",
+                "versionNo": 2,
+                "title": "Test",
+                "domain": "POLICY",
+                "fileUrl": "http://example.com/test.pdf",
+                "requestedBy": "user-001",
+                "jobId": "job-api-001",
+            },
+        )
 
-            client = TestClient(app)
-            response = client.post(
-                "/internal/rag/index",
-                json={
-                    "documentId": "DOC-001",
-                    "versionNo": 2,
-                    "title": "Test",
-                    "domain": "POLICY",
-                    "fileUrl": "http://example.com/test.pdf",
-                    "requestedBy": "user-001",
-                    "jobId": "job-api-001",
-                },
-            )
-
-            assert response.status_code == 202
-            data = response.json()
-            assert data["jobId"] == "job-api-001"
-            assert data["status"] == "queued"
+        assert response.status_code == 410
+        data = response.json()
+        assert data["detail"]["error"] == "ENDPOINT_DEPRECATED"
+        assert "alternative" in data["detail"]
 
     @pytest.mark.asyncio
     async def test_job_status_endpoint_returns_status(self):
