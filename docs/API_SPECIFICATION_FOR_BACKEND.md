@@ -207,107 +207,30 @@ POST /ai/chat/stream
 
 ---
 
-## 4. Internal RAG API (Phase 25)
+## 4. Internal RAG API (Phase 42 - REMOVED)
 
-RAGFlow를 우회하고 AI 서버가 Milvus에 직접 문서를 인덱싱/삭제합니다.
+> **⚠️ Phase 42 (2025-12-22)에서 제거됨**
+>
+> Direct Milvus 인덱싱 파이프라인이 제거되었습니다.
+> 모든 엔드포인트는 **410 Gone**을 반환합니다.
 
-### 4.1 문서 인덱싱 요청
+### 제거된 엔드포인트
 
-```
-POST /internal/rag/index
-```
+| Method | Endpoint | 대체 경로 |
+|--------|----------|-----------|
+| POST | `/internal/rag/index` | SourceSet Orchestrator → RAGFlow |
+| POST | `/internal/rag/delete` | SourceSet Orchestrator → RAGFlow |
+| GET | `/internal/jobs/{job_id}` | SourceSet Orchestrator 내부 관리 |
 
-**Request Body**
-```json
-{
-  "jobId": "job-uuid-001",
-  "documentId": "DOC-2025-00123",
-  "versionNo": 3,
-  "title": "인사규정 개정안",
-  "domain": "POLICY",
-  "fileUrl": "https://files.internal/documents/DOC-2025-00123.pdf",
-  "requestedBy": "admin@company.com"
-}
-```
+### 대체 API
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `jobId` | string | O | 작업 추적 ID (백엔드에서 생성) |
-| `documentId` | string | O | 문서 ID |
-| `versionNo` | int | O | 문서 버전 번호 |
-| `title` | string | X | 문서 제목 |
-| `domain` | string | O | 도메인: `POLICY`, `INCIDENT`, `EDUCATION` |
-| `fileUrl` | string | O | 문서 다운로드 URL |
-| `requestedBy` | string | X | 요청자 ID |
-
-**Response 202 Accepted**
-```json
-{
-  "jobId": "job-uuid-001",
-  "status": "queued",
-  "message": "Indexing job queued"
-}
-```
-
-### 4.2 문서 삭제 요청
+문서 인덱싱은 **SourceSet Orchestrator**를 통해 처리됩니다:
 
 ```
-POST /internal/rag/delete
+POST /internal/ai/source-sets/{sourceSetId}/start
 ```
 
-**Request Body**
-```json
-{
-  "jobId": "job-uuid-002",
-  "documentId": "DOC-2025-00123",
-  "versionNo": 3,
-  "domain": "POLICY",
-  "requestedBy": "admin@company.com"
-}
-```
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `jobId` | string | O | 작업 추적 ID |
-| `documentId` | string | O | 삭제할 문서 ID |
-| `versionNo` | int | X | 특정 버전만 삭제 (없으면 전체 버전) |
-| `domain` | string | O | 도메인 |
-| `requestedBy` | string | X | 요청자 ID |
-
-**Response 202 Accepted**
-```json
-{
-  "jobId": "job-uuid-002",
-  "status": "queued",
-  "message": "Delete job queued"
-}
-```
-
-### 4.3 작업 상태 조회
-
-```
-GET /internal/jobs/{job_id}
-```
-
-**Response 200**
-```json
-{
-  "jobId": "job-uuid-001",
-  "status": "completed",
-  "documentId": "DOC-2025-00123",
-  "chunksProcessed": 45,
-  "startedAt": "2025-01-15T10:30:00Z",
-  "completedAt": "2025-01-15T10:31:23Z",
-  "errorMessage": null
-}
-```
-
-| status 값 | 설명 |
-|-----------|------|
-| `queued` | 대기 중 |
-| `processing` | 처리 중 |
-| `completed` | 완료 |
-| `failed` | 실패 |
+자세한 내용은 `ctrlf_api_spec_fastapi_orchestrator_v2_3_db_aligned.md`를 참조하세요.
 
 ---
 

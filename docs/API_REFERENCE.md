@@ -32,9 +32,9 @@
 | Health | GET | `/health/ready` | ✅ Active |
 | Chat | POST | `/ai/chat/messages` | ✅ Active |
 | Chat | POST | `/ai/chat/stream` | ✅ Active |
-| RAG | POST | `/internal/rag/index` | ✅ Active |
-| RAG | POST | `/internal/rag/delete` | ✅ Active |
-| RAG | GET | `/internal/jobs/{job_id}` | ✅ Active |
+| RAG | POST | `/internal/rag/index` | ❌ Removed (410 Gone) - Phase 42 |
+| RAG | POST | `/internal/rag/delete` | ❌ Removed (410 Gone) - Phase 42 |
+| RAG | GET | `/internal/jobs/{job_id}` | ❌ Removed (410 Gone) - Phase 42 |
 | Quiz | POST | `/ai/quiz/generate` | ✅ Active |
 | FAQ | POST | `/ai/faq/generate` | ✅ Active |
 | FAQ | POST | `/ai/faq/generate/batch` | ✅ Active |
@@ -58,8 +58,11 @@
 | Method | Endpoint | 제거 사유 | 대체 API |
 |--------|----------|-----------|----------|
 | POST | `/search` | RAGFlow 레거시 | ChatService 내부 Milvus 직접 검색 |
-| POST | `/ingest` | RAGFlow 레거시 | `POST /internal/rag/index` |
-| POST | `/ai/rag/process` | RagflowClient 레거시 | `POST /internal/rag/index` |
+| POST | `/ingest` | RAGFlow 레거시 | SourceSet Orchestrator → RAGFlow |
+| POST | `/ai/rag/process` | RagflowClient 레거시 | SourceSet Orchestrator → RAGFlow |
+| POST | `/internal/rag/index` | Phase 42 제거 (410 Gone) | SourceSet Orchestrator → RAGFlow |
+| POST | `/internal/rag/delete` | Phase 42 제거 (410 Gone) | SourceSet Orchestrator → RAGFlow |
+| GET | `/internal/jobs/{job_id}` | Phase 42 제거 (410 Gone) | SourceSet Orchestrator 내부 관리 |
 | POST | `/api/videos/{id}/render-jobs` | V1→V2 이전 완료 (2025-12-20) | `POST /api/v2/videos/{id}/render-jobs` |
 | GET | `/api/render-jobs/{job_id}` | V1→V2 이전 완료 (2025-12-20) | `GET /api/v2/videos/{id}/render-jobs/{job_id}` |
 | POST | `/api/render-jobs/{job_id}/cancel` | V1→V2 이전 완료 (2025-12-20) | `POST /api/v2/.../cancel` |

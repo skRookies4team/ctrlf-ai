@@ -53,13 +53,13 @@ URL : `/internal/ai/source-sets/{sourceSetId}/start`
 Spring → FastAPI: /start
   └─ FastAPI → Spring: GET /internal/source-sets/{sourceSetId}/documents  (문서 목록 조회)
       └─ FastAPI → RAGFlow: 문서별 ingest 요청(프록시)
-          └─ RAGFlow → FastAPI: ingest 완료(성공/실패 이벤트)
-              ├─ 성공: FastAPI → Milvus 업서트(벡터 저장)
-              ├─ 성공: FastAPI → Spring: chunk_text(+meta) bulk upsert
-              ├─ 실패: FastAPI → Spring: fail_chunk bulk upsert
-              └─ 문서별 결과 집계
-                  ├─ 전체 성공 → 스크립트 생성 → /callbacks/source-sets/{id}/complete (COMPLETED)
-                  └─ 하나라도 실패 → /callbacks/source-sets/{id}/complete (FAILED)
+          └─ RAGFlow: 전처리 + 임베딩 + Milvus 업서트(벡터 저장)
+              └─ RAGFlow → FastAPI: ingest 완료(성공/실패 이벤트)
+                  ├─ 성공: FastAPI → Spring: chunk_text(+meta) bulk upsert
+                  ├─ 실패: FastAPI → Spring: fail_chunk bulk upsert
+                  └─ 문서별 결과 집계
+                      ├─ 전체 성공 → 스크립트 생성 → /callbacks/source-sets/{id}/complete (COMPLETED)
+                      └─ 하나라도 실패 → /callbacks/source-sets/{id}/complete (FAILED)
 ```
 
 > DB `education.source_set.status`는 `CREATED → LOCKED → (SCRIPT_READY | FAILED)` 전이를 사용한다.  

@@ -9,6 +9,7 @@
 | **KEEP** | 현재 플로우에서 실제 호출됨 (테스트/CLI/FE/BE 연동 확인) |
 | **DEPRECATE** | 기능 중복, 대체 API 존재 |
 | **DELETE** | 호출처 없음, 레거시, 테스트만 존재 |
+| **REMOVED** | Phase 42에서 제거됨 (410 Gone 반환) |
 
 ---
 
@@ -37,9 +38,9 @@
 | POST | /ai/rag/process | **DELETE** | RagService | - | Phase 25 이후 internal_rag로 대체 |
 | POST | /ingest | **DELETE** | IngestService | - | RAGFlow 기반, internal_rag로 대체 |
 | POST | /search | **DELETE** | SearchService | - | RAGFlow 기반, Milvus 직접 검색으로 대체 |
-| POST | /internal/rag/index | **KEEP** | IndexingService | BE | Phase 25 Milvus 인덱싱 |
-| POST | /internal/rag/delete | **KEEP** | IndexingService | BE | Phase 25 Milvus 삭제 |
-| GET | /internal/jobs/{job_id} | **KEEP** | JobService | BE | 작업 상태 폴링 |
+| POST | /internal/rag/index | **REMOVED** | - | - | Phase 42에서 제거됨 (410 Gone), RAGFlow 경유로 대체 |
+| POST | /internal/rag/delete | **REMOVED** | - | - | Phase 42에서 제거됨 (410 Gone), RAGFlow 경유로 대체 |
+| GET | /internal/jobs/{job_id} | **REMOVED** | - | - | Phase 42에서 제거됨 (410 Gone) |
 
 **삭제 근거:**
 - `/ai/rag/process`: RagflowClient 사용, MILVUS_ENABLED=true 환경에서 미사용
@@ -132,9 +133,17 @@
 
 | Path | 파일 | 대체 API | 삭제 근거 |
 |------|------|----------|-----------|
-| POST /ai/rag/process | rag.py | /internal/rag/index | RagflowClient 레거시, Milvus 전환 |
-| POST /ingest | ingest.py | /internal/rag/index | RAGFlow 인덱싱 레거시 |
+| POST /ai/rag/process | rag.py | SourceSet Orchestrator | RagflowClient 레거시, Milvus 전환 |
+| POST /ingest | ingest.py | SourceSet Orchestrator | RAGFlow 인덱싱 레거시 |
 | POST /search | search.py | ChatService 내부 | RAGFlow 검색 레거시 |
+
+## REMOVED 대상 요약 (Phase 42)
+
+| Path | 상태 | 대체 경로 |
+|------|------|-----------|
+| POST /internal/rag/index | 410 Gone | SourceSet Orchestrator → RAGFlow |
+| POST /internal/rag/delete | 410 Gone | SourceSet Orchestrator → RAGFlow |
+| GET /internal/jobs/{job_id} | 410 Gone | SourceSet Orchestrator 내부 관리 |
 
 ## DEPRECATE 대상 요약
 
