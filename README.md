@@ -100,6 +100,17 @@ CTRL+F AI 채팅 테스트 (종료: q 또는 Ctrl+C)
 
 > **참고**: `.env`의 `AI_ENV=real` 설정 시 실제 서비스 연동, `AI_ENV=mock` 설정 시 Mock 응답
 
+**필수 서비스:**
+
+| 환경변수 | RAGFlow | Milvus | vLLM | 설명 |
+|----------|---------|--------|------|------|
+| `MILVUS_ENABLED=true` | 불필요 | 필수 | 필수 | Milvus 직접 연동 (권장) |
+| `MILVUS_ENABLED=false` | 필수 | 불필요 | 필수 | RAGFlow 파이프라인 사용 |
+
+- **vLLM**: 항상 필수 (LLM 응답 생성, 임베딩)
+- **RAGFlow 없이 테스트**: `MILVUS_ENABLED=true` 설정 후 Milvus만 연결하면 됨
+- **모든 서비스 없이 테스트**: `AI_ENV=mock` 설정 시 Mock 응답 반환
+
 ### curl
 
 ```bash
