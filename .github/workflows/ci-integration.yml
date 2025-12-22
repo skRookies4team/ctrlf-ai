@@ -7,35 +7,28 @@ on:
     # 매일 KST 오전 6시 (UTC 21:00)
     - cron: '0 21 * * *'
   workflow_dispatch:
-    # 수동 실행 가능
+    inputs:
+      skip_service_setup:
+        description: 'Skip docker compose (services already running)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   integration-tests:
     runs-on: self-hosted
-    # 또는 ubuntu-latest (서비스를 docker-compose로 띄울 경우)
-
-    # services:
-    #   # RAGFlow 서비스
-    #   ragflow:
-    #     image: infiniflow/ragflow:latest
-    #     ports:
-    #       - 9380:9380
-    #     options: --health-cmd "curl -f http://localhost:9380/api/health" --health-interval 30s --health-timeout 10s --health-retries 5
-    #
-    #   # Milvus 서비스 (필요 시)
-    #   milvus:
-    #     image: milvusdb/milvus:latest
-    #     ports:
-    #       - 19530:19530
-    #     options: --health-cmd "curl -f http://localhost:9091/healthz" --health-interval 30s --health-timeout 10s --health-retries 5
+    timeout-minutes: 30
 
     env:
-      # 실제 서비스 URL (self-hosted runner에서 실행 시)
+      # GitHub Secrets에서 주입 (필수)
       LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
       RAGFLOW_BASE_URL: ${{ secrets.RAGFLOW_BASE_URL }}
+      # 선택적 환경변수
       MILVUS_HOST: ${{ secrets.MILVUS_HOST }}
       MILVUS_PORT: ${{ secrets.MILVUS_PORT }}
       BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+      # RAGFlow API 키 (필요 시)
+      RAGFLOW_API_KEY: ${{ secrets.RAGFLOW_API_KEY }}
 
     steps:
       - name: Checkout code
@@ -51,29 +44,150 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install pytest pytest-asyncio httpx
 
-      - name: Check required env vars
+      # =========================================================================
+      # 옵션 A: Docker Compose로 RAGFlow + Milvus 기동 (권장)
+      # self-hosted runner에 docker compose 설치 필요
+      # =========================================================================
+      - name: Start services (docker compose)
+        if: ${{ inputs.skip_service_setup != 'true' }}
         run: |
-          echo "Checking required environment variables..."
-          if [ -z "$LLM_BASE_URL" ]; then
-            echo "ERROR: LLM_BASE_URL is not set"
-            exit 1
-          fi
-          if [ -z "$RAGFLOW_BASE_URL" ]; then
-            echo "ERROR: RAGFLOW_BASE_URL is not set"
-            exit 1
-          fi
-          echo "LLM_BASE_URL: ${LLM_BASE_URL:0:30}..."
-          echo "RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:0:30}..."
-          echo "Environment check passed!"
+          echo "Starting RAGFlow and Milvus services..."
 
+          # docker-compose.ci.yml 존재 여부 확인
+          if [ -f "docker-compose.ci.yml" ]; then
+            docker compose -f docker-compose.ci.yml up -d
+            echo "Services started via docker-compose.ci.yml"
+          else
+            echo "WARN: docker-compose.ci.yml not found"
+            echo "Assuming services are already running externally"
+          fi
+
+      - name: Wait for services to be ready
+        if: ${{ inputs.skip_service_setup != 'true' }}
+        run: |
+          echo "Waiting for services to be ready..."
+
+          # RAGFlow 헬스체크 (최대 60초)
+          if [ -n "$RAGFLOW_BASE_URL" ]; then
+            for i in {1..12}; do
+              if curl -sf "$RAGFLOW_BASE_URL/api/health" > /dev/null 2>&1; then
+                echo "RAGFlow is ready!"
+                break
+              fi
+              echo "Waiting for RAGFlow... ($i/12)"
+              sleep 5
+            done
+          fi
+
+          # LLM 헬스체크 (최대 60초)
+          if [ -n "$LLM_BASE_URL" ]; then
+            for i in {1..12}; do
+              if curl -sf "$LLM_BASE_URL/health" > /dev/null 2>&1; then
+                echo "LLM is ready!"
+                break
+              fi
+              # /health 없으면 /v1/models 시도
+              if curl -sf "$LLM_BASE_URL/v1/models" > /dev/null 2>&1; then
+                echo "LLM is ready! (via /v1/models)"
+                break
+              fi
+              echo "Waiting for LLM... ($i/12)"
+              sleep 5
+            done
+          fi
+
+      # =========================================================================
+      # 필수 환경변수 검증 (CI strict)
+      # =========================================================================
+      - name: Verify required environment variables
+        run: |
+          echo "=============================================="
+          echo "Environment Variable Check (CI Strict Mode)"
+          echo "=============================================="
+
+          MISSING=""
+
+          if [ -z "$LLM_BASE_URL" ]; then
+            echo "❌ LLM_BASE_URL is NOT set"
+            MISSING="$MISSING LLM_BASE_URL"
+          else
+            echo "✅ LLM_BASE_URL: ${LLM_BASE_URL:0:40}..."
+          fi
+
+          if [ -z "$RAGFLOW_BASE_URL" ]; then
+            echo "❌ RAGFLOW_BASE_URL is NOT set"
+            MISSING="$MISSING RAGFLOW_BASE_URL"
+          else
+            echo "✅ RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:0:40}..."
+          fi
+
+          # 선택적 변수 상태 출력
+          echo "----------------------------------------------"
+          echo "Optional variables:"
+          [ -n "$MILVUS_HOST" ] && echo "  MILVUS_HOST: $MILVUS_HOST" || echo "  MILVUS_HOST: (not set)"
+          [ -n "$MILVUS_PORT" ] && echo "  MILVUS_PORT: $MILVUS_PORT" || echo "  MILVUS_PORT: (not set)"
+          [ -n "$BACKEND_BASE_URL" ] && echo "  BACKEND_BASE_URL: ${BACKEND_BASE_URL:0:40}..." || echo "  BACKEND_BASE_URL: (not set)"
+          echo "=============================================="
+
+          if [ -n "$MISSING" ]; then
+            echo ""
+            echo "🚨 FATAL: Missing required env vars:$MISSING"
+            echo "Please add these to GitHub Secrets:"
+            echo "  Repository Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+
+          echo "✅ All required environment variables are set!"
+
+      # =========================================================================
+      # Integration 테스트 실행
+      # =========================================================================
       - name: Run integration tests
         run: |
-          pytest tests/integration/ -v --tb=short -q
+          echo "Running integration tests..."
+          pytest tests/integration/ -v --tb=short \
+            --junit-xml=integration-results.xml \
+            2>&1 | tee integration-test-output.txt
+
+          # 결과 요약
+          echo ""
+          echo "=============================================="
+          echo "Test Results Summary"
+          echo "=============================================="
+          grep -E "(passed|failed|skipped|error)" integration-test-output.txt | tail -5 || true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: |
+            integration-results.xml
+            integration-test-output.txt
+          retention-days: 7
+
+      # =========================================================================
+      # 서비스 정리 (docker compose down)
+      # =========================================================================
+      - name: Stop services
+        if: ${{ always() && inputs.skip_service_setup != 'true' }}
+        run: |
+          if [ -f "docker-compose.ci.yml" ]; then
+            docker compose -f docker-compose.ci.yml down -v || true
+          fi
 
       - name: Notify on failure
         if: failure()
         run: |
-          echo "Integration tests failed! Check the logs above."
-          # 슬랙/이메일 알림 추가 가능
+          echo ""
+          echo "🚨 Integration tests FAILED!"
+          echo ""
+          echo "Possible causes:"
+          echo "  1. GitHub Secrets not configured (LLM_BASE_URL, RAGFLOW_BASE_URL)"
+          echo "  2. Services not reachable from runner"
+          echo "  3. Test assertions failed"
+          echo ""
+          echo "Check the logs above for details."
+          # TODO: Slack/Discord webhook notification
