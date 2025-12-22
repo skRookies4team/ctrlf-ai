@@ -1,0 +1,79 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    # 매일 KST 오전 6시 (UTC 21:00)
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    # 수동 실행 가능
+
+jobs:
+  integration-tests:
+    runs-on: self-hosted
+    # 또는 ubuntu-latest (서비스를 docker-compose로 띄울 경우)
+
+    # services:
+    #   # RAGFlow 서비스
+    #   ragflow:
+    #     image: infiniflow/ragflow:latest
+    #     ports:
+    #       - 9380:9380
+    #     options: --health-cmd "curl -f http://localhost:9380/api/health" --health-interval 30s --health-timeout 10s --health-retries 5
+    #
+    #   # Milvus 서비스 (필요 시)
+    #   milvus:
+    #     image: milvusdb/milvus:latest
+    #     ports:
+    #       - 19530:19530
+    #     options: --health-cmd "curl -f http://localhost:9091/healthz" --health-interval 30s --health-timeout 10s --health-retries 5
+
+    env:
+      # 실제 서비스 URL (self-hosted runner에서 실행 시)
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      RAGFLOW_BASE_URL: ${{ secrets.RAGFLOW_BASE_URL }}
+      MILVUS_HOST: ${{ secrets.MILVUS_HOST }}
+      MILVUS_PORT: ${{ secrets.MILVUS_PORT }}
+      BACKEND_BASE_URL: ${{ secrets.BACKEND_BASE_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Check required env vars
+        run: |
+          echo "Checking required environment variables..."
+          if [ -z "$LLM_BASE_URL" ]; then
+            echo "ERROR: LLM_BASE_URL is not set"
+            exit 1
+          fi
+          if [ -z "$RAGFLOW_BASE_URL" ]; then
+            echo "ERROR: RAGFLOW_BASE_URL is not set"
+            exit 1
+          fi
+          echo "LLM_BASE_URL: ${LLM_BASE_URL:0:30}..."
+          echo "RAGFLOW_BASE_URL: ${RAGFLOW_BASE_URL:0:30}..."
+          echo "Environment check passed!"
+
+      - name: Run integration tests
+        run: |
+          pytest tests/integration/ -v --tb=short -q
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Integration tests failed! Check the logs above."
+          # 슬랙/이메일 알림 추가 가능
