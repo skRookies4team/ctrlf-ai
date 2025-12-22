@@ -33,6 +33,15 @@ from app.services.chat.response_factory import (
 )
 from app.services.chat.rag_handler import RagHandler
 from app.services.chat.backend_handler import BackendHandler
+from app.services.chat.message_builder import (
+    MessageBuilder,
+    # 프롬프트 상수 (역호환을 위해 re-export)
+    SYSTEM_PROMPT_WITH_RAG,
+    SYSTEM_PROMPT_NO_RAG,
+    SYSTEM_PROMPT_MIXED_BACKEND_RAG,
+    SYSTEM_PROMPT_BACKEND_API,
+    NO_RAG_RESULTS_NOTICE,
+)
 
 __all__: list[str] = [
     # route_mapper
@@ -55,4 +64,11 @@ __all__: list[str] = [
     "RagHandler",
     # backend_handler
     "BackendHandler",
+    # message_builder
+    "MessageBuilder",
+    "SYSTEM_PROMPT_WITH_RAG",
+    "SYSTEM_PROMPT_NO_RAG",
+    "SYSTEM_PROMPT_MIXED_BACKEND_RAG",
+    "SYSTEM_PROMPT_BACKEND_API",
+    "NO_RAG_RESULTS_NOTICE",
 ]

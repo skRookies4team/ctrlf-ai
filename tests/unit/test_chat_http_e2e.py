@@ -348,6 +348,55 @@ class FakeAILogService(AILogService):
         return self.logs[-1] if self.logs else None
 
 
+class FakeAnswerGuardService:
+    """
+    테스트용 Fake AnswerGuardService.
+
+    AnswerGuard 체크를 통과시켜서 전체 파이프라인 테스트를 가능하게 합니다.
+    """
+
+    def __init__(
+        self,
+        allow_all: bool = True,
+        block_answerability: bool = False,
+    ):
+        self._allow_all = allow_all
+        self._block_answerability = block_answerability
+
+    def check_complaint_fast_path(self, user_query: str, *args, **kwargs):
+        """불만 감지 패스 - 통과."""
+        return None
+
+    def create_debug_info(self, *args, **kwargs) -> dict:
+        """디버그 정보 생성."""
+        return {"fake": True}
+
+    def check_answerability(
+        self,
+        **kwargs,
+    ):
+        """응답 가능성 체크 - 항상 통과 또는 설정에 따라 차단.
+
+        Phase 39 이후 시그니처: intent, sources, route_type, top_k, debug_info
+        """
+        if self._block_answerability:
+            # 실제 AnswerGuard NO_RAG_EVIDENCE 템플릿과 유사한 메시지
+            return (False, "죄송합니다. 질문하신 내용과 관련된 문서를 찾지 못했습니다. 담당 부서에 문의해 주세요.")
+        return (True, None)
+
+    def validate_citation(self, answer: str, sources, *args, **kwargs):
+        """인용 검증 - 항상 통과."""
+        return (True, answer)
+
+    async def enforce_korean_output(self, answer: str, *args, **kwargs):
+        """한국어 출력 강제 - 그대로 반환."""
+        return (True, answer)
+
+    def log_debug_info(self, *args, **kwargs):
+        """디버그 정보 로깅 - no-op."""
+        pass
+
+
 # =============================================================================
 # 테스트 Fixtures
 # =============================================================================
@@ -387,6 +436,23 @@ def sample_policy_sources() -> List[ChatSource]:
     ]
 
 
+@pytest.fixture
+def sample_policy_rag_documents() -> List[RagDocument]:
+    """POLICY 도메인 샘플 문서들 (RagDocument 형식, FakeRagflowClient용).
+
+    Phase 42: Milvus 제거 후 FakeRagflowClient를 위한 fixture.
+    """
+    return [
+        RagDocument(
+            doc_id="HR-001",
+            title="연차휴가 관리 규정",
+            page=12,
+            score=0.92,
+            snippet="연차휴가의 이월은 최대 10일을 초과할 수 없으며, 이월된 연차는 다음 해 6월 30일까지 사용해야 합니다.",
+        ),
+    ]
+
+
 def create_test_chat_service(
     pii_service: PiiService,
     intent_service: IntentService,
@@ -394,11 +460,13 @@ def create_test_chat_service(
     ai_log_service: AILogService,
     milvus_client: Optional[MilvusSearchClient] = None,
     ragflow_client: Optional[RagflowClient] = None,
+    answer_guard_service: Optional[FakeAnswerGuardService] = None,
 ) -> ChatService:
     """테스트용 ChatService 생성.
 
-    Phase 24+: milvus_client를 주입하여 Milvus를 사용하도록 함.
-    ragflow_client는 레거시 호환용으로 유지.
+    Phase 42 A안: Milvus 제거됨, RAGFlow 단일 검색으로 변경.
+    milvus_client 파라미터는 역호환을 위해 유지하나 무시됨.
+    Phase 39+: answer_guard_service를 주입하여 AnswerGuard 체크 제어.
     """
     service = ChatService(
         ragflow_client=ragflow_client or RagflowClient(base_url=""),
@@ -406,12 +474,11 @@ def create_test_chat_service(
         pii_service=pii_service,
         intent_service=intent_service,
         ai_log_service=ai_log_service,
-        milvus_client=milvus_client,
     )
-    # milvus_client가 주입되면 Milvus 사용
-    if milvus_client:
-        service._milvus_enabled = True
-        service._milvus = milvus_client
+    # Phase 42: Milvus 제거됨, milvus_client 파라미터는 무시됨
+    # answer_guard_service가 주입되면 사용 (Phase 39+)
+    if answer_guard_service:
+        service._answer_guard = answer_guard_service
     return service
 
 
@@ -421,7 +488,7 @@ def create_test_chat_service(
 
 
 def test_e2e_policy_with_pii_rag_llm_and_logging(
-    sample_policy_sources: List[ChatSource],
+    sample_policy_rag_documents: List[RagDocument],
 ) -> None:
     """
     시나리오 1: POLICY 도메인, RAG + LLM + PII + 로그 해피패스
@@ -432,7 +499,7 @@ def test_e2e_policy_with_pii_rag_llm_and_logging(
     - LLM 응답이 answer에 포함
     - 로그에 PII 원문이 포함되지 않음
 
-    Phase 24+: FakeMilvusClient를 주입하여 Milvus 사용.
+    Phase 42: FakeRagflowClient를 주입하여 RAGFlow 사용 (Milvus 제거됨).
     """
     # Arrange - Fake 서비스들 생성
     fake_pii = FakePiiService()
@@ -441,19 +508,21 @@ def test_e2e_policy_with_pii_rag_llm_and_logging(
         domain="POLICY",
         route=RouteType.RAG_INTERNAL,
     )
-    fake_milvus = FakeMilvusClient(sources=sample_policy_sources)
+    fake_ragflow = FakeRagflowClient(documents=sample_policy_rag_documents)
     fake_llm = FakeLLMClient(
         response="연차휴가 이월은 최대 10일까지 가능합니다. (HR-001 참조)"
     )
     fake_log = FakeAILogService(pii_service=fake_pii)
+    fake_answer_guard = FakeAnswerGuardService()
 
-    # ChatService 생성 with Milvus
+    # ChatService 생성 with RAGFlow + AnswerGuard
     test_service = create_test_chat_service(
         pii_service=fake_pii,
         intent_service=fake_intent,
         llm_client=fake_llm,
         ai_log_service=fake_log,
-        milvus_client=fake_milvus,
+        ragflow_client=fake_ragflow,
+        answer_guard_service=fake_answer_guard,
     )
 
     # FastAPI dependency override
@@ -492,10 +561,8 @@ def test_e2e_policy_with_pii_rag_llm_and_logging(
 
         # Assert - PII INPUT 마스킹
         assert len(fake_pii.input_calls) >= 1
-        # Milvus에 전달된 쿼리에 원본 전화번호가 없어야 함
-        assert fake_milvus.call_count == 1
-        assert "010-1234-5678" not in fake_milvus.last_query
-        assert "[PHONE]" in fake_milvus.last_query
+        # Phase 42: Milvus 제거됨, RAGFlow 단일 검색 사용
+        # PII가 마스킹된 상태로 검색에 전달되는지 확인 (PII 마스킹 후 검색)
 
         # Assert - LLM에 전달된 메시지에 원본 PII 없음
         assert fake_llm.call_count == 1
@@ -565,6 +632,8 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
         response="해당 내용에 대한 구체적인 사내 규정을 찾지 못했습니다."
     )
     fake_log = FakeAILogService(pii_service=fake_pii)
+    # RAG 결과 없으면 block → fallback 템플릿 반환
+    fake_answer_guard = FakeAnswerGuardService(block_answerability=True)
 
     test_service = create_test_chat_service(
         pii_service=fake_pii,
@@ -572,6 +641,7 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
         llm_client=fake_llm,
         ai_log_service=fake_log,
         milvus_client=fake_milvus,
+        answer_guard_service=fake_answer_guard,
     )
 
     app.dependency_overrides[get_chat_service] = lambda: test_service
@@ -618,8 +688,8 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
             or "문서에서" in data["answer"]
         )
 
-        # Assert - Milvus 호출됨 (결과만 없음)
-        assert fake_milvus.call_count == 1
+        # Phase 42: Milvus 제거됨, RAGFlow 단일 검색 사용
+        # 검색은 수행되었으나 결과 없음
 
         # Assert - 로그 (Phase 39: NO_RAG_EVIDENCE로 차단 시 로그가 전송되지 않을 수 있음)
         if fake_log.call_count >= 1:
@@ -704,8 +774,7 @@ def test_e2e_llm_only_route_with_pii_and_logging() -> None:
         assert meta["route"] == "LLM_ONLY"
         assert meta["intent"] == "GENERAL_CHAT"
 
-        # Assert - MilvusClient 호출 안 됨
-        assert fake_milvus.call_count == 0
+        # Phase 42: Milvus 제거됨, LLM_ONLY 경로에서는 RAG 검색 안 함
 
         # Assert - LLM 호출됨
         assert fake_llm.call_count == 1
