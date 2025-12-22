@@ -98,6 +98,11 @@ from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
 from app.services.intent_service import IntentService
 from app.services.pii_service import PiiService, get_pii_service
+from app.services.chat.route_mapper import (
+    map_tier0_to_intent,
+    map_router_route_to_route_type,
+    map_route_type_to_router_route_type,
+)
 from app.services.router_orchestrator import (
     OrchestrationResult,
     RouterOrchestrator,
@@ -1734,75 +1739,20 @@ class ChatService:
         )
 
     def _map_tier0_to_intent(self, tier0_intent: Tier0Intent) -> Optional[IntentType]:
-        """
-        Tier0Intent를 IntentType으로 매핑합니다.
-
-        Args:
-            tier0_intent: Tier-0 의도
-
-        Returns:
-            Optional[IntentType]: 매핑된 IntentType 또는 None
-        """
-        mapping = {
-            Tier0Intent.POLICY_QA: IntentType.POLICY_QA,
-            Tier0Intent.EDUCATION_QA: IntentType.EDUCATION_QA,
-            Tier0Intent.BACKEND_STATUS: IntentType.EDU_STATUS,  # 또는 상황에 따라 달라짐
-            Tier0Intent.GENERAL_CHAT: IntentType.GENERAL_CHAT,
-            Tier0Intent.SYSTEM_HELP: IntentType.SYSTEM_HELP,
-            Tier0Intent.UNKNOWN: IntentType.UNKNOWN,
-        }
-        return mapping.get(tier0_intent)
+        """Tier0Intent를 IntentType으로 매핑합니다 (위임)."""
+        return map_tier0_to_intent(tier0_intent)
 
     def _map_router_route_to_route_type(
         self, router_route: RouterRouteType
     ) -> Optional[RouteType]:
-        """
-        RouterRouteType을 RouteType으로 매핑합니다.
-
-        Args:
-            router_route: Router 라우트 타입
-
-        Returns:
-            Optional[RouteType]: 매핑된 RouteType 또는 None
-        """
-        mapping = {
-            RouterRouteType.RAG_INTERNAL: RouteType.RAG_INTERNAL,
-            RouterRouteType.BACKEND_API: RouteType.BACKEND_API,
-            RouterRouteType.LLM_ONLY: RouteType.LLM_ONLY,
-            RouterRouteType.ROUTE_SYSTEM_HELP: RouteType.LLM_ONLY,  # LLM_ONLY로 처리
-            RouterRouteType.ROUTE_UNKNOWN: RouteType.FALLBACK,
-        }
-        return mapping.get(router_route)
+        """RouterRouteType을 RouteType으로 매핑합니다 (위임)."""
+        return map_router_route_to_route_type(router_route)
 
     def _map_route_type_to_router_route_type(
         self, route: RouteType
     ) -> RouterRouteType:
-        """
-        RouteType을 RouterRouteType으로 매핑합니다 (역방향).
-
-        Phase 39: Answerability 체크에 필요한 역방향 매핑.
-
-        Args:
-            route: RouteType
-
-        Returns:
-            RouterRouteType: 매핑된 RouterRouteType
-        """
-        mapping = {
-            RouteType.RAG_INTERNAL: RouterRouteType.RAG_INTERNAL,
-            RouteType.ROUTE_RAG_INTERNAL: RouterRouteType.RAG_INTERNAL,
-            RouteType.BACKEND_API: RouterRouteType.BACKEND_API,
-            RouteType.LLM_ONLY: RouterRouteType.LLM_ONLY,
-            RouteType.ROUTE_LLM_ONLY: RouterRouteType.LLM_ONLY,
-            RouteType.TRAINING: RouterRouteType.LLM_ONLY,
-            RouteType.ROUTE_TRAINING: RouterRouteType.LLM_ONLY,
-            RouteType.MIXED_BACKEND_RAG: RouterRouteType.RAG_INTERNAL,
-            RouteType.INCIDENT: RouterRouteType.BACKEND_API,
-            RouteType.ROUTE_INCIDENT: RouterRouteType.BACKEND_API,
-            RouteType.FALLBACK: RouterRouteType.ROUTE_UNKNOWN,
-            RouteType.ERROR: RouterRouteType.ROUTE_UNKNOWN,
-        }
-        return mapping.get(route, RouterRouteType.ROUTE_UNKNOWN)
+        """RouteType을 RouterRouteType으로 매핑합니다 (위임)."""
+        return map_route_type_to_router_route_type(route)
 
     # =========================================================================
     # Phase 11: BACKEND_API용 LLM 메시지 빌더

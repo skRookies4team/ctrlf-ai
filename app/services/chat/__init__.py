@@ -12,4 +12,14 @@ Phase 2 리팩토링:
 - message_builder: LLM 메시지 구성
 """
 
-__all__: list[str] = []
+from app.services.chat.route_mapper import (
+    map_tier0_to_intent,
+    map_router_route_to_route_type,
+    map_route_type_to_router_route_type,
+)
+
+__all__: list[str] = [
+    "map_tier0_to_intent",
+    "map_router_route_to_route_type",
+    "map_route_type_to_router_route_type",
+]
