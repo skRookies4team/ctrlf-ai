@@ -32,6 +32,7 @@ from app.services.chat.response_factory import (
     create_unknown_route_response,
 )
 from app.services.chat.rag_handler import RagHandler
+from app.services.chat.backend_handler import BackendHandler
 
 __all__: list[str] = [
     # route_mapper
@@ -52,4 +53,6 @@ __all__: list[str] = [
     "create_unknown_route_response",
     # rag_handler
     "RagHandler",
+    # backend_handler
+    "BackendHandler",
 ]
