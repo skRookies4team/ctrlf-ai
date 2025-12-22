@@ -617,7 +617,7 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
     - meta.rag_source_count == 0
     - answer에 fallback 안내 문구 포함
 
-    Phase 24+: FakeMilvusClient 사용.
+    Phase 42: FakeRagflowClient 사용 (Milvus 제거됨).
     Phase 39: RAG 결과 없으면 NO_RAG_EVIDENCE 템플릿 반환.
     """
     # Arrange
@@ -627,7 +627,7 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
         domain="POLICY",
         route=RouteType.RAG_INTERNAL,
     )
-    fake_milvus = FakeMilvusClient(sources=[])  # 빈 결과
+    fake_ragflow = FakeRagflowClient(documents=[])  # 빈 결과
     fake_llm = FakeLLMClient(
         response="해당 내용에 대한 구체적인 사내 규정을 찾지 못했습니다."
     )
@@ -640,7 +640,7 @@ def test_e2e_policy_rag_no_results_fallback_and_logging() -> None:
         intent_service=fake_intent,
         llm_client=fake_llm,
         ai_log_service=fake_log,
-        milvus_client=fake_milvus,
+        ragflow_client=fake_ragflow,
         answer_guard_service=fake_answer_guard,
     )
 

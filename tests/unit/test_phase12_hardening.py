@@ -585,8 +585,9 @@ class FakeIntentServiceMixed(IntentService):
 
 
 @pytest.mark.anyio
-async def test_chat_service_rag_fail_fallback() -> None:
-    """ChatService: RAG 실패 시 fallback 동작 테스트."""
+async def test_chat_service_rag_fail_raises_error() -> None:
+    """ChatService: RAG 실패 시 RagSearchUnavailableError 발생 (Phase 42 A안 확정)."""
+    from app.services.chat.rag_handler import RagSearchUnavailableError
 
     class FailingRagflowClient(RagflowClient):
         def __init__(self) -> None:
@@ -602,7 +603,7 @@ async def test_chat_service_rag_fail_fallback() -> None:
 
     service = ChatService(
         ragflow_client=FailingRagflowClient(),
-        llm_client=LLMClient(base_url=""),  # fallback 응답 반환
+        llm_client=LLMClient(base_url=""),
         pii_service=PiiService(base_url="", enabled=False),
         intent_service=FakeIntentServiceRagInternal(),
         guardrail_service=GuardrailService(),
@@ -615,12 +616,9 @@ async def test_chat_service_rag_fail_fallback() -> None:
         messages=[ChatMessage(role="user", content="정보보안 정책 알려줘")],
     )
 
-    response = await service.handle_chat(request)
-
-    # RAG 실패해도 응답은 반환됨 (LLM fallback 또는 일반 응답)
-    assert response.answer is not None
-    # fallback_reason이 RAG_FAIL로 설정될 수 있음
-    # (LLM fallback 메시지가 아닌 경우)
+    # Phase 42 (A안 확정): RAG 실패 시 예외 발생 (fallback 없음)
+    with pytest.raises(RagSearchUnavailableError):
+        await service.handle_chat(request)
 
 
 @pytest.mark.anyio
