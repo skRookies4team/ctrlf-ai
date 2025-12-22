@@ -43,7 +43,13 @@ def reset_singletons():
     테스트 격리를 위해 모든 테스트 후 자동으로 실행됩니다.
     환경변수를 변경하는 테스트에서도 다음 테스트가 깨끗한 상태로 시작합니다.
     """
+    # 테스트 전: 환경변수 정리 (unit test에서는 외부 서비스 사용 안 함)
+    for key in ["RAGFLOW_BASE_URL", "LLM_BASE_URL", "BACKEND_BASE_URL"]:
+        os.environ.pop(key, None)
+    clear_settings_cache()
+
     yield
+
     # 테스트 후 정리
     from app.clients.llm_client import clear_llm_client
     from app.clients.ragflow_client import clear_ragflow_client
@@ -52,6 +58,7 @@ def reset_singletons():
     clear_llm_client()
     clear_ragflow_client()
     clear_pii_service()
+    clear_settings_cache()
 
 
 @pytest.fixture(scope="session", autouse=True)
