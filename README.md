@@ -1,7 +1,7 @@
 # CTRL+F AI Gateway
 
 CTRL+F 프로젝트의 AI Gateway 서비스입니다.
-FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능을 제공합니다.
+FastAPI 기반으로 RAG, LLM,  벡터 검색, 교육 영상 자동 생성 기능을 제공합니다.
 
 ## 주요 기능
 
