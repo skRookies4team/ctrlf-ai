@@ -354,8 +354,9 @@ class TestVideoScriptSchema:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="FE용 /api/scripts API 제거됨 - FE는 백엔드 경유 필수")
 class TestScriptGenerateAPI:
-    """스크립트 생성 API 통합 테스트."""
+    """스크립트 생성 API 통합 테스트. (FE API 제거로 스킵)"""
 
     @pytest.fixture
     def client(self):
@@ -436,8 +437,9 @@ class TestScriptGenerateAPI:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="FE용 /api/scripts API 제거됨 - FE는 백엔드 경유 필수")
 class TestManualScriptAPI:
-    """기존 수동 스크립트 API 회귀 테스트."""
+    """기존 수동 스크립트 API 회귀 테스트. (FE API 제거로 스킵)"""
 
     @pytest.fixture
     def client(self):
@@ -468,8 +470,9 @@ class TestManualScriptAPI:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="FE용 /api/scripts, /api/v2/render-jobs API 제거됨 - FE는 백엔드 경유 필수")
 class TestE2EScriptGenerationFlow:
-    """E2E 통합 테스트: generate → render-job."""
+    """E2E 통합 테스트: generate → render-job. (FE API 제거로 스킵)"""
 
     @pytest.fixture
     def client(self):
