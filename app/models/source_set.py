@@ -216,16 +216,15 @@ class SourceRef(BaseModel):
 
 
 class GeneratedScene(BaseModel):
-    """생성된 씬."""
-    scene_id: str = Field(
-        ...,
-        alias="sceneId",
-        description="씬 ID",
-    )
+    """생성된 씬.
+
+    Note: sceneId는 백엔드 JPA @GeneratedValue로 자동 생성되므로 AI에서 전송하지 않음.
+    sceneIndex는 0-based (0, 1, 2, ...)
+    """
     scene_index: int = Field(
         ...,
         alias="sceneIndex",
-        description="씬 순서",
+        description="씬 순서 (0-based)",
     )
     purpose: str = Field(
         ...,
@@ -264,16 +263,15 @@ class GeneratedScene(BaseModel):
 
 
 class GeneratedChapter(BaseModel):
-    """생성된 챕터."""
-    chapter_id: str = Field(
-        ...,
-        alias="chapterId",
-        description="챕터 ID",
-    )
+    """생성된 챕터.
+
+    Note: chapterId는 백엔드 JPA @GeneratedValue로 자동 생성되므로 AI에서 전송하지 않음.
+    chapterIndex는 0-based (0, 1, 2, ...)
+    """
     chapter_index: int = Field(
         ...,
         alias="chapterIndex",
-        description="챕터 순서",
+        description="챕터 순서 (0-based)",
     )
     title: str = Field(
         ...,
