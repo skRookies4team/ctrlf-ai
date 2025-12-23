@@ -19,7 +19,8 @@ jobs:
           echo "Current directory: $(pwd)"
           
           # 2. 최신 코드 반영
-          git pull origin main
+          git fetch origin
+          git reset --hard origin/main
           
           # 3. 가상환경 활성화 및 패키지 설치
           source /home/team4/gemma/bin/activate
