@@ -383,8 +383,9 @@ class TestRenderJobRunner:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="FE용 /api/v2/render-jobs API 제거됨 - FE는 백엔드 경유 필수")
 class TestRenderJobAPI:
-    """렌더 잡 API 테스트."""
+    """렌더 잡 API 테스트. (FE API 제거로 스킵)"""
 
     @pytest.fixture
     def test_client(self, temp_db_path, mock_renderer, mock_script):
@@ -648,8 +649,9 @@ class TestIntegration:
         # 아직 실행 중이거나 완료됨
         assert job.status in ("PROCESSING", "COMPLETED", "QUEUED")
 
+    @pytest.mark.skip(reason="FE용 /api/scripts API 제거됨 - FE는 백엔드 경유 필수")
     def test_regression_existing_api(self, temp_db_path, mock_script):
-        """기존 API 회귀 테스트."""
+        """기존 API 회귀 테스트. (FE API 제거로 스킵)"""
         from fastapi.testclient import TestClient
         from app.main import app
         from app.services.video_render_service import get_video_render_service
