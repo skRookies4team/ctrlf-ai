@@ -28,7 +28,6 @@ from app.api.v1 import (
     internal_rag,
     quiz_generate,
     render_jobs,
-    scripts,
     source_sets,
     ws_render_progress,
 )
@@ -172,23 +171,11 @@ app.include_router(chat_stream.router, tags=["Chat Stream"])
 # - GET /internal/jobs/{job_id}: 작업 상태 조회
 app.include_router(internal_rag.router, tags=["Internal RAG"])
 
-# Scripts API (스크립트 CRUD + 편집)
-# - POST /api/scripts: 스크립트 생성
-# - GET /api/scripts/{script_id}: 스크립트 조회
-# - POST /api/videos/{video_id}/scripts/generate: 스크립트 자동 생성
-# - GET /api/scripts/{script_id}/editor: 편집용 뷰 조회
-# - PATCH /api/scripts/{script_id}/editor: 씬 부분 수정
-app.include_router(scripts.router, tags=["Scripts"])
+# Internal Render Jobs API (Backend → AI)
+# - POST /internal/ai/render-jobs: 렌더 잡 생성/시작 (백엔드 발급 jobId 사용)
+app.include_router(render_jobs.internal_router, tags=["Internal Render Jobs"])
 
-# Render Jobs API (렌더 잡 CRUD)
-# - POST /api/videos/{video_id}/render-jobs: 렌더 잡 생성 (idempotent)
-# - GET /api/videos/{video_id}/render-jobs: 잡 목록 조회
-# - GET /api/videos/{video_id}/render-jobs/{job_id}: 잡 상세 조회
-# - POST /api/videos/{video_id}/render-jobs/{job_id}/cancel: 잡 취소
-# - GET /api/videos/{video_id}/assets/published: 발행된 에셋 조회
-app.include_router(render_jobs.router, tags=["Render Jobs"])
-
-# Backend → AI 호출 API (영상 생성 시작/재시도)
+# Backend → AI 호출 API (영상 생성 시작/재시도) - 레거시 호환
 # - POST /ai/video/job/{job_id}/start: 영상 생성 시작
 # - POST /ai/video/job/{job_id}/retry: 영상 생성 재시도
 app.include_router(render_jobs.ai_router, prefix="/ai", tags=["Video Job (Backend → AI)"])
