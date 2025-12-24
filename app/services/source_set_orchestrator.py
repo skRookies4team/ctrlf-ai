@@ -377,6 +377,19 @@ class SourceSetOrchestrator:
         from app.clients.ragflow_client import RagflowError, RagflowConnectionError
 
         settings = get_settings()
+
+        # source_url null 체크
+        if not doc.source_url or not doc.source_url.strip():
+            logger.error(
+                f"Document source_url is empty: source_set_id={source_set_id}, "
+                f"doc_id={doc.document_id}"
+            )
+            return DocumentProcessingResult(
+                document_id=doc.document_id,
+                success=False,
+                fail_reason="source_url is empty or null",
+            )
+
         logger.info(
             f"Processing document: source_set_id={source_set_id}, "
             f"doc_id={doc.document_id}, url={doc.source_url[:50]}..."
