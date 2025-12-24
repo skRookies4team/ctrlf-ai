@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     # LLM 모델명 (vLLM 등에서 필요)
     LLM_MODEL_NAME: str = "Qwen/Qwen2.5-7B-Instruct"
 
+    # 임베딩 서비스 URL (LLM과 분리된 임베딩 서버 사용 시)
+    EMBEDDING_BASE_URL: Optional[HttpUrl] = None
+
     # ctrlf-back (Spring 백엔드) 연동 URL
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
@@ -408,6 +411,22 @@ class Settings(BaseSettings):
         if not self.LLM_BASE_URL_MOCK:
             return None
         return self.LLM_BASE_URL_MOCK
+
+    @property
+    def embedding_base_url(self) -> Optional[str]:
+        """
+        임베딩 서비스 URL을 반환합니다.
+
+        우선순위:
+        1. EMBEDDING_BASE_URL이 직접 설정된 경우 그 값 사용
+        2. 미설정 시 llm_base_url 사용 (기존 동작 호환)
+
+        Returns:
+            str: 임베딩 서비스 URL, 미설정 시 llm_base_url
+        """
+        if self.EMBEDDING_BASE_URL:
+            return str(self.EMBEDDING_BASE_URL)
+        return self.llm_base_url
 
     @property
     def backend_base_url(self) -> Optional[str]:
