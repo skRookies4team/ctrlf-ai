@@ -1,153 +1,153 @@
-# AI Gateway 백엔드 연동 가이드
+# AI Gateway 백엔???�동 가?�드
 
-> **작성일**: 2025-12-11
-> **대상**: ctrlf-back (Spring Backend) 개발팀
-> **버전**: Phase 15 완료
+> **?�성??*: 2025-12-11
+> **?�??*: ctrlf-back (Spring Backend) 개발?�
+> **버전**: Phase 15 ?�료
 
 ---
 
 ## 목차
 
-1. [프로젝트 개요](#1-프로젝트-개요)
-2. [환경 설정 및 실행](#2-환경-설정-및-실행)
-3. [API 엔드포인트 목록](#3-api-엔드포인트-목록)
-4. [채팅 API 연동 가이드](#4-채팅-api-연동-가이드)
-5. [RAG Gap 제안 API 연동 가이드](#5-rag-gap-제안-api-연동-가이드)
-6. [에러 처리](#6-에러-처리)
-7. [연동 체크리스트](#7-연동-체크리스트)
+1. [?�로?�트 개요](#1-?�로?�트-개요)
+2. [?�경 ?�정 �??�행](#2-?�경-?�정-�??�행)
+3. [API ?�드?�인??목록](#3-api-?�드?�인??목록)
+4. [채팅 API ?�동 가?�드](#4-채팅-api-?�동-가?�드)
+5. [RAG Gap ?�안 API ?�동 가?�드](#5-rag-gap-?�안-api-?�동-가?�드)
+6. [?�러 처리](#6-?�러-처리)
+7. [?�동 체크리스??(#7-?�동-체크리스??
 
 ---
 
-## 1. 프로젝트 개요
+## 1. ?�로?�트 개요
 
-### 1.1 AI Gateway란?
+### 1.1 AI Gateway?�?
 
-AI Gateway는 사용자 질문을 받아 RAG(검색) + LLM(생성)을 거쳐 답변을 반환하는 FastAPI 서버입니다.
+AI Gateway???�용??질문??받아 RAG(검?? + LLM(?�성)??거쳐 ?��???반환?�는 FastAPI ?�버?�니??
 
 ```
-┌─────────────┐     ┌─────────────────┐     ┌─────────────┐
-│ ctrlf-back  │────▶│  AI Gateway     │────▶│  RAGFlow    │
-│  (Spring)   │     │  (FastAPI)      │     │  (검색엔진)  │
-└─────────────┘     └────────┬────────┘     └─────────────┘
-                             │
-                             ▼
-                    ┌─────────────────┐
-                    │  LLM Server     │
-                    │  (Qwen2.5-7B)   │
-                    └─────────────────┘
+?��??�?�?�?�?�?�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?�?�?�?�?�??
+??ctrlf-back  ?��??�?�?�?�│  AI Gateway     ?��??�?�?�?�│  RAGFlow    ??
+?? (Spring)   ??    ?? (FastAPI)      ??    ?? (검?�엔�?  ??
+?��??�?�?�?�?�?�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?��??�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?�?�?�?�?�??
+                             ??
+                             ??
+                    ?��??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�??
+                    ?? LLM Server     ??
+                    ?? (Qwen2.5-7B)   ??
+                    ?��??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�??
 ```
 
 ### 1.2 주요 기능
 
-| 기능 | 설명 |
+| 기능 | ?�명 |
 |------|------|
-| 채팅 응답 생성 | 사규/교육/사고 관련 질문에 AI 답변 |
-| PII 마스킹 | 개인정보 자동 탐지 및 마스킹 |
-| 역할별 라우팅 | EMPLOYEE/ADMIN별 다른 처리 로직 |
-| RAG Gap 분석 | 문서 부족 질문 식별 및 보완 제안 |
+| 채팅 ?�답 ?�성 | ?�규/교육/?�고 관??질문??AI ?��? |
+| PII 마스??| 개인?�보 ?�동 ?��? �?마스??|
+| ??���??�우??| EMPLOYEE/ADMIN�??�른 처리 로직 |
+| RAG Gap 분석 | 문서 부�?질문 ?�별 �?보완 ?�안 |
 
 ---
 
-## 2. 환경 설정 및 실행
+## 2. ?�경 ?�정 �??�행
 
-### 2.1 사전 요구사항
+### 2.1 ?�전 ?�구?�항
 
 - Python 3.12.7
-- pip (패키지 관리자)
+- pip (?�키지 관리자)
 
-### 2.2 설치 및 실행
+### 2.2 ?�치 �??�행
 
 ```bash
-# 1. 프로젝트 클론
+# 1. ?�로?�트 ?�론
 git clone https://github.com/skRookies4team/ctrlf-ai.git
 cd ctrlf-ai
 
-# 2. 가상환경 생성 및 활성화
+# 2. 가?�환�??�성 �??�성??
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 3. 의존성 설치
+# 3. ?�존???�치
 pip install -r requirements.txt
 
-# 4. 환경변수 설정
+# 4. ?�경변???�정
 cp .env.example .env
-# .env 파일 편집하여 필요한 값 설정
+# .env ?�일 ?�집?�여 ?�요??�??�정
 
-# 5. 서버 실행
+# 5. ?�버 ?�행
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 2.3 환경변수 (.env)
+### 2.3 ?�경변??(.env)
 
 ```env
-# 앱 설정
+# ???�정
 APP_NAME=ctrlf-ai-gateway
 APP_ENV=development
 
-# LLM 서버 (필수)
+# LLM ?�버 (?�수)
 LLM_BASE_URL=http://your-llm-server:port/v1
 
-# RAGFlow 서버 (RAG 검색용)
+# RAGFlow ?�버 (RAG 검?�용)
 RAGFLOW_BASE_URL=http://your-ragflow-server:9380
 
-# PII 마스킹 서버 (선택)
+# PII 마스???�버 (?�택)
 PII_BASE_URL=http://your-pii-server:8000
 PII_ENABLED=true
 
-# 백엔드 서버 (로그 전송용)
+# 백엔???�버 (로그 ?�송??
 BACKEND_BASE_URL=http://localhost:8080
 ```
 
-### 2.4 API 문서 확인
+### 2.4 API 문서 ?�인
 
-서버 실행 후 브라우저에서:
+?�버 ?�행 ??브라?��??�서:
 
-| URL | 설명 |
+| URL | ?�명 |
 |-----|------|
 | http://localhost:8000/docs | **Swagger UI** (추천) |
 | http://localhost:8000/redoc | ReDoc 문서 |
-| http://localhost:8000/health | 헬스체크 |
+| http://localhost:8000/health | ?�스체크 |
 
 ---
 
-## 3. API 엔드포인트 목록
+## 3. API ?�드?�인??목록
 
-| 엔드포인트 | 메서드 | 설명 | 용도 |
+| ?�드?�인??| 메서??| ?�명 | ?�도 |
 |-----------|--------|------|------|
-| `/health` | GET | 서버 상태 확인 | 헬스체크 |
-| `/health/ready` | GET | 준비 상태 확인 | K8s Readiness |
-| `/ai/chat/messages` | POST | **채팅 응답 생성** | 메인 채팅 API |
-| `/ai/rag/process` | POST | RAG 문서 처리 | 내부용 |
-| `/ai/gap/policy-edu/suggestions` | POST | RAG Gap 보완 제안 | 관리자용 |
+| `/health` | GET | ?�버 ?�태 ?�인 | ?�스체크 |
+| `/health/ready` | GET | 준�??�태 ?�인 | K8s Readiness |
+| `/ai/chat/messages` | POST | **채팅 ?�답 ?�성** | 메인 채팅 API |
+| `/ai/rag/process` | POST | RAG 문서 처리 | ?��???|
+| `/ai/gap/policy-edu/suggestions` | POST | RAG Gap 보완 ?�안 | 관리자??|
 
 ---
 
-## 4. 채팅 API 연동 가이드
+## 4. 채팅 API ?�동 가?�드
 
-### 4.1 기본 플로우
-
-```
-[사용자] → [ctrlf-back] → [AI Gateway] → [RAGFlow + LLM] → [AI Gateway] → [ctrlf-back] → [사용자]
-```
-
-**상세 플로우:**
+### 4.1 기본 ?�로??
 
 ```
-1. 사용자가 프론트엔드에서 질문 입력
-2. ctrlf-back이 사용자 정보와 함께 AI Gateway 호출
+[?�용?? ??[ctrlf-back] ??[AI Gateway] ??[RAGFlow + LLM] ??[AI Gateway] ??[ctrlf-back] ??[?�용??
+```
+
+**?�세 ?�로??**
+
+```
+1. ?�용?��? ?�론?�엔?�에??질문 ?�력
+2. ctrlf-back???�용???�보?� ?�께 AI Gateway ?�출
 3. AI Gateway 처리:
-   ├─ PII 마스킹 (개인정보 제거)
-   ├─ Intent 분류 (질문 유형 파악)
-   ├─ RAG 검색 (관련 문서 찾기)
-   ├─ LLM 응답 생성
-   └─ PII 마스킹 (응답에서 개인정보 제거)
-4. AI Gateway → ctrlf-back 응답 반환
-5. ctrlf-back → 프론트엔드 → 사용자
+   ?��? PII 마스??(개인?�보 ?�거)
+   ?��? Intent 분류 (질문 ?�형 ?�악)
+   ?��? RAG 검??(관??문서 찾기)
+   ?��? LLM ?�답 ?�성
+   ?��? PII 마스??(?�답?�서 개인?�보 ?�거)
+4. AI Gateway ??ctrlf-back ?�답 반환
+5. ctrlf-back ???�론?�엔?????�용??
 ```
 
-### 4.2 요청 스펙
+### 4.2 ?�청 ?�펙
 
-**엔드포인트:** `POST /ai/chat/messages`
+**?�드?�인??** `POST /ai/chat/messages`
 
 **Request Body:**
 
@@ -157,47 +157,47 @@ BACKEND_BASE_URL=http://localhost:8080
   "user_id": "emp-001",
   "user_role": "EMPLOYEE",
   "domain": "POLICY",
-  "department": "개발팀",
+  "department": "개발?�",
   "channel": "WEB",
   "messages": [
     {
       "role": "user",
-      "content": "연차 이월 규정이 어떻게 되나요?"
+      "content": "?�차 ?�월 규정???�떻�??�나??"
     }
   ]
 }
 ```
 
-**필드 설명:**
+**?�드 ?�명:**
 
-| 필드 | 타입 | 필수 | 설명 |
+| ?�드 | ?�??| ?�수 | ?�명 |
 |------|------|------|------|
-| `session_id` | string | ✅ | 세션 식별자 (대화 컨텍스트 유지용) |
-| `user_id` | string | ✅ | 사용자 ID |
-| `user_role` | string | ✅ | 역할: `EMPLOYEE`, `ADMIN`, `INCIDENT_MANAGER` |
-| `domain` | string | ❌ | 도메인 힌트: `POLICY`, `EDU`, `INCIDENT` |
-| `department` | string | ❌ | 부서명 |
-| `channel` | string | ❌ | 채널: `WEB`, `MOBILE`, `SLACK` |
-| `messages` | array | ✅ | 메시지 배열 (최소 1개) |
-| `messages[].role` | string | ✅ | `user` 또는 `assistant` |
-| `messages[].content` | string | ✅ | 메시지 내용 |
+| `session_id` | string | ??| ?�션 ?�별??(?�??컨텍?�트 ?��??? |
+| `user_id` | string | ??| ?�용??ID |
+| `user_role` | string | ??| ??��: `EMPLOYEE`, `ADMIN`, `INCIDENT_MANAGER` |
+| `domain` | string | ??| ?�메???�트: `POLICY`, `EDU`, `INCIDENT` |
+| `department` | string | ??| 부?�명 |
+| `channel` | string | ??| 채널: `WEB`, `MOBILE`, `SLACK` |
+| `messages` | array | ??| 메시지 배열 (최소 1�? |
+| `messages[].role` | string | ??| `user` ?�는 `assistant` |
+| `messages[].content` | string | ??| 메시지 ?�용 |
 
-### 4.3 응답 스펙
+### 4.3 ?�답 ?�펙
 
 **Response Body:**
 
 ```json
 {
-  "answer": "연차휴가는 다음 해 말일까지 최대 10일까지 이월할 수 있습니다.\n\n[참고 근거]\n- 연차휴가 관리 규정 제10조 (연차 이월) 제2항",
+  "answer": "?�차?��????�음 ??말일까�? 최�? 10?�까지 ?�월?????�습?�다.\n\n[참고 근거]\n- ?�차?��? 관�?규정 ??0�?(?�차 ?�월) ????,
   "sources": [
     {
       "doc_id": "doc-001",
-      "title": "연차휴가 관리 규정",
+      "title": "?�차?��? 관�?규정",
       "page": 5,
       "score": 0.92,
-      "snippet": "연차는 다음 해 말일까지 최대 10일까지 이월할 수 있다...",
-      "article_label": "제10조 (연차 이월) 제2항",
-      "article_path": "제2장 > 제10조 > 제2항"
+      "snippet": "?�차???�음 ??말일까�? 최�? 10?�까지 ?�월?????�다...",
+      "article_label": "??0�?(?�차 ?�월) ????,
+      "article_path": "????> ??0�?> ????
     }
   ],
   "meta": {
@@ -219,43 +219,43 @@ BACKEND_BASE_URL=http://localhost:8080
 }
 ```
 
-**응답 필드 설명:**
+**?�답 ?�드 ?�명:**
 
-| 필드 | 타입 | 설명 |
+| ?�드 | ?�??| ?�명 |
 |------|------|------|
-| `answer` | string | AI 생성 답변 |
-| `sources` | array | RAG 검색 결과 (근거 문서) |
+| `answer` | string | AI ?�성 ?��? |
+| `sources` | array | RAG 검??결과 (근거 문서) |
 | `sources[].doc_id` | string | 문서 ID |
-| `sources[].title` | string | 문서 제목 |
-| `sources[].score` | float | 관련도 점수 (0~1) |
-| `sources[].snippet` | string | 발췌 내용 |
-| `sources[].article_label` | string | 조항 라벨 (예: 제10조 제2항) |
+| `sources[].title` | string | 문서 ?�목 |
+| `sources[].score` | float | 관?�도 ?�수 (0~1) |
+| `sources[].snippet` | string | 발췌 ?�용 |
+| `sources[].article_label` | string | 조항 ?�벨 (?? ??0�????? |
 | `meta.route` | string | 처리 경로 |
-| `meta.intent` | string | 분류된 의도 |
-| `meta.rag_used` | boolean | RAG 사용 여부 |
-| `meta.latency_ms` | int | 전체 처리 시간 (ms) |
-| `meta.rag_gap_candidate` | boolean | RAG Gap 후보 여부 |
+| `meta.intent` | string | 분류???�도 |
+| `meta.rag_used` | boolean | RAG ?�용 ?��? |
+| `meta.latency_ms` | int | ?�체 처리 ?�간 (ms) |
+| `meta.rag_gap_candidate` | boolean | RAG Gap ?�보 ?��? |
 
-### 4.4 역할별 처리 차이
+### 4.4 ??���?처리 차이
 
-| 역할 | 설명 | 특징 |
+| ??�� | ?�명 | ?�징 |
 |------|------|------|
-| `EMPLOYEE` | 일반 직원 | 사규 질의, 교육 현황 조회, 사고 신고 |
-| `ADMIN` | 관리자 | 부서 통계 조회, 전체 현황 파악 |
-| `INCIDENT_MANAGER` | 사고 담당자 | 사고 현황 조회, 상세 분석 |
+| `EMPLOYEE` | ?�반 직원 | ?�규 질의, 교육 ?�황 조회, ?�고 ?�고 |
+| `ADMIN` | 관리자 | 부???�계 조회, ?�체 ?�황 ?�악 |
+| `INCIDENT_MANAGER` | ?�고 ?�당??| ?�고 ?�황 조회, ?�세 분석 |
 
-### 4.5 Intent(의도) 종류
+### 4.5 Intent(?�도) 종류
 
-| Intent | 설명 | Route |
+| Intent | ?�명 | Route |
 |--------|------|-------|
-| `POLICY_QA` | 사규/정책 질문 | RAG_INTERNAL |
-| `EDUCATION_QA` | 교육 내용 질문 | RAG_INTERNAL |
-| `EDU_STATUS` | 교육 현황 조회 | BACKEND_API |
-| `INCIDENT_REPORT` | 사고 신고 | BACKEND_API |
-| `INCIDENT_QA` | 사고 관련 질문 | MIXED_BACKEND_RAG |
-| `GENERAL_CHAT` | 일반 대화 | LLM_ONLY |
+| `POLICY_QA` | ?�규/?�책 질문 | RAG_INTERNAL |
+| `EDUCATION_QA` | 교육 ?�용 질문 | RAG_INTERNAL |
+| `EDU_STATUS` | 교육 ?�황 조회 | BACKEND_API |
+| `INCIDENT_REPORT` | ?�고 ?�고 | BACKEND_API |
+| `INCIDENT_QA` | ?�고 관??질문 | MIXED_BACKEND_RAG |
+| `GENERAL_CHAT` | ?�반 ?�??| LLM_ONLY |
 
-### 4.6 Java/Spring 연동 예시
+### 4.6 Java/Spring ?�동 ?�시
 
 ```java
 @Service
@@ -327,10 +327,10 @@ public class ChatResponse {
 }
 ```
 
-### 4.7 curl 테스트 예시
+### 4.7 curl ?�스???�시
 
 ```bash
-# 기본 채팅 요청
+# 기본 채팅 ?�청
 curl -X POST http://localhost:8000/ai/chat/messages \
   -H "Content-Type: application/json" \
   -d '{
@@ -339,11 +339,11 @@ curl -X POST http://localhost:8000/ai/chat/messages \
     "user_role": "EMPLOYEE",
     "domain": "POLICY",
     "messages": [
-      {"role": "user", "content": "연차 이월 규정이 어떻게 되나요?"}
+      {"role": "user", "content": "?�차 ?�월 규정???�떻�??�나??"}
     ]
   }'
 
-# 교육 현황 조회 (EMPLOYEE)
+# 교육 ?�황 조회 (EMPLOYEE)
 curl -X POST http://localhost:8000/ai/chat/messages \
   -H "Content-Type: application/json" \
   -d '{
@@ -351,36 +351,36 @@ curl -X POST http://localhost:8000/ai/chat/messages \
     "user_id": "emp-001",
     "user_role": "EMPLOYEE",
     "messages": [
-      {"role": "user", "content": "내 교육 이수 현황 알려줘"}
+      {"role": "user", "content": "??교육 ?�수 ?�황 ?�려�?}
     ]
   }'
 
-# 관리자 부서 통계 조회
+# 관리자 부???�계 조회
 curl -X POST http://localhost:8000/ai/chat/messages \
   -H "Content-Type: application/json" \
   -d '{
     "session_id": "test-session-003",
     "user_id": "admin-001",
     "user_role": "ADMIN",
-    "department": "개발팀",
+    "department": "개발?�",
     "messages": [
-      {"role": "user", "content": "우리 부서 교육 이수율 알려줘"}
+      {"role": "user", "content": "?�리 부??교육 ?�수???�려�?}
     ]
   }'
 ```
 
 ---
 
-## 5. RAG Gap 제안 API 연동 가이드
+## 5. RAG Gap ?�안 API ?�동 가?�드
 
-### 5.1 용도
+### 5.1 ?�도
 
-- 관리자 대시보드에서 "RAG Gap 질문"을 수집한 후
-- AI Gateway에 보내면 "어떤 사규/교육을 보완하면 좋을지" 제안
+- 관리자 ?�?�보?�에??"RAG Gap 질문"???�집????
+- AI Gateway??보내�?"?�떤 ?�규/교육??보완?�면 좋을지" ?�안
 
-### 5.2 요청 스펙
+### 5.2 ?�청 ?�펙
 
-**엔드포인트:** `POST /ai/gap/policy-edu/suggestions`
+**?�드?�인??** `POST /ai/gap/policy-edu/suggestions`
 
 **Request Body:**
 
@@ -394,7 +394,7 @@ curl -X POST http://localhost:8000/ai/chat/messages \
   "questions": [
     {
       "questionId": "log-123",
-      "text": "재택근무할 때 VPN 안 쓰면 어떻게 되나요?",
+      "text": "?�택근무????VPN ???�면 ?�떻�??�나??",
       "userRole": "EMPLOYEE",
       "intent": "POLICY_QA",
       "domain": "POLICY",
@@ -402,7 +402,7 @@ curl -X POST http://localhost:8000/ai/chat/messages \
     },
     {
       "questionId": "log-456",
-      "text": "개인 휴대폰으로 회사 메일 보면 보안 위반인가요?",
+      "text": "개인 ?��??�으�??�사 메일 보면 보안 ?�반?��???",
       "userRole": "EMPLOYEE",
       "intent": "POLICY_QA",
       "domain": "POLICY",
@@ -412,23 +412,23 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 }
 ```
 
-### 5.3 응답 스펙
+### 5.3 ?�답 ?�펙
 
 ```json
 {
-  "summary": "재택근무 시 보안 규정과 BYOD 정책에 대한 문서가 부족합니다.",
+  "summary": "?�택근무 ??보안 규정�?BYOD ?�책???�??문서가 부족합?�다.",
   "suggestions": [
     {
       "id": "SUG-001",
-      "title": "재택근무 시 정보보호 수칙 상세 예시 추가",
-      "description": "VPN 사용 의무, 공용 Wi-Fi 금지, 화면 잠금 기준 등을 포함한 조문을 신설하는 것이 좋습니다.",
+      "title": "?�택근무 ???�보보호 ?�칙 ?�세 ?�시 추�?",
+      "description": "VPN ?�용 ?�무, 공용 Wi-Fi 금�?, ?�면 ?�금 기�? ?�을 ?�함??조문???�설?�는 것이 좋습?�다.",
       "relatedQuestionIds": ["log-123"],
       "priority": "HIGH"
     },
     {
       "id": "SUG-002",
-      "title": "개인 휴대폰/노트북 사용 가이드 조항 신설",
-      "description": "BYOD(Bring Your Own Device) 정책을 명확히 하고, 어떤 경우가 위반인지 예시를 추가해야 합니다.",
+      "title": "개인 ?��????�트�??�용 가?�드 조항 ?�설",
+      "description": "BYOD(Bring Your Own Device) ?�책??명확???�고, ?�떤 경우가 ?�반?��? ?�시�?추�??�야 ?�니??",
       "relatedQuestionIds": ["log-456"],
       "priority": "MEDIUM"
     }
@@ -438,19 +438,19 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 
 ---
 
-## 6. 에러 처리
+## 6. ?�러 처리
 
-### 6.1 HTTP 상태 코드
+### 6.1 HTTP ?�태 코드
 
-| 코드 | 설명 | 대응 |
+| 코드 | ?�명 | ?�??|
 |------|------|------|
-| 200 | 성공 | 정상 처리 |
-| 400 | 잘못된 요청 | 요청 데이터 확인 |
-| 422 | 유효성 검사 실패 | 필수 필드 누락 확인 |
-| 500 | 서버 내부 오류 | 재시도 또는 fallback |
-| 503 | 서비스 불가 | LLM/RAG 서버 상태 확인 |
+| 200 | ?�공 | ?�상 처리 |
+| 400 | ?�못???�청 | ?�청 ?�이???�인 |
+| 422 | ?�효??검???�패 | ?�수 ?�드 ?�락 ?�인 |
+| 500 | ?�버 ?��? ?�류 | ?�시???�는 fallback |
+| 503 | ?�비??불�? | LLM/RAG ?�버 ?�태 ?�인 |
 
-### 6.2 에러 응답 예시
+### 6.2 ?�러 ?�답 ?�시
 
 ```json
 {
@@ -458,13 +458,13 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 }
 ```
 
-### 6.3 Fallback 응답
+### 6.3 Fallback ?�답
 
-LLM/RAG 장애 시에도 응답은 반환됩니다:
+LLM/RAG ?�애 ?�에???�답?� 반환?�니??
 
 ```json
 {
-  "answer": "죄송합니다. 현재 AI 서비스에 일시적인 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+  "answer": "죄송?�니?? ?�재 AI ?�비?�에 ?�시?�인 문제가 발생?�습?�다. ?�시 ???�시 ?�도??주세??",
   "sources": [],
   "meta": {
     "route": "ERROR",
@@ -476,43 +476,43 @@ LLM/RAG 장애 시에도 응답은 반환됩니다:
 
 ---
 
-## 7. 연동 체크리스트
+## 7. ?�동 체크리스??
 
-### 7.1 기본 연동
+### 7.1 기본 ?�동
 
-- [ ] AI Gateway 서버 URL 설정
-- [ ] `/health` 엔드포인트로 연결 확인
-- [ ] `/ai/chat/messages` 기본 호출 테스트
-- [ ] 응답 파싱 및 화면 표시
+- [ ] AI Gateway ?�버 URL ?�정
+- [ ] `/health` ?�드?�인?�로 ?�결 ?�인
+- [ ] `/ai/chat/messages` 기본 ?�출 ?�스??
+- [ ] ?�답 ?�싱 �??�면 ?�시
 
-### 7.2 사용자 정보 연동
+### 7.2 ?�용???�보 ?�동
 
-- [ ] `session_id` 생성 및 관리
-- [ ] `user_id` 전달
+- [ ] `session_id` ?�성 �?관�?
+- [ ] `user_id` ?�달
 - [ ] `user_role` 매핑 (EMPLOYEE/ADMIN/INCIDENT_MANAGER)
-- [ ] `department` 전달 (선택)
+- [ ] `department` ?�달 (?�택)
 
-### 7.3 대화 컨텍스트
+### 7.3 ?�??컨텍?�트
 
-- [ ] 이전 대화 내역 `messages` 배열로 전달
-- [ ] 멀티턴 대화 테스트
+- [ ] ?�전 ?�???�역 `messages` 배열�??�달
+- [ ] 멀?�턴 ?�???�스??
 
-### 7.4 에러 처리
+### 7.4 ?�러 처리
 
-- [ ] HTTP 에러 핸들링
-- [ ] Fallback 응답 처리
-- [ ] 타임아웃 설정 (권장: 30초)
+- [ ] HTTP ?�러 ?�들�?
+- [ ] Fallback ?�답 처리
+- [ ] ?�?�아???�정 (권장: 30�?
 
-### 7.5 로깅/모니터링
+### 7.5 로깅/모니?�링
 
-- [ ] AI 로그 수신 API 구현 (선택)
-- [ ] `meta.rag_gap_candidate=true` 질문 수집
+- [ ] AI 로그 ?�신 API 구현 (?�택)
+- [ ] `meta.rag_gap_candidate=true` 질문 ?�집
 
 ---
 
 ## 문의
 
-AI Gateway 관련 문의사항은 AI 팀에 연락해주세요.
+AI Gateway 관??문의?�항?� AI ?�???�락?�주?�요.
 
 - GitHub: https://github.com/skRookies4team/ctrlf-ai
 - Swagger: http://[AI_GATEWAY_HOST]:8000/docs
