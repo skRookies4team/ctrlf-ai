@@ -83,11 +83,39 @@ EDU_CONTENT_KEYWORDS = frozenset([
     "내용", "규정", "방법", "절차",
 ])
 
-# 정책/규정 관련 키워드 (POLICY_QA)
+# 정책/규정 관련 키워드 (POLICY_QA) - Phase 43 대폭 확장
 POLICY_KEYWORDS = frozenset([
+    # 기본 규정 키워드
     "연차", "휴가", "규정", "사규", "정책", "규칙",
     "지침", "매뉴얼", "가이드", "절차", "프로세스",
     "승인", "결재", "보안", "개인정보보호",
+    # Q세트 도메인: 사규/복무/인사
+    "근무시간", "휴게시간", "지각", "결근", "무단결근", "조퇴", "외출",
+    "재택근무", "반차", "병가", "경조사", "출산휴가",
+    "육아휴직", "연장근로", "야근", "당직", "인사평가", "승진",
+    "부서이동", "보직변경", "징계처분", "사규개정", "법령", "복무",
+    "인사", "근로기준", "취업규칙", "휴일", "휴무", "초과근무",
+    # Q세트 도메인: 개인정보보호 (PIP)
+    "개인정보", "민감정보", "클라우드", "usb", "이메일", "외부전송",
+    "개인정보유출", "마스킹", "암호화", "보안사고", "정보주체",
+    "열람권", "정정권", "삭제권", "동의", "수집", "이용", "제공",
+    "개인정보처리", "cctv", "영상정보", "익명처리", "가명처리",
+    # Q세트 도메인: 성희롱 방지 (SHP)
+    "성희롱", "성적", "언어적", "신체적", "시각적", "성적농담",
+    "불쾌", "성적수치심", "성적굴욕감", "피해자", "가해자",
+    "성희롱신고", "성희롱예방", "2차피해", "피해자보호",
+    # Q세트 도메인: 직장내괴롭힘 (BHP)
+    "괴롭힘", "직장내괴롭힘", "폭언", "폭행", "따돌림", "왕따",
+    "업무배제", "업무외지시", "사적심부름", "인격모독",
+    "괴롭힘신고", "괴롭힘예방", "우월적지위", "갑질",
+    # Q세트 도메인: 장애인식 (DEP)
+    "장애인", "장애", "장애인식", "합리적편의", "차별금지",
+    "장애인차별", "장애유형", "편견", "고정관념",
+    "장애인고용", "장애인채용", "보조기기", "편의제공",
+    # Q세트 도메인: 직무별교육 (JOB)
+    "소스코드", "오픈소스", "라이선스", "api", "로그", "데이터",
+    "클라우드보안", "인사정보", "민감정보처리", "ai", "외부ai",
+    "보안점검", "취약점", "사이버보안", "저작권", "초상권",
 ])
 
 # 일반 잡담 키워드 (GENERAL_CHAT)
@@ -283,12 +311,17 @@ class IntentService:
             logger.debug(f"Intent: SYSTEM_HELP - query={user_query[:50]}...")
             return IntentType.SYSTEM_HELP, Domain.POLICY.value
 
-        # 6. 일반 잡담 체크
+        # 6. 정책 관련 키워드 체크 (Phase 43: 잡담 체크 전으로 이동)
+        if self._contains_any(query_lower, POLICY_KEYWORDS):
+            logger.debug(f"Intent: POLICY_QA (keyword) - query={user_query[:50]}...")
+            return IntentType.POLICY_QA, Domain.POLICY.value
+
+        # 7. 일반 잡담 체크 (Phase 43: 정책 체크 후로 이동)
         if self._contains_any(query_lower, GENERAL_CHAT_KEYWORDS):
             logger.debug(f"Intent: GENERAL_CHAT - query={user_query[:50]}...")
             return IntentType.GENERAL_CHAT, Domain.POLICY.value
 
-        # 7. 도메인 힌트가 있으면 해당 도메인의 기본 QA
+        # 8. 도메인 힌트가 있으면 해당 도메인의 기본 QA
         if domain_hint:
             if domain_hint == Domain.INCIDENT.value:
                 return IntentType.INCIDENT_QA, Domain.INCIDENT.value
@@ -296,11 +329,6 @@ class IntentService:
                 return IntentType.EDUCATION_QA, Domain.EDU.value
             else:
                 return IntentType.POLICY_QA, domain_hint
-
-        # 8. 정책 관련 키워드 체크
-        if self._contains_any(query_lower, POLICY_KEYWORDS):
-            logger.debug(f"Intent: POLICY_QA (keyword) - query={user_query[:50]}...")
-            return IntentType.POLICY_QA, Domain.POLICY.value
 
         # 9. 기본값: POLICY_QA
         logger.debug(f"Intent: POLICY_QA (default) - query={user_query[:50]}...")
