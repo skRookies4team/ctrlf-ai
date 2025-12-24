@@ -32,10 +32,14 @@ Phase 12 업데이트:
     )
 """
 
+import io
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
+
+# boto3는 S3 URI 처리 시에만 lazy import (설치되어 있지 않을 수 있음)
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
@@ -994,6 +998,61 @@ class RagflowClient:
             logger.error(f"RAGFlow trigger_parsing request error: {e}")
             raise RagflowConnectionError(f"Connection failed: {type(e).__name__}")
 
+    async def _download_from_s3(self, s3_uri: str) -> bytes:
+        """
+        S3 URI에서 파일을 다운로드합니다.
+
+        Args:
+            s3_uri: S3 URI (s3://bucket/key 형식)
+
+        Returns:
+            bytes: 파일 내용
+
+        Raises:
+            RagflowConnectionError: S3 다운로드 실패 시
+        """
+        try:
+            import boto3
+            from botocore.exceptions import ClientError, NoCredentialsError
+        except ImportError:
+            raise RagflowConnectionError("boto3 is not installed. Run: pip install boto3")
+
+        parsed = urlparse(s3_uri)
+        bucket = parsed.netloc
+        key = parsed.path.lstrip("/")
+
+        logger.info(f"Downloading from S3: bucket={bucket}, key={key}")
+
+        try:
+            settings = get_settings()
+
+            # S3 클라이언트 생성 (endpoint_url이 있으면 MinIO 등 사용)
+            s3_config = {}
+            if settings.S3_ENDPOINT_URL:
+                s3_config["endpoint_url"] = settings.S3_ENDPOINT_URL
+
+            s3_client = boto3.client("s3", **s3_config)
+
+            # 파일 다운로드
+            buffer = io.BytesIO()
+            s3_client.download_fileobj(bucket, key, buffer)
+            buffer.seek(0)
+
+            file_content = buffer.read()
+            logger.info(f"S3 download complete: {len(file_content)} bytes")
+            return file_content
+
+        except NoCredentialsError:
+            logger.error("AWS credentials not found")
+            raise RagflowConnectionError("AWS credentials not configured")
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "Unknown")
+            logger.error(f"S3 download error: {error_code} - {e}")
+            raise RagflowConnectionError(f"S3 error: {error_code}")
+        except Exception as e:
+            logger.error(f"S3 download failed: {e}")
+            raise RagflowConnectionError(f"S3 download failed: {type(e).__name__}")
+
     async def upload_document(
         self,
         dataset_id: str,
@@ -1008,7 +1067,7 @@ class RagflowClient:
 
         Args:
             dataset_id: RAGFlow 데이터셋 ID
-            file_url: 문서 파일 URL (S3 presigned URL 등)
+            file_url: 문서 파일 URL (S3 URI 또는 HTTP URL)
             file_name: 파일명
 
         Returns:
@@ -1022,22 +1081,22 @@ class RagflowClient:
         if not self._base_url:
             raise RagflowError("RAGFLOW_BASE_URL is not configured")
 
-        # RAGFlow는 URL 기반 업로드를 직접 지원하지 않을 수 있음
-        # 이 경우 파일을 다운로드 후 multipart로 업로드해야 함
-        # TODO: RAGFlow API 스펙에 맞게 구현 필요
-
         url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
         headers = self._get_auth_headers()
 
         logger.info(f"Uploading document to RAGFlow: dataset={dataset_id}, file={file_name}")
 
         try:
-            # URL 기반 업로드 시도 (RAGFlow가 지원하는 경우)
-            # 지원하지 않으면 파일 다운로드 후 multipart 업로드 필요
-            async with httpx.AsyncClient() as download_client:
-                file_response = await download_client.get(file_url, timeout=60.0)
-                file_response.raise_for_status()
-                file_content = file_response.content
+            # S3 URI인 경우 boto3로 다운로드
+            if file_url.startswith("s3://"):
+                logger.info(f"Detected S3 URI, downloading via boto3: {file_url}")
+                file_content = await self._download_from_s3(file_url)
+            else:
+                # HTTP/HTTPS URL인 경우 httpx로 다운로드
+                async with httpx.AsyncClient() as download_client:
+                    file_response = await download_client.get(file_url, timeout=60.0)
+                    file_response.raise_for_status()
+                    file_content = file_response.content
 
             # Multipart 업로드
             files = {"file": (file_name, file_content)}
