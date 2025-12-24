@@ -1008,12 +1008,12 @@ class RagflowClient:
             RagflowConnectionError: presigned URL 획득 실패 시
         """
         settings = get_settings()
-        backend_url = settings.BACKEND_BASE_URL
+        infra_url = settings.infra_base_url
 
-        if not backend_url:
-            raise RagflowConnectionError("BACKEND_BASE_URL is not configured")
+        if not infra_url:
+            raise RagflowConnectionError("INFRA_BASE_URL is not configured")
 
-        url = f"{backend_url}/internal/s3/download"
+        url = f"{infra_url}/infra/files/presign/download"
         logger.info(f"Requesting presigned URL: s3_uri={s3_uri}")
 
         try:

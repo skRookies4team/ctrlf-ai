@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # ctrlf-back (Spring 백엔드) 연동 URL
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
+    # ctrlf-back infra-service 연동 URL (S3 presigned URL 등)
+    INFRA_BASE_URL: Optional[HttpUrl] = None
+
     # =========================================================================
     # PII 마스킹 서비스 설정
     # =========================================================================
@@ -453,6 +456,18 @@ class Settings(BaseSettings):
         if not self.BACKEND_BASE_URL_MOCK:
             return None
         return self.BACKEND_BASE_URL_MOCK
+
+    @property
+    def infra_base_url(self) -> Optional[str]:
+        """
+        Infra 서비스 URL을 반환합니다 (S3 presigned URL 등).
+
+        Returns:
+            str: Infra 서비스 URL, 미설정 시 None
+        """
+        if self.INFRA_BASE_URL:
+            return str(self.INFRA_BASE_URL).rstrip("/")
+        return None
 
     @property
     def is_mock_mode(self) -> bool:
