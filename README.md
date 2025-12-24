@@ -15,20 +15,27 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 
 ## 연동 서비스
 
-| 서비스 | 주소 | 설명 |
-|--------|------|------|
-| **vLLM** | `your-llm-server:port` | LLM (Qwen2.5-7B-Instruct) |
-| **Embedding** | `your-embedding-server:port` | 임베딩 (ko-sroberta) |
-| **Milvus** | `your-milvus-host:19540` | 벡터 DB |
-| **RAGFlow** | `localhost:9380` | RAG 파이프라인 |
-| **ctrlf-back** | Spring | 백엔드 API |
-| **ctrlf-front** | React | 프론트엔드 |
+| 서비스          | 주소                  | 설명                      |
+| --------------- | --------------------- | ------------------------- |
+| **vLLM**        | `your-llm-server:port`  | LLM (Qwen2.5-7B-Instruct) |
+| **Embedding**   | `your-embedding-server:port`  | 임베딩 (ko-sroberta)      |
+| **Milvus**      | `your-milvus-host:19540` | 벡터 DB                   |
+| **RAGFlow**     | `localhost:9380`      | RAG 파이프라인            |
+| **ctrlf-back**  | Spring                | 백엔드 API                |
+| **ctrlf-front** | React                 | 프론트엔드                |
 
 ## 빠른 시작
 
 ### 1. 환경 설정
 
+# 가상환경 생성 및 활성화
+
+python -m venv venv
+.\venv\Scripts\activate
+
 ```bash
+source venv/Scripts/activate
+
 # Python 3.12+ 권장
 pip install -r requirements.txt
 
@@ -102,10 +109,10 @@ CTRL+F AI 채팅 테스트 (종료: q 또는 Ctrl+C)
 
 **필수 서비스:**
 
-| 환경변수 | RAGFlow | Milvus | vLLM | 설명 |
-|----------|---------|--------|------|------|
-| `MILVUS_ENABLED=true` | 불필요 | 필수 | 필수 | Milvus 직접 연동 (권장) |
-| `MILVUS_ENABLED=false` | 필수 | 불필요 | 필수 | RAGFlow 파이프라인 사용 |
+| 환경변수               | RAGFlow | Milvus | vLLM | 설명                    |
+| ---------------------- | ------- | ------ | ---- | ----------------------- |
+| `MILVUS_ENABLED=true`  | 불필요  | 필수   | 필수 | Milvus 직접 연동 (권장) |
+| `MILVUS_ENABLED=false` | 필수    | 불필요 | 필수 | RAGFlow 파이프라인 사용 |
 
 - **vLLM**: 항상 필수 (LLM 응답 생성, 임베딩)
 - **RAGFlow 없이 테스트**: `MILVUS_ENABLED=true` 설정 후 Milvus만 연결하면 됨
@@ -129,35 +136,35 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 
 ### 채팅
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| POST | `/ai/chat/messages` | AI 채팅 |
-| POST | `/ai/chat/stream` | 스트리밍 채팅 |
+| 메서드 | 경로                | 설명          |
+| ------ | ------------------- | ------------- |
+| POST   | `/ai/chat/messages` | AI 채팅       |
+| POST   | `/ai/chat/stream`   | 스트리밍 채팅 |
 
 ### 교육 영상 생성
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| POST | `/api/scripts` | 스크립트 생성 |
-| GET | `/api/scripts/{id}` | 스크립트 조회 |
-| POST | `/api/scripts/{id}/approve` | 스크립트 승인 |
-| POST | `/api/videos/{id}/render-jobs` | 영상 렌더링 시작 |
-| GET | `/api/render-jobs/{id}` | 렌더링 상태 조회 |
+| 메서드 | 경로                           | 설명             |
+| ------ | ------------------------------ | ---------------- |
+| POST   | `/api/scripts`                 | 스크립트 생성    |
+| GET    | `/api/scripts/{id}`            | 스크립트 조회    |
+| POST   | `/api/scripts/{id}/approve`    | 스크립트 승인    |
+| POST   | `/api/videos/{id}/render-jobs` | 영상 렌더링 시작 |
+| GET    | `/api/render-jobs/{id}`        | 렌더링 상태 조회 |
 
 ### FAQ/퀴즈
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| POST | `/ai/faq/generate` | FAQ 생성 |
-| POST | `/ai/quiz/generate` | 퀴즈 생성 |
+| 메서드 | 경로                | 설명      |
+| ------ | ------------------- | --------- |
+| POST   | `/ai/faq/generate`  | FAQ 생성  |
+| POST   | `/ai/quiz/generate` | 퀴즈 생성 |
 
 ### Internal RAG (백엔드 연동)
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| POST | `/internal/rag/index` | 문서 인덱싱 |
-| POST | `/internal/rag/delete` | 문서 삭제 |
-| GET | `/internal/jobs/{jobId}` | 작업 상태 조회 |
+| 메서드 | 경로                     | 설명           |
+| ------ | ------------------------ | -------------- |
+| POST   | `/internal/rag/index`    | 문서 인덱싱    |
+| POST   | `/internal/rag/delete`   | 문서 삭제      |
+| GET    | `/internal/jobs/{jobId}` | 작업 상태 조회 |
 
 ## 환경변수 (.env)
 
@@ -246,12 +253,14 @@ ctrlf-ai/
 ## 개발 히스토리
 
 ### 영상 생성 파이프라인
+
 - **Phase 37**: Ken Burns + Fade 효과
 - **Phase 36**: Presigned 업로드
 - **Phase 33-35**: Render Job 운영화
 - **Phase 29-32**: KB Index, Script Gen, Video Rendering
 
 ### RAG/채팅
+
 - **Phase 25**: Internal RAG (Milvus 직접 연동)
 - **Phase 24**: Milvus 벡터 검색
 - **Phase 22-23**: Router Orchestrator, 개인화

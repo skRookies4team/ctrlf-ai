@@ -118,7 +118,7 @@ class MilvusSearchClient:
         self._host = host or settings.MILVUS_HOST
         self._port = port or settings.MILVUS_PORT
         self._collection_name = collection_name or settings.MILVUS_COLLECTION_NAME
-        self._llm_base_url = llm_base_url or settings.llm_base_url
+        self._llm_base_url = llm_base_url or settings.embedding_base_url
         self._embedding_model = embedding_model or settings.EMBEDDING_MODEL_NAME
         self._embedding_dim = settings.EMBEDDING_DIMENSION
         self._top_k = settings.MILVUS_TOP_K
