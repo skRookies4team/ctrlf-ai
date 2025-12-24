@@ -248,12 +248,17 @@ class TestRuleRouterBasicClassification:
             assert result.route_type == RouterRouteType.ROUTE_SYSTEM_HELP
 
     def test_unknown_fallback(self):
-        """분류 불가는 UNKNOWN + 낮은 confidence."""
+        """분류 불가 시 기본값은 POLICY_QA + 낮은 confidence.
+
+        Phase 43 변경: UNKNOWN → POLICY_QA로 기본값 변경 (RAG 우선 정책)
+        무의미한 입력도 RAG를 먼저 타게 하여 최대한 답변을 시도함.
+        """
         router = RuleRouter()
 
         result = router.route("ㅁㄴㅇㄹ")  # 무의미한 입력
-        assert result.tier0_intent == Tier0Intent.UNKNOWN
-        assert result.confidence < 0.5
+        # Phase 43: 기본값이 POLICY_QA로 변경 (RAG 우선)
+        assert result.tier0_intent == Tier0Intent.POLICY_QA
+        assert result.confidence <= 0.5  # 낮은 confidence (0.5 이하)
 
 
 # =============================================================================

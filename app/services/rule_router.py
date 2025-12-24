@@ -13,9 +13,16 @@ Phase 21: 규칙 기반 라우터 (Rule Router)
 
 경계 A: 교육 내용 설명 vs 내 이수현황/진도(개인화)
 경계 B: 규정 질문 vs HR/근태/복지 개인화(내 정보 조회)
+
+Phase 43 업데이트 (인텐트/라우팅 개선):
+- POLICY_KEYWORDS 대폭 확장 (Q세트 5개 도메인 커버)
+- 질문형 어미 감지 추가 (나요/하나요/인가요 등)
+- 기본값 UNKNOWN → POLICY_QA로 변경 (RAG 우선)
+- GENERAL_CHAT 조건 강화 (질문형은 제외)
 """
 
 import random
+import re
 from typing import Optional, Tuple
 
 from app.core.logging import get_logger
@@ -39,12 +46,41 @@ logger = get_logger(__name__)
 # 키워드 정의
 # =============================================================================
 
-# 정책/규정 관련 키워드 (POLICY_QA)
+# 정책/규정 관련 키워드 (POLICY_QA) - Phase 43 대폭 확장
 POLICY_KEYWORDS = frozenset([
+    # 기본 규정 키워드
     "규정", "사규", "정책", "규칙", "지침", "매뉴얼", "가이드",
     "절차", "프로세스", "승인", "결재", "보안정책", "개인정보보호",
     "허용", "금지", "위반", "제재", "징계",
     "정보보호", "보안규정", "내부규정",
+    # Q세트 도메인: 사규/복무/인사
+    "근무시간", "휴게시간", "지각", "결근", "무단결근", "조퇴", "외출",
+    "재택근무", "연차", "휴가", "반차", "병가", "경조사", "출산휴가",
+    "육아휴직", "연장근로", "야근", "당직", "인사평가", "승진",
+    "부서이동", "보직변경", "징계처분", "사규개정", "법령", "복무",
+    "인사", "근로기준", "취업규칙", "휴일", "휴무", "초과근무",
+    # Q세트 도메인: 개인정보보호 (PIP)
+    "개인정보", "민감정보", "클라우드", "usb", "이메일", "외부전송",
+    "개인정보유출", "마스킹", "암호화", "보안사고", "정보주체",
+    "열람권", "정정권", "삭제권", "동의", "수집", "이용", "제공",
+    "개인정보처리", "cctv", "영상정보", "익명처리", "가명처리",
+    # Q세트 도메인: 성희롱 방지 (SHP)
+    "성희롱", "성적", "언어적", "신체적", "시각적", "성적농담",
+    "불쾌", "성적수치심", "성적굴욕감", "피해자", "가해자",
+    "성희롱신고", "성희롱예방", "2차피해", "피해자보호",
+    # Q세트 도메인: 직장내괴롭힘 (BHP)
+    "괴롭힘", "직장내괴롭힘", "폭언", "폭행", "따돌림", "왕따",
+    "업무배제", "업무외지시", "사적심부름", "인격모독",
+    "괴롭힘신고", "괴롭힘예방", "우월적지위", "갑질",
+    # Q세트 도메인: 장애인식 (DEP)
+    "장애인", "장애", "장애인식", "합리적편의", "차별금지",
+    "장애인차별", "장애유형", "편견", "고정관념",
+    "장애인고용", "장애인채용", "보조기기", "편의제공",
+    # Q세트 도메인: 직무별교육 (JOB)
+    "소스코드", "오픈소스", "라이선스", "api", "로그", "데이터",
+    "클라우드보안", "인사정보", "민감정보처리", "ai", "외부ai",
+    "보안점검", "취약점", "사이버보안", "저작권", "초상권",
+    "github", "코드", "개발자", "보안교육", "정보보호교육",
 ])
 
 # 교육 내용/규정 관련 키워드 (EDUCATION_QA)
@@ -144,6 +180,12 @@ LEAVE_AMBIGUOUS_VERBS = frozenset([
     "뭐야", "뭔가요", "어떻게", "어때", "있",
 ])
 
+# Phase 43: 질문형 어미 패턴 (GENERAL_CHAT에서 제외할 조건)
+QUESTION_ENDINGS = re.compile(
+    r"(나요|하나요|인가요|ㄴ가요|는지|ㄹ까|을까|할까|됩니까|습니까|입니까|"
+    r"어야|해야|될까|되나요|건가요|인지|요\?|까\?|니\?|가\?)$"
+)
+
 
 # =============================================================================
 # RuleRouter 클래스
@@ -207,8 +249,8 @@ class RuleRouter:
             )
             return critical_result
 
-        # Step 3: 명확한 키워드 매칭
-        intent_result = self._classify_by_keywords(query_lower, debug_info)
+        # Step 3: 명확한 키워드 매칭 (Phase 43: 원본 질문도 전달)
+        intent_result = self._classify_by_keywords(query_lower, user_query, debug_info)
 
         logger.info(
             f"RuleRouter: intent={intent_result.tier0_intent.value}, "
@@ -379,15 +421,44 @@ class RuleRouter:
 
         return None
 
+    def _is_question_format(self, query: str) -> bool:
+        """질문형 문장인지 확인합니다.
+
+        Phase 43: 질문형 어미가 있으면 True 반환
+        이 경우 GENERAL_CHAT으로 분류하지 않음
+
+        Args:
+            query: 원본 질문 텍스트
+
+        Returns:
+            bool: 질문형 문장이면 True
+        """
+        # 물음표가 있으면 질문
+        if "?" in query:
+            return True
+
+        # 질문형 어미 패턴 체크
+        if QUESTION_ENDINGS.search(query):
+            return True
+
+        return False
+
     def _classify_by_keywords(
         self,
         query_lower: str,
+        query_original: str,
         debug_info: RouterDebugInfo,
     ) -> RouterResult:
         """키워드 기반으로 의도를 분류합니다.
 
+        Phase 43 업데이트:
+        - 키워드 대폭 확장으로 매칭률 향상
+        - 기본값을 POLICY_QA로 변경 (RAG 우선)
+        - 질문형 문장은 GENERAL_CHAT에서 제외
+
         Args:
             query_lower: 소문자로 변환된 질문
+            query_original: 원본 질문 (질문형 판정용)
             debug_info: 디버그 정보 객체
 
         Returns:
@@ -481,27 +552,41 @@ class RuleRouter:
                 debug=debug_info,
             )
 
-        # 7. 일반 잡담
+        # 7. 일반 잡담 (Phase 43: 질문형 문장은 제외)
         if self._contains_any(query_lower, GENERAL_CHAT_KEYWORDS):
-            debug_info.rule_hits.append("GENERAL_CHAT")
-            debug_info.keywords.extend(
-                [kw for kw in GENERAL_CHAT_KEYWORDS if kw in query_lower]
-            )
+            # 질문형 문장이면 잡담으로 분류하지 않음
+            if not self._is_question_format(query_original):
+                debug_info.rule_hits.append("GENERAL_CHAT")
+                debug_info.keywords.extend(
+                    [kw for kw in GENERAL_CHAT_KEYWORDS if kw in query_lower]
+                )
+                return RouterResult(
+                    tier0_intent=Tier0Intent.GENERAL_CHAT,
+                    domain=RouterDomain.GENERAL,
+                    route_type=RouterRouteType.LLM_ONLY,
+                    confidence=0.8,
+                    debug=debug_info,
+                )
+
+        # 8. Phase 43: 기본값을 POLICY_QA로 변경 (RAG 우선)
+        # 질문형 문장이거나 분류가 안 되면 우선 RAG를 타도록 함
+        if self._is_question_format(query_original):
+            debug_info.rule_hits.append("QUESTION_FORMAT_DEFAULT_POLICY")
             return RouterResult(
-                tier0_intent=Tier0Intent.GENERAL_CHAT,
-                domain=RouterDomain.GENERAL,
-                route_type=RouterRouteType.LLM_ONLY,
-                confidence=0.8,
+                tier0_intent=Tier0Intent.POLICY_QA,
+                domain=RouterDomain.POLICY,
+                route_type=RouterRouteType.RAG_INTERNAL,
+                confidence=0.6,  # 기본값이지만 RAG는 타도록
                 debug=debug_info,
             )
 
-        # 8. 기본값: UNKNOWN (LLM Router로 추가 분류 필요)
-        debug_info.rule_hits.append("UNKNOWN_DEFAULT")
+        # 9. 그 외: POLICY_QA로 분류 (RAG 우선)
+        debug_info.rule_hits.append("DEFAULT_POLICY_QA")
         return RouterResult(
-            tier0_intent=Tier0Intent.UNKNOWN,
-            domain=RouterDomain.GENERAL,
-            route_type=RouterRouteType.ROUTE_UNKNOWN,
-            confidence=0.3,
+            tier0_intent=Tier0Intent.POLICY_QA,
+            domain=RouterDomain.POLICY,
+            route_type=RouterRouteType.RAG_INTERNAL,
+            confidence=0.5,  # LLM Router로 추가 분류 권장
             debug=debug_info,
         )
 

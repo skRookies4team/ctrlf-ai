@@ -538,8 +538,9 @@ class TestIntegration:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="FE용 /api/scripts, /api/v2/render-jobs API 제거됨 - FE는 백엔드 경유 필수")
 class TestRegression:
-    """회귀 테스트 - 기존 Phase 27/28 동작 확인."""
+    """회귀 테스트 - 기존 Phase 27/28 동작 확인. (FE API 제거로 스킵)"""
 
     @pytest.fixture
     def client(self):

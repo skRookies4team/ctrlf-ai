@@ -1,53 +1,154 @@
 """
-렌더 잡 API
+렌더 잡 API (Internal Only)
 
-영상 렌더링 잡 CRUD 및 실행 API 엔드포인트.
+영상 렌더링 잡 실행 API 엔드포인트.
+FE는 백엔드 경유하므로 FE용 API는 모두 제거됨.
 
-엔드포인트:
-- POST /api/videos/{video_id}/render-jobs : 렌더 잡 생성 (idempotent)
-- GET /api/videos/{video_id}/render-jobs : 잡 목록 조회
-- GET /api/videos/{video_id}/render-jobs/{job_id} : 잡 상세 조회
-- POST /api/videos/{video_id}/render-jobs/{job_id}/cancel : 잡 취소
-- GET /api/videos/{video_id}/assets/published : 발행된 에셋 조회
-- POST /ai/video/job/{job_id}/start : 잡 시작 (Backend → AI)
-- POST /ai/video/job/{job_id}/retry : 잡 재시도 (Backend → AI)
+엔드포인트 (Backend → AI):
+- POST /internal/ai/render-jobs : 렌더 잡 생성/시작 (백엔드 발급 jobId 사용)
+- POST /ai/video/job/{job_id}/start : 잡 시작 (레거시, 호환성)
+- POST /ai/video/job/{job_id}/retry : 잡 재시도 (레거시, 호환성)
 
 상태 머신 (DB 정렬):
 - QUEUED → PROCESSING → COMPLETED | FAILED
 - 취소: FAILED + error_code="CANCELED"
 
 정책:
-- PROCESSING/QUEUED 잡이 있으면 기존 잡 반환 (idempotency)
-- APPROVED 스크립트만 렌더 가능
-- 잡 상태는 DB에 영속화
+- jobId는 백엔드가 발급 (AI는 생성하지 않음)
+- 상태값은 PROCESSING 사용 (RENDERING 금지)
+- 렌더 스펙은 백엔드에서 조회
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.models.video_render import (
-    PublishedAssetsResponse,
-    RenderJobCancelResponse,
-    RenderJobCreateRequest,
-    RenderJobCreateResponseV2,
-    RenderJobDetailResponse,
-    RenderJobListResponse,
-    RenderJobStartResponse,
-    RenderJobSummary,
-)
-from app.services.education_catalog_service import get_education_catalog_service
-from app.services.video_render_service import get_video_render_service
+from app.models.video_render import RenderJobStartResponse
 from app.services.video_renderer_mvp import get_mvp_video_renderer
 
 logger = get_logger(__name__)
 
-# 렌더 잡 CRUD API (V2)
-router = APIRouter(prefix="/api/v2", tags=["Render Jobs"])
+# Internal API 라우터 (Backend → AI)
+internal_router = APIRouter(prefix="/internal/ai", tags=["Internal Render Jobs"])
 
-# Backend → AI 호출용 라우터 (영상 생성 시작/재시도)
+# Backend → AI 호출용 라우터 (영상 생성 시작/재시도) - 레거시 호환
 ai_router = APIRouter(prefix="/video/job", tags=["Video Job (Backend → AI)"])
+
+
+# =============================================================================
+# Internal API Authentication
+# =============================================================================
+
+
+async def verify_internal_token(
+    x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+) -> None:
+    """내부 API 인증 토큰 검증.
+
+    Args:
+        x_internal_token: X-Internal-Token 헤더 값
+
+    Raises:
+        HTTPException: 인증 실패 시 401/403
+    """
+    settings = get_settings()
+    expected_token = settings.BACKEND_INTERNAL_TOKEN
+
+    # 토큰이 설정되지 않은 경우 (개발 환경)
+    if not expected_token:
+        logger.warning("BACKEND_INTERNAL_TOKEN not configured, skipping auth")
+        return
+
+    if not x_internal_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "reason_code": "MISSING_TOKEN",
+                "message": "X-Internal-Token 헤더가 필요합니다.",
+            },
+        )
+
+    if x_internal_token != expected_token:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "reason_code": "INVALID_TOKEN",
+                "message": "유효하지 않은 인증 토큰입니다.",
+            },
+        )
+
+
+# =============================================================================
+# Internal API Request/Response Models
+# =============================================================================
+
+
+class InternalRenderJobRequest(BaseModel):
+    """내부 렌더 잡 생성 요청 (Backend → AI).
+
+    POST /internal/ai/render-jobs
+    """
+
+    job_id: str = Field(
+        ...,
+        alias="jobId",
+        description="백엔드가 발급한 잡 ID",
+    )
+    video_id: str = Field(
+        ...,
+        alias="videoId",
+        description="영상 ID",
+    )
+    script_id: str = Field(
+        ...,
+        alias="scriptId",
+        description="스크립트 ID",
+    )
+    script_version: Optional[int] = Field(
+        None,
+        alias="scriptVersion",
+        description="스크립트 버전 (선택)",
+    )
+    render_policy_id: Optional[str] = Field(
+        None,
+        alias="renderPolicyId",
+        description="렌더 정책 ID (선택)",
+    )
+    request_id: Optional[str] = Field(
+        None,
+        alias="requestId",
+        description="멱등 키 (권장)",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+class InternalRenderJobResponse(BaseModel):
+    """내부 렌더 잡 생성 응답.
+
+    202 Accepted
+    """
+
+    received: bool = Field(
+        ...,
+        description="접수 여부",
+    )
+    job_id: str = Field(
+        ...,
+        alias="jobId",
+        description="잡 ID (백엔드 발급값 그대로)",
+    )
+    status: str = Field(
+        ...,
+        description="현재 상태 (PROCESSING)",
+    )
+
+    class Config:
+        populate_by_name = True
 
 
 # =============================================================================
@@ -65,319 +166,84 @@ def get_render_job_runner():
     return runner
 
 
-def get_render_service():
-    """VideoRenderService 의존성."""
-    service = get_video_render_service()
-    if service._renderer is None:
-        service.set_renderer(get_mvp_video_renderer())
-    return service
-
-
-def ensure_education_not_expired(video_id: str) -> None:
-    """교육이 만료되지 않았는지 확인."""
-    catalog = get_education_catalog_service()
-    education_id = video_id
-
-    if catalog.is_expired(education_id):
-        logger.warning(f"Video render blocked: education expired, education_id={education_id}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "EDU_EXPIRED",
-                "message": f"해당 교육({education_id})은 만료되어 영상 생성이 불가합니다.",
-            },
-        )
-
-
-def verify_reviewer_role(user_role: Optional[str] = None) -> None:
-    """REVIEWER 역할 검증."""
-    if user_role and user_role.upper() not in ("REVIEWER", "ADMIN"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "reason_code": "PERMISSION_DENIED",
-                "message": "영상 생성은 검토자(REVIEWER) 역할만 가능합니다.",
-            },
-        )
-
-
 # =============================================================================
-# Render Job CRUD APIs
+# Internal API (Backend → AI)
 # =============================================================================
 
 
-@router.post(
-    "/videos/{video_id}/render-jobs",
-    response_model=RenderJobCreateResponseV2,
-    summary="렌더 잡 생성 (idempotent)",
+@internal_router.post(
+    "/render-jobs",
+    response_model=InternalRenderJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="렌더 잡 생성/시작 (Backend → AI)",
     description="""
-새 렌더 잡을 생성하거나 기존 잡을 반환합니다 (idempotent).
+백엔드가 호출하여 렌더 잡을 생성하고 시작합니다.
 
-**권한**: REVIEWER만 가능
+**인증**: X-Internal-Token 헤더 필수
 
-**검증**:
-- 스크립트가 APPROVED 상태여야 함 (400)
-- 해당 교육이 EXPIRED면 404
+**요청**:
+- jobId: 백엔드가 발급한 잡 ID (AI는 생성하지 않음)
+- videoId: 영상 ID
+- scriptId: 스크립트 ID
+- scriptVersion: 스크립트 버전 (선택)
+- renderPolicyId: 렌더 정책 ID (선택)
+- requestId: 멱등 키 (권장)
 
-**중복 방지**:
-- 동일 video_id에 PROCESSING/QUEUED 잡이 있으면 기존 잡 반환 (200)
-- 없으면 새 잡 생성 (202)
+**동작**:
+1. 백엔드에서 render-spec 조회 (GET /internal/scripts/{scriptId}/render-spec)
+2. 렌더 파이프라인 시작
+3. 완료 시 콜백 전송 (POST /internal/callbacks/render-jobs/{jobId}/complete)
 
-**응답**:
-- created=true: 새 잡 생성됨
-- created=false: 기존 잡 반환됨
+**응답**: 202 Accepted
+- received: true
+- jobId: 백엔드 발급값 그대로
+- status: "PROCESSING"
 """,
-    responses={
-        200: {"description": "기존 활성 잡 반환"},
-        202: {"description": "새 잡 생성됨"},
-        400: {"description": "스크립트가 APPROVED가 아님"},
-        404: {"description": "교육 만료 또는 스크립트 없음"},
-    },
+    dependencies=[Depends(verify_internal_token)],
 )
-async def create_render_job(
-    video_id: str,
-    request: RenderJobCreateRequest,
-    response: Response,
-    user_id: str = "reviewer",
-    user_role: str = "REVIEWER",
+async def create_internal_render_job(
+    request: InternalRenderJobRequest,
 ):
-    """렌더 잡 생성 (idempotent)."""
-    # REVIEWER 역할 검증
-    verify_reviewer_role(user_role)
-
-    # EXPIRED 교육 차단
-    ensure_education_not_expired(video_id)
-
-    # 스크립트 조회
-    service = get_render_service()
-    script = service.get_script(request.script_id)
-    if not script:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "SCRIPT_NOT_FOUND",
-                "message": f"스크립트를 찾을 수 없습니다: {request.script_id}",
-            },
-        )
-
-    # RenderJobRunner 사용
+    """내부 렌더 잡 생성/시작."""
     runner = get_render_job_runner()
 
+    logger.info(
+        f"Internal render job received: job_id={request.job_id}, "
+        f"video_id={request.video_id}, script_id={request.script_id}"
+    )
+
+    # 잡 생성 (백엔드 발급 jobId 사용)
     try:
-        result = await runner.create_job(
-            video_id=video_id,
+        result = await runner.create_job_with_id(
+            job_id=request.job_id,
+            video_id=request.video_id,
             script_id=request.script_id,
-            script=script,
-            created_by=user_id,
+            request_id=request.request_id,
         )
 
-        # 응답 상태 코드 설정
+        # 바로 시작
         if result.created:
-            response.status_code = status.HTTP_202_ACCEPTED
-        else:
-            response.status_code = status.HTTP_200_OK
+            await runner.start_job(request.job_id)
 
-        return RenderJobCreateResponseV2(
-            job_id=result.job.job_id,
-            status=result.job.status,
-            progress=result.job.progress,
-            step=result.job.step,
-            message=result.message,
-            created=result.created,
+        return InternalRenderJobResponse(
+            received=True,
+            job_id=request.job_id,
+            status="PROCESSING",
         )
 
-    except ValueError as e:
+    except Exception as e:
+        logger.error(f"Internal render job failed: job_id={request.job_id}, error={e}")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
-                "reason_code": "INVALID_SCRIPT",
-                "message": str(e),
+                "reason_code": "RENDER_JOB_FAILED",
+                "message": str(e)[:200],
             },
         )
-
-
-@router.get(
-    "/videos/{video_id}/render-jobs/{job_id}",
-    response_model=RenderJobDetailResponse,
-    summary="렌더 잡 상세 조회",
-    description="특정 렌더 잡의 상세 정보를 조회합니다.",
-)
-async def get_render_job_detail(
-    video_id: str,
-    job_id: str,
-):
-    """렌더 잡 상세 조회."""
-    runner = get_render_job_runner()
-    job = runner.get_job(job_id)
-
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
-            },
-        )
-
-    # video_id 일치 확인
-    if job.video_id != video_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"해당 비디오에 속한 잡이 아닙니다: {job_id}",
-            },
-        )
-
-    return RenderJobDetailResponse(
-        job_id=job.job_id,
-        video_id=job.video_id,
-        script_id=job.script_id,
-        status=job.status,
-        step=job.step,
-        progress=job.progress,
-        message=job.message,
-        error_code=job.error_code,
-        error_message=job.error_message,
-        assets=job.assets if job.assets else None,
-        created_by=job.created_by,
-        created_at=job.created_at.isoformat() if job.created_at else None,
-        started_at=job.started_at.isoformat() if job.started_at else None,
-        finished_at=job.finished_at.isoformat() if job.finished_at else None,
-    )
-
-
-@router.get(
-    "/videos/{video_id}/render-jobs",
-    response_model=RenderJobListResponse,
-    summary="렌더 잡 목록 조회",
-    description="비디오의 렌더 잡 목록을 조회합니다 (최신순).",
-)
-async def list_render_jobs(
-    video_id: str,
-    limit: int = Query(default=20, ge=1, le=100, description="조회 개수"),
-    offset: int = Query(default=0, ge=0, description="오프셋"),
-):
-    """렌더 잡 목록 조회."""
-    from app.repositories.render_job_repository import get_render_job_repository
-
-    runner = get_render_job_runner()
-    repo = get_render_job_repository()
-
-    jobs = runner.list_jobs(video_id, limit=limit, offset=offset)
-    total = repo.count_by_video_id(video_id)
-
-    return RenderJobListResponse(
-        video_id=video_id,
-        jobs=[
-            RenderJobSummary(
-                job_id=job.job_id,
-                status=job.status,
-                progress=job.progress,
-                created_at=job.created_at.isoformat() if job.created_at else None,
-                finished_at=job.finished_at.isoformat() if job.finished_at else None,
-            )
-            for job in jobs
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.get(
-    "/videos/{video_id}/assets/published",
-    response_model=PublishedAssetsResponse,
-    summary="발행된 에셋 조회",
-    description="""
-비디오의 발행된(COMPLETED) 에셋을 조회합니다.
-
-**FE 사용 시나리오**:
-1. POST /render-jobs로 잡 생성
-2. WS로 진행률 수신
-3. 완료 후 이 API로 URL 획득
-""",
-)
-async def get_published_assets(
-    video_id: str,
-):
-    """발행된 에셋 조회."""
-    runner = get_render_job_runner()
-    assets = runner.get_published_assets(video_id)
-
-    if not assets:
-        return PublishedAssetsResponse(
-            video_id=video_id,
-            published=False,
-        )
-
-    return PublishedAssetsResponse(
-        video_id=video_id,
-        published=True,
-        video_url=assets.get("video_url"),
-        subtitle_url=assets.get("subtitle_url"),
-        thumbnail_url=assets.get("thumbnail_url"),
-        duration_sec=assets.get("duration_sec"),
-        published_at=assets.get("published_at"),
-        script_id=assets.get("script_id"),
-        job_id=assets.get("job_id"),
-    )
-
-
-@router.post(
-    "/videos/{video_id}/render-jobs/{job_id}/cancel",
-    response_model=RenderJobCancelResponse,
-    summary="렌더 잡 취소",
-    description="진행 중인 렌더 잡을 취소합니다.",
-)
-async def cancel_render_job(
-    video_id: str,
-    job_id: str,
-):
-    """렌더 잡 취소."""
-    runner = get_render_job_runner()
-
-    # 잡 조회
-    job = runner.get_job(job_id)
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"렌더 잡을 찾을 수 없습니다: {job_id}",
-            },
-        )
-
-    # video_id 확인
-    if job.video_id != video_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "JOB_NOT_FOUND",
-                "message": f"해당 비디오에 속한 잡이 아닙니다: {job_id}",
-            },
-        )
-
-    # 취소
-    canceled = await runner.cancel_job(job_id)
-    if not canceled:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "CANNOT_CANCEL",
-                "message": f"잡을 취소할 수 없습니다 (현재 상태: {job.status})",
-            },
-        )
-
-    return RenderJobCancelResponse(
-        job_id=canceled.job_id,
-        status=canceled.status,
-        message="렌더 잡이 취소되었습니다.",
-    )
 
 
 # =============================================================================
-# Backend → AI APIs (Job Execution)
+# Backend → AI APIs (Job Execution) - Legacy Compatibility
 # =============================================================================
 
 
@@ -409,13 +275,7 @@ async def start_render_job(
     job_id: str,
 ):
     """영상 생성 시작 (Backend → AI)."""
-    from app.services.render_job_runner import get_render_job_runner
-
     runner = get_render_job_runner()
-
-    # 렌더러 설정 확인
-    if runner._renderer is None:
-        runner.set_renderer(get_mvp_video_renderer())
 
     result = await runner.start_job(job_id)
 
@@ -477,12 +337,7 @@ async def retry_render_job(
     job_id: str,
 ):
     """영상 생성 재시도 (Backend → AI)."""
-    from app.services.render_job_runner import get_render_job_runner
-
     runner = get_render_job_runner()
-
-    if runner._renderer is None:
-        runner.set_renderer(get_mvp_video_renderer())
 
     result = await runner.retry_job(job_id)
 
