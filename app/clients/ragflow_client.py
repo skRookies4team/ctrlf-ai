@@ -32,14 +32,10 @@ Phase 12 업데이트:
     )
 """
 
-import io
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
 import httpx
-
-# boto3는 S3 URI 처리 시에만 lazy import (설치되어 있지 않을 수 있음)
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
@@ -998,60 +994,53 @@ class RagflowClient:
             logger.error(f"RAGFlow trigger_parsing request error: {e}")
             raise RagflowConnectionError(f"Connection failed: {type(e).__name__}")
 
-    async def _download_from_s3(self, s3_uri: str) -> bytes:
+    async def _get_presigned_url(self, s3_uri: str) -> str:
         """
-        S3 URI에서 파일을 다운로드합니다.
+        백엔드를 통해 S3 URI의 presigned 다운로드 URL을 획득합니다.
 
         Args:
             s3_uri: S3 URI (s3://bucket/key 형식)
 
         Returns:
-            bytes: 파일 내용
+            str: presigned 다운로드 URL
 
         Raises:
-            RagflowConnectionError: S3 다운로드 실패 시
+            RagflowConnectionError: presigned URL 획득 실패 시
         """
-        try:
-            import boto3
-            from botocore.exceptions import ClientError, NoCredentialsError
-        except ImportError:
-            raise RagflowConnectionError("boto3 is not installed. Run: pip install boto3")
+        settings = get_settings()
+        backend_url = settings.BACKEND_BASE_URL
 
-        parsed = urlparse(s3_uri)
-        bucket = parsed.netloc
-        key = parsed.path.lstrip("/")
+        if not backend_url:
+            raise RagflowConnectionError("BACKEND_BASE_URL is not configured")
 
-        logger.info(f"Downloading from S3: bucket={bucket}, key={key}")
+        url = f"{backend_url}/internal/s3/download"
+        logger.info(f"Requesting presigned URL: s3_uri={s3_uri}")
 
         try:
-            settings = get_settings()
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json={"fileUrl": s3_uri},
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                data = response.json()
 
-            # S3 클라이언트 생성 (endpoint_url이 있으면 MinIO 등 사용)
-            s3_config = {}
-            if settings.S3_ENDPOINT_URL:
-                s3_config["endpoint_url"] = settings.S3_ENDPOINT_URL
+            download_url = data.get("downloadUrl")
+            if not download_url:
+                raise RagflowConnectionError("Backend did not return downloadUrl")
 
-            s3_client = boto3.client("s3", **s3_config)
+            logger.info(f"Presigned URL obtained: length={len(download_url)}")
+            return download_url
 
-            # 파일 다운로드
-            buffer = io.BytesIO()
-            s3_client.download_fileobj(bucket, key, buffer)
-            buffer.seek(0)
-
-            file_content = buffer.read()
-            logger.info(f"S3 download complete: {len(file_content)} bytes")
-            return file_content
-
-        except NoCredentialsError:
-            logger.error("AWS credentials not found")
-            raise RagflowConnectionError("AWS credentials not configured")
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "Unknown")
-            logger.error(f"S3 download error: {error_code} - {e}")
-            raise RagflowConnectionError(f"S3 error: {error_code}")
-        except Exception as e:
-            logger.error(f"S3 download failed: {e}")
-            raise RagflowConnectionError(f"S3 download failed: {type(e).__name__}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Presigned URL request failed: HTTP {e.response.status_code}")
+            raise RagflowConnectionError(
+                f"Failed to get presigned URL: HTTP {e.response.status_code}"
+            )
+        except httpx.RequestError as e:
+            logger.error(f"Presigned URL request error: {e}")
+            raise RagflowConnectionError(f"Backend connection failed: {type(e).__name__}")
 
     async def upload_document(
         self,
@@ -1087,16 +1076,17 @@ class RagflowClient:
         logger.info(f"Uploading document to RAGFlow: dataset={dataset_id}, file={file_name}")
 
         try:
-            # S3 URI인 경우 boto3로 다운로드
+            # S3 URI인 경우 백엔드를 통해 presigned URL 획득 후 다운로드
+            download_url = file_url
             if file_url.startswith("s3://"):
-                logger.info(f"Detected S3 URI, downloading via boto3: {file_url}")
-                file_content = await self._download_from_s3(file_url)
-            else:
-                # HTTP/HTTPS URL인 경우 httpx로 다운로드
-                async with httpx.AsyncClient() as download_client:
-                    file_response = await download_client.get(file_url, timeout=60.0)
-                    file_response.raise_for_status()
-                    file_content = file_response.content
+                logger.info(f"Detected S3 URI, getting presigned URL: {file_url}")
+                download_url = await self._get_presigned_url(file_url)
+
+            # HTTP/HTTPS URL로 다운로드
+            async with httpx.AsyncClient() as download_client:
+                file_response = await download_client.get(download_url, timeout=60.0)
+                file_response.raise_for_status()
+                file_content = file_response.content
 
             # Multipart 업로드
             files = {"file": (file_name, file_content)}
