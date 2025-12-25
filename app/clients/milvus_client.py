@@ -318,12 +318,21 @@ class MilvusSearchClient:
                 logger.error(error_msg)
                 raise EmbeddingContractError(error_msg)
 
+            # 런타임 확정 로그: HOST:PORT + COLLECTION + DIM + MODEL 1줄 출력
             success_msg = (
                 f"Embedding contract verified: dim={actual_dim}, "
                 f"collection={self._collection_name}, "
                 f"model={self._embedding_model}"
             )
+            runtime_info = (
+                f"[MILVUS_RUNTIME] host={self._host}:{self._port} | "
+                f"collection={self._collection_name} | "
+                f"collection_dim={self._collection_dim} | "
+                f"embedding_model={self._embedding_model} | "
+                f"embedding_output_dim={actual_dim}"
+            )
             logger.info(success_msg)
+            logger.info(runtime_info)
             return True, success_msg
 
         except EmbeddingContractError:
