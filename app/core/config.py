@@ -178,17 +178,27 @@ class Settings(BaseSettings):
     MILVUS_ENABLED: bool = False
 
     # =========================================================================
-    # Option 3: Retrieval Backend 설정
+    # Option 3: Retrieval Backend 설정 (서비스별 분리)
     # =========================================================================
-    # 검색 백엔드 선택 (ragflow | milvus)
+    # 전역 검색 백엔드 (개별 설정 없을 때 fallback)
     # - ragflow: RAGFlow API를 통한 검색 (기본값)
     # - milvus: Milvus 직접 검색 (Option 3, text도 Milvus에서 조회)
     RETRIEVAL_BACKEND: Literal["ragflow", "milvus"] = "ragflow"
+
+    # 서비스별 검색 백엔드 (설정하지 않으면 RETRIEVAL_BACKEND 사용)
+    # 운영 안전: 한 서비스씩 전환하고 문제 시 해당 서비스만 롤백 가능
+    FAQ_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
+    CHAT_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
+    SCRIPT_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
 
     # 임베딩 계약 검증 (앱 시작 시 dim 불일치 감지)
     # True: dim 불일치 시 서버 기동 실패 (Fail-fast)
     # False: 경고만 출력하고 계속 진행
     EMBEDDING_CONTRACT_STRICT: bool = True
+
+    # Chat 컨텍스트 길이 제한 (Milvus 검색 결과 truncation)
+    CHAT_CONTEXT_MAX_CHARS: int = 8000  # 최대 문자 수
+    CHAT_CONTEXT_MAX_SOURCES: int = 5   # 최대 소스 수
 
     # Embedding 모델 설정 (vLLM 서버에서 사용)
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
@@ -491,6 +501,25 @@ class Settings(BaseSettings):
     def is_real_mode(self) -> bool:
         """Real 모드인지 확인합니다."""
         return self.AI_ENV == "real"
+
+    # =========================================================================
+    # Option 3: 서비스별 Retriever Backend 프로퍼티
+    # =========================================================================
+
+    @property
+    def faq_retriever_backend(self) -> str:
+        """FAQ 서비스의 검색 백엔드를 반환합니다."""
+        return self.FAQ_RETRIEVER_BACKEND or self.RETRIEVAL_BACKEND
+
+    @property
+    def chat_retriever_backend(self) -> str:
+        """Chat 서비스의 검색 백엔드를 반환합니다."""
+        return self.CHAT_RETRIEVER_BACKEND or self.RETRIEVAL_BACKEND
+
+    @property
+    def script_retriever_backend(self) -> str:
+        """Script 생성 서비스의 검색 백엔드를 반환합니다."""
+        return self.SCRIPT_RETRIEVER_BACKEND or self.RETRIEVAL_BACKEND
 
     @property
     def ragflow_dataset_to_kb_mapping(self) -> dict[str, str]:

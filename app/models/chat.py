@@ -193,6 +193,11 @@ class ChatAnswerMeta(BaseModel):
     rag_source_count: Optional[int] = Field(
         default=None, description="Number of RAG sources retrieved"
     )
+    # Option 3: 실제 사용된 검색 엔진 (운영 디버깅용)
+    retriever_used: Optional[str] = Field(
+        default=None,
+        description="Retriever backend used (MILVUS, RAGFLOW, RAGFLOW_FALLBACK)",
+    )
     latency_ms: Optional[int] = Field(
         default=None, description="Response generation time in milliseconds"
     )

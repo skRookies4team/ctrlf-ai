@@ -7,10 +7,11 @@ Phase 2 리팩토링:
 - ChatService._perform_rag_search → RagHandler.perform_search
 - ChatService._perform_rag_search_with_fallback → RagHandler.perform_search_with_fallback
 
-A안 확정 (Phase 42):
-- RAGFlow 단일 검색 엔진으로 확정
-- Milvus 직접 검색 분기 제거
-- RAGFlow 장애 시 503 반환 (fallback 없음)
+Option 3 통합 (Chat):
+- CHAT_RETRIEVER_BACKEND=milvus 시 Milvus 직접 검색 사용
+- Milvus 실패/empty 시 RAGFlow로 fallback
+- retriever_used 필드로 실제 사용된 검색 엔진 반환
+- 컨텍스트 길이 제한 (CHAT_CONTEXT_MAX_CHARS)
 
 Phase 44: 2nd-chance retrieval & Query Normalization
 - 1차 검색 결과 0건 시 top_k 올려서 재시도 (5 → 15)
@@ -23,9 +24,15 @@ Phase 45: Similarity 분포 로깅 (디버깅/진단용)
 """
 
 import re
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from app.clients.ragflow_client import RagflowClient
+from app.clients.milvus_client import (
+    MilvusSearchClient,
+    MilvusSearchError,
+    get_milvus_client,
+)
+from app.core.config import get_settings
 from app.core.exceptions import UpstreamServiceError
 from app.core.logging import get_logger
 from app.core.metrics import (
@@ -33,9 +40,12 @@ from app.core.metrics import (
     metrics,
 )
 from app.models.chat import ChatRequest, ChatSource
-from app.utils.debug_log import dbg_final_query, dbg_retrieval_top5
+from app.utils.debug_log import dbg_final_query, dbg_retrieval_top5, dbg_retrieval_target
 
 logger = get_logger(__name__)
+
+# retriever_used 타입 정의
+RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK"]
 
 # Phase 44: 검색 설정 상수
 DEFAULT_TOP_K = 5
@@ -139,9 +149,9 @@ def normalize_query_for_search(query: str) -> str:
 
 
 class RagSearchUnavailableError(Exception):
-    """RAGFlow 검색 서비스 사용 불가 예외.
+    """RAG 검색 서비스 사용 불가 예외.
 
-    A안 확정에 따라 RAGFlow 장애 시 503 반환을 위한 예외.
+    RAGFlow/Milvus 모두 장애 시 503 반환을 위한 예외.
     """
     def __init__(self, message: str = "RAG 검색 서비스를 사용할 수 없습니다."):
         self.message = message
@@ -152,25 +162,48 @@ class RagHandler:
     """
     RAG 검색을 처리하는 핸들러 클래스.
 
-    A안 확정 (Phase 42):
-    - RAGFlow만 사용하여 검색을 수행합니다.
-    - RAGFlow 장애 시 RagSearchUnavailableError를 발생시킵니다.
+    Option 3 통합:
+    - CHAT_RETRIEVER_BACKEND 설정에 따라 Milvus 또는 RAGFlow 사용
+    - Milvus 실패 시 RAGFlow로 fallback
+    - retriever_used 필드로 실제 사용된 검색 엔진 추적
 
     Attributes:
         _ragflow: RAGFlow 검색 클라이언트
+        _milvus: Milvus 검색 클라이언트 (Optional)
+        _use_milvus: Milvus 사용 여부
     """
 
     def __init__(
         self,
         ragflow_client: RagflowClient,
+        milvus_client: Optional[MilvusSearchClient] = None,
     ) -> None:
         """
         RagHandler 초기화.
 
         Args:
             ragflow_client: RAGFlow 검색 클라이언트
+            milvus_client: Milvus 검색 클라이언트 (선택, None이면 자동 생성)
         """
         self._ragflow = ragflow_client
+        self._settings = get_settings()
+
+        # Milvus 클라이언트 초기화 (CHAT_RETRIEVER_BACKEND=milvus 시)
+        self._use_milvus = (
+            self._settings.chat_retriever_backend == "milvus"
+            and self._settings.MILVUS_ENABLED
+        )
+
+        if self._use_milvus:
+            self._milvus = milvus_client or get_milvus_client()
+            logger.info(
+                f"RagHandler initialized with Milvus (CHAT_RETRIEVER_BACKEND={self._settings.chat_retriever_backend})"
+            )
+        else:
+            self._milvus = None
+            logger.info(
+                f"RagHandler initialized with RAGFlow only (CHAT_RETRIEVER_BACKEND={self._settings.chat_retriever_backend})"
+            )
 
     async def perform_search(
         self,
@@ -190,31 +223,15 @@ class RagHandler:
             List[ChatSource]: RAG 검색 결과
 
         Raises:
-            RagSearchUnavailableError: RAGFlow 장애 시
+            RagSearchUnavailableError: 검색 서비스 장애 시
         """
-        try:
-            sources = await self._ragflow.search_as_sources(
-                query=query,
-                domain=domain,
-                user_role=req.user_role,
-                department=req.department,
-                top_k=5,
-            )
-            logger.info(f"RAGFlow search returned {len(sources)} sources")
-
-            if not sources:
-                logger.warning(
-                    f"RAGFlow search returned no results for query: {query[:50]}..."
-                )
-
-            return sources
-
-        except Exception as e:
-            logger.exception(f"RAGFlow search failed: {e}")
-            metrics.increment_error(LOG_TAG_RAG_ERROR)
-            raise RagSearchUnavailableError(
-                f"RAG 검색 서비스 장애: {type(e).__name__}"
-            ) from e
+        sources, _, _ = await self.perform_search_with_fallback(
+            query=query,
+            domain=domain,
+            req=req,
+            request_id=None,
+        )
+        return sources
 
     async def perform_search_with_fallback(
         self,
@@ -222,13 +239,13 @@ class RagHandler:
         domain: str,
         req: ChatRequest,
         request_id: Optional[str] = None,
-    ) -> Tuple[List[ChatSource], bool]:
+    ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
-        RAG 검색을 수행하고 실패 여부를 함께 반환합니다.
+        RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다.
 
-        A안 확정 (Phase 42):
-        - RAGFlow만 사용 (Milvus 분기 제거)
-        - RAGFlow 장애 시 RagSearchUnavailableError 발생 (fallback 없음)
+        Option 3 통합:
+        - CHAT_RETRIEVER_BACKEND=milvus: Milvus 먼저 시도 → 실패/empty 시 RAGFlow fallback
+        - CHAT_RETRIEVER_BACKEND=ragflow: RAGFlow만 사용
 
         Phase 44: 2nd-chance retrieval & Query Normalization
         - 검색 전 쿼리 정규화 (마스킹 토큰 제거)
@@ -241,11 +258,13 @@ class RagHandler:
             request_id: 디버그용 요청 ID
 
         Returns:
-            Tuple[List[ChatSource], bool]: (검색 결과, 실패 여부)
-            - 실패 여부: 0건도 정상(False), 예외 발생 시에만 RagSearchUnavailableError raise
+            Tuple[List[ChatSource], bool, RetrieverUsed]:
+                - 검색 결과
+                - 실패 여부 (0건도 정상=False)
+                - 사용된 retriever ("MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK")
 
         Raises:
-            RagSearchUnavailableError: RAGFlow 장애 시 (503 반환용)
+            RagSearchUnavailableError: 모든 검색 서비스 장애 시 (503 반환용)
         """
         # Phase 44: 검색용 쿼리 정규화 (마스킹 토큰 제거)
         normalized_query = normalize_query_for_search(query)
@@ -259,10 +278,187 @@ class RagHandler:
                 keywords=None,
             )
 
+        # Milvus 사용 시: Milvus → RAGFlow fallback
+        if self._use_milvus and self._milvus:
+            return await self._search_with_milvus_fallback(
+                query=normalized_query,
+                domain=domain,
+                req=req,
+                request_id=request_id,
+            )
+
+        # RAGFlow만 사용
+        return await self._search_ragflow_only(
+            query=normalized_query,
+            domain=domain,
+            req=req,
+            request_id=request_id,
+        )
+
+    async def _search_with_milvus_fallback(
+        self,
+        query: str,
+        domain: str,
+        req: ChatRequest,
+        request_id: Optional[str] = None,
+    ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
+        """
+        Milvus 검색을 시도하고 실패 시 RAGFlow로 fallback합니다.
+
+        Returns:
+            Tuple[List[ChatSource], bool, RetrieverUsed]
+        """
+        settings = self._settings
+
+        # 디버그 로그: retrieval_target (Milvus)
+        if request_id:
+            dbg_retrieval_target(
+                request_id=request_id,
+                collection=settings.MILVUS_COLLECTION_NAME,
+                partition=None,
+                filter_expr=None,
+                top_k=settings.CHAT_CONTEXT_MAX_SOURCES,
+                domain=domain,
+            )
+
+        try:
+            # Milvus 검색
+            sources = await self._milvus.search_as_sources(
+                query=query,
+                domain=domain,
+                user_role=req.user_role,
+                department=req.department,
+                top_k=settings.CHAT_CONTEXT_MAX_SOURCES,
+                request_id=request_id,
+            )
+
+            # Phase 45: Milvus 검색 similarity 분포 로깅
+            log_similarity_distribution(
+                sources=sources,
+                search_stage="milvus_search",
+                query_preview=query,
+                domain=domain,
+            )
+
+            # 결과가 있으면 Milvus 사용 성공
+            if sources:
+                # 컨텍스트 길이 제한 적용
+                sources = self._truncate_context(sources)
+
+                logger.info(
+                    f"Milvus search returned {len(sources)} sources (retriever_used=MILVUS)"
+                )
+
+                # 디버그 로그: retrieval_top5
+                if request_id:
+                    self._log_retrieval_top5(request_id, sources)
+
+                return sources, False, "MILVUS"
+
+            # Milvus 결과 0건 → RAGFlow fallback
+            logger.warning(
+                f"Milvus search returned 0 results, falling back to RAGFlow"
+            )
+
+        except MilvusSearchError as e:
+            logger.error(f"Milvus search failed: {e}, falling back to RAGFlow")
+        except Exception as e:
+            logger.error(f"Milvus unexpected error: {e}, falling back to RAGFlow")
+
+        # RAGFlow fallback
         try:
             # Phase 44: 1차 검색 (top_k=5)
             sources = await self._ragflow.search_as_sources(
-                query=normalized_query,
+                query=query,
+                domain=domain,
+                user_role=req.user_role,
+                department=req.department,
+                top_k=DEFAULT_TOP_K,
+            )
+
+            logger.info(f"RAGFlow fallback 1st search returned {len(sources)} sources (top_k={DEFAULT_TOP_K})")
+
+            # Phase 45: 1차 검색 similarity 분포 로깅
+            log_similarity_distribution(
+                sources=sources,
+                search_stage="ragflow_fallback_1st",
+                query_preview=query,
+                domain=domain,
+            )
+
+            # Phase 44: 2nd-chance retrieval - 0건이면 top_k 올려서 재시도
+            if not sources:
+                logger.info(
+                    f"2nd-chance retrieval: 0 results, retrying with top_k={RETRY_TOP_K}"
+                )
+                sources = await self._ragflow.search_as_sources(
+                    query=query,
+                    domain=domain,
+                    user_role=req.user_role,
+                    department=req.department,
+                    top_k=RETRY_TOP_K,
+                )
+                logger.info(
+                    f"RAGFlow fallback 2nd-chance search returned {len(sources)} sources (top_k={RETRY_TOP_K})"
+                )
+
+                # Phase 45: 2nd-chance 검색 similarity 분포 로깅
+                log_similarity_distribution(
+                    sources=sources,
+                    search_stage="ragflow_fallback_2nd",
+                    query_preview=query,
+                    domain=domain,
+                )
+
+            # 컨텍스트 길이 제한 적용
+            sources = self._truncate_context(sources)
+
+            logger.info(
+                f"RAGFlow fallback returned {len(sources)} sources (retriever_used=RAGFLOW_FALLBACK)"
+            )
+
+            # 디버그 로그: retrieval_top5
+            if request_id:
+                self._log_retrieval_top5(request_id, sources)
+
+            return sources, False, "RAGFLOW_FALLBACK"
+
+        except UpstreamServiceError as e:
+            logger.error(f"RAGFlow fallback also failed: {e}")
+            metrics.increment_error(LOG_TAG_RAG_ERROR)
+            raise RagSearchUnavailableError(
+                f"RAG 검색 서비스 장애 (Milvus + RAGFlow 모두 실패)"
+            ) from e
+
+        except Exception as e:
+            logger.exception(f"RAGFlow fallback failed: {e}")
+            metrics.increment_error(LOG_TAG_RAG_ERROR)
+            raise RagSearchUnavailableError(
+                f"RAG 검색 서비스 장애: {type(e).__name__}"
+            ) from e
+
+    async def _search_ragflow_only(
+        self,
+        query: str,
+        domain: str,
+        req: ChatRequest,
+        request_id: Optional[str] = None,
+    ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
+        """
+        RAGFlow만 사용하여 검색합니다.
+
+        Phase 44: 2nd-chance retrieval 적용
+        Phase 45: Similarity 분포 로깅
+
+        Returns:
+            Tuple[List[ChatSource], bool, RetrieverUsed]
+        """
+        settings = self._settings
+
+        try:
+            # Phase 44: 1차 검색 (top_k=5)
+            sources = await self._ragflow.search_as_sources(
+                query=query,
                 domain=domain,
                 user_role=req.user_role,
                 department=req.department,
@@ -275,7 +471,7 @@ class RagHandler:
             log_similarity_distribution(
                 sources=sources,
                 search_stage="1st_search",
-                query_preview=normalized_query,
+                query_preview=query,
                 domain=domain,
             )
 
@@ -285,7 +481,7 @@ class RagHandler:
                     f"2nd-chance retrieval: 0 results, retrying with top_k={RETRY_TOP_K}"
                 )
                 sources = await self._ragflow.search_as_sources(
-                    query=normalized_query,
+                    query=query,
                     domain=domain,
                     user_role=req.user_role,
                     department=req.department,
@@ -299,32 +495,29 @@ class RagHandler:
                 log_similarity_distribution(
                     sources=sources,
                     search_stage="2nd_chance",
-                    query_preview=normalized_query,
+                    query_preview=query,
                     domain=domain,
                 )
 
                 if not sources:
                     logger.warning(
-                        f"RAGFlow 2nd-chance also returned no results for query: {normalized_query[:50]}..."
+                        f"RAGFlow 2nd-chance also returned no results for query: {query[:50]}..."
                     )
+
+            # 컨텍스트 길이 제한 적용
+            sources = self._truncate_context(sources)
+
+            logger.info(
+                f"RAGFlow search returned {len(sources)} sources (retriever_used=RAGFLOW)"
+            )
 
             # 디버그 로그: retrieval_top5
             if request_id:
-                top5_results = [
-                    {
-                        "doc_title": s.title,
-                        "chunk_id": s.doc_id,
-                        "score": s.score,
-                    }
-                    for s in sources[:5]
-                ]
-                dbg_retrieval_top5(request_id=request_id, results=top5_results)
+                self._log_retrieval_top5(request_id, sources)
 
-            # 0건도 정상 응답 (실패 아님)
-            return sources, False
+            return sources, False, "RAGFLOW"
 
         except UpstreamServiceError as e:
-            # A안: RAGFlow 장애 시 503 반환 (fallback 없음)
             logger.error(f"RAGFlow search failed with UpstreamServiceError: {e}")
             metrics.increment_error(LOG_TAG_RAG_ERROR)
             raise RagSearchUnavailableError(
@@ -337,3 +530,67 @@ class RagHandler:
             raise RagSearchUnavailableError(
                 f"RAG 검색 서비스 장애: {type(e).__name__}"
             ) from e
+
+    def _truncate_context(self, sources: List[ChatSource]) -> List[ChatSource]:
+        """
+        컨텍스트 길이를 제한합니다.
+
+        CHAT_CONTEXT_MAX_CHARS 설정에 따라 snippet을 truncate합니다.
+
+        Args:
+            sources: 검색 결과
+
+        Returns:
+            List[ChatSource]: truncate된 검색 결과
+        """
+        max_chars = self._settings.CHAT_CONTEXT_MAX_CHARS
+        max_sources = self._settings.CHAT_CONTEXT_MAX_SOURCES
+
+        # 소스 수 제한
+        sources = sources[:max_sources]
+
+        # 전체 컨텍스트 길이 계산 및 truncate
+        total_chars = 0
+        truncated_sources = []
+
+        for source in sources:
+            snippet_len = len(source.snippet) if source.snippet else 0
+
+            if total_chars + snippet_len > max_chars:
+                # 남은 공간만큼만 snippet 사용
+                remaining = max_chars - total_chars
+                if remaining > 100:  # 최소 100자는 포함
+                    truncated_snippet = source.snippet[:remaining] + "..."
+                    truncated_source = ChatSource(
+                        doc_id=source.doc_id,
+                        title=source.title,
+                        snippet=truncated_snippet,
+                        score=source.score,
+                        page=source.page,
+                        article_label=source.article_label,
+                        article_path=source.article_path,
+                        source_type=source.source_type,
+                    )
+                    truncated_sources.append(truncated_source)
+                break
+
+            truncated_sources.append(source)
+            total_chars += snippet_len
+
+        return truncated_sources
+
+    def _log_retrieval_top5(
+        self,
+        request_id: str,
+        sources: List[ChatSource],
+    ) -> None:
+        """retrieval_top5 디버그 로그를 출력합니다."""
+        top5_results = [
+            {
+                "doc_title": s.title,
+                "chunk_id": s.doc_id,
+                "score": s.score,
+            }
+            for s in sources[:5]
+        ]
+        dbg_retrieval_top5(request_id=request_id, results=top5_results)
