@@ -408,10 +408,10 @@ class TestChatServiceRagGapIntegration:
 
         response = await service.handle_chat(request)
 
-        # Phase 39: When AnswerGuard blocks due to NO_RAG_EVIDENCE, rag_gap_candidate=False
-        # because the response returns early before the rag_gap logic is reached.
-        # The error_type "NO_RAG_EVIDENCE" indicates the gap was detected.
-        assert response.meta.error_type == "NO_RAG_EVIDENCE"
+        # Phase 44: 답변 허용 정책으로 error_type은 None
+        # rag_gap_candidate는 여전히 True (RAG 결과 0건)
+        assert response.meta.error_type is None  # Phase 44: 차단 대신 허용
+        assert response.meta.rag_gap_candidate is True  # RAG 결과 0건 → gap 후보
 
     @pytest.mark.anyio
     async def test_rag_gap_true_when_policy_qa_low_score(self) -> None:

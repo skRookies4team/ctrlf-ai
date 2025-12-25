@@ -172,6 +172,9 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
         service._answer_guard.validate_citation = MagicMock(return_value=(True, "테스트 응답입니다."))
         service._answer_guard.apply_language_check = MagicMock(return_value=("테스트 응답입니다.", False))
         service._answer_guard.enforce_korean_output = AsyncMock(return_value=(True, "테스트 응답입니다."))
+        # Phase 45/46: 소프트 가드레일 mock
+        service._answer_guard.check_soft_guardrail = MagicMock(return_value=(False, None))
+        service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
 
@@ -242,6 +245,9 @@ async def test_chat_returns_clarify_response(mock_chat_request):
         # Answer guard mock 추가
         service._answer_guard = MagicMock()
         service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 45/46: 소프트 가드레일 mock
+        service._answer_guard.check_soft_guardrail = MagicMock(return_value=(False, None))
+        service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
 
@@ -321,6 +327,9 @@ async def test_chat_returns_confirmation_response(mock_chat_request):
         # Answer guard mock 추가
         service._answer_guard = MagicMock()
         service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 45/46: 소프트 가드레일 mock
+        service._answer_guard.check_soft_guardrail = MagicMock(return_value=(False, None))
+        service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
 
@@ -392,6 +401,9 @@ async def test_chat_returns_system_help(mock_chat_request):
         # Answer guard mock 추가
         service._answer_guard = MagicMock()
         service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 45/46: 소프트 가드레일 mock
+        service._answer_guard.check_soft_guardrail = MagicMock(return_value=(False, None))
+        service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
 
@@ -465,6 +477,9 @@ async def test_chat_returns_unknown_response(mock_chat_request):
         # Answer guard mock 추가
         service._answer_guard = MagicMock()
         service._answer_guard.check_complaint_fast_path = MagicMock(return_value=None)
+        # Phase 45/46: 소프트 가드레일 mock
+        service._answer_guard.check_soft_guardrail = MagicMock(return_value=(False, None))
+        service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
 

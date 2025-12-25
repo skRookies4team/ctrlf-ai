@@ -396,6 +396,14 @@ class FakeAnswerGuardService:
         """디버그 정보 로깅 - no-op."""
         pass
 
+    def check_soft_guardrail(self, intent, sources, domain=None, *args, **kwargs):
+        """Phase 45/46: 소프트 가드레일 체크 - 테스트에서는 비활성화."""
+        return (False, None)
+
+    def get_soft_guardrail_system_instruction(self) -> str:
+        """Phase 46: 소프트 가드레일 시스템 지침."""
+        return ""
+
 
 # =============================================================================
 # 테스트 Fixtures

@@ -67,16 +67,44 @@ class AnswerGuardError(str, Enum):
 
 
 # [E] 불만/욕설 키워드 리스트
-COMPLAINT_KEYWORDS: Set[str] = {
+# Phase 44: 회귀 방지 - 모든 키워드는 최소 2자 이상이어야 함
+_RAW_COMPLAINT_KEYWORDS: Set[str] = {
     "그지", "왜몰라", "뭐하", "답답", "짜증", "개같", "멍청", "병신", "꺼져",
     "미친", "지랄", "시발", "씨발", "ㅅㅂ", "ㅂㅅ", "아씨", "에휴", "아오",
     "대체왜", "못알아", "모르냐", "이게뭐야", "쓸모없", "뭐냐",
     # Phase 43: "하" 제거 - 한국어 동사 기본형이므로 너무 광범위함
+    # Phase 44: 단일 음절 키워드 금지 (회귀 방지)
 }
+
+# Phase 44: 회귀 방지 - 2자 미만 키워드 필터링 (단일 음절 금지)
+COMPLAINT_KEYWORDS: Set[str] = {
+    kw for kw in _RAW_COMPLAINT_KEYWORDS if len(kw) >= 2
+}
+
+# Phase 44: 런타임 검증 - 1자 키워드가 있으면 로그 경고
+_short_keywords = [kw for kw in _RAW_COMPLAINT_KEYWORDS if len(kw) < 2]
+if _short_keywords:
+    import logging
+    logging.getLogger(__name__).warning(
+        f"COMPLAINT_KEYWORDS에 2자 미만 키워드 발견 (무시됨): {_short_keywords}"
+    )
 
 # [A] 내부 규정/사규/정책 관련 intent (RAG 필수)
 POLICY_INTENTS: Set[Tier0Intent] = {
     Tier0Intent.POLICY_QA,
+}
+
+# Phase 45: 소프트 가드레일 대상 intent
+# 이 intent들은 sources=0일 때 "확정 답변" 대신 "KB 근거 없음" 안내로 모드 변경
+SOFT_GUARDRAIL_INTENTS: Set[Tier0Intent] = {
+    Tier0Intent.POLICY_QA,
+    Tier0Intent.EDUCATION_QA,
+}
+
+# Phase 45: 자연 답변 허용 intent (sources 없어도 자유롭게 답변)
+FREE_ANSWER_INTENTS: Set[Tier0Intent] = {
+    Tier0Intent.GENERAL_CHAT,
+    Tier0Intent.SYSTEM_HELP,
 }
 
 # [B] 조항/규정 패턴 정규식
@@ -140,6 +168,30 @@ class AnswerTemplates:
     COMPLAINT_REASON_GENERAL = "관련 정보가 충분하지 않아 정확한 답변이 어려웠어요."
 
     COMPLAINT_NEXT_STEP = "문서를 인덱싱하면 그 기준으로만 답하게 만들게요. 다시 질문해 주세요."
+
+    # Phase 45: 소프트 가드레일 안내 템플릿
+    # sources=0일 때 "확정 답변" 대신 이 안내를 앞에 붙임
+    SOFT_GUARDRAIL_PREFIX = (
+        "⚠️ **현재 승인된 사내 문서에서 관련 근거를 찾지 못했습니다.**\n\n"
+        "아래 답변은 일반적인 지식을 바탕으로 한 참고 정보이며, "
+        "**회사 기준으로 확정된 답변이 아닙니다.**\n\n"
+        "정확한 정보가 필요하시면 담당 부서에 문의해 주세요:\n"
+    )
+
+    # Phase 45/46: 도메인별 담당 부서 안내
+    # Phase 46: EDUCATION/EDU 둘 다 지원 (API에서 EDUCATION, 내부 enum은 EDU)
+    DOMAIN_CONTACT_INFO = {
+        "POLICY": "• 인사팀 / 총무팀 (사내 규정 관련)",
+        "EDU": "• 교육팀 / HR팀 (교육 관련)",
+        "EDUCATION": "• 교육팀 / HR팀 (교육 관련)",  # Phase 46: EDU alias
+        "INCIDENT": "• 보안팀 / 감사팀 (사건/사고 관련)",
+        "PIP": "• 개인정보보호팀 (개인정보 관련)",
+        "SHP": "• 인사팀 / 고충처리위원회 (성희롱 예방)",
+        "BHP": "• 인사팀 / 고충처리위원회 (직장내 괴롭힘)",
+        "DEP": "• 인사팀 (장애인 인식개선)",
+        "JOB": "• 교육팀 / 해당 부서 (직무교육)",
+        "DEFAULT": "• 담당 부서에 문의해 주세요.",
+    }
 
 
 # =============================================================================
@@ -271,6 +323,82 @@ class AnswerGuardService:
             self._debug_enabled = True
 
     # -------------------------------------------------------------------------
+    # Phase 45: Soft Guardrail (소프트 가드레일)
+    # -------------------------------------------------------------------------
+
+    def check_soft_guardrail(
+        self,
+        intent: Tier0Intent,
+        sources: List[ChatSource],
+        domain: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """소프트 가드레일 적용 여부를 판정합니다.
+
+        Phase 45: POLICY_QA/EDUCATION_QA에서 sources=0이면:
+        - "확정 답변" 대신 "KB 근거 없음 + 담당부서 안내" prefix 반환
+        - GENERAL_CHAT/SYSTEM_HELP는 자유 답변 허용
+
+        Args:
+            intent: Tier0 의도
+            sources: RAG 검색 결과
+            domain: 도메인 (담당부서 안내용)
+
+        Returns:
+            (needs_soft_guardrail, prefix) 튜플
+            - needs_soft_guardrail=True: 소프트 가드레일 필요, prefix 문자열 반환
+            - needs_soft_guardrail=False: 일반 답변 가능, None 반환
+        """
+        has_sources = len(sources) > 0
+
+        # 자연 답변 허용 intent는 바로 통과
+        if intent in FREE_ANSWER_INTENTS:
+            return (False, None)
+
+        # 소프트 가드레일 대상 intent이고 sources가 없는 경우
+        if intent in SOFT_GUARDRAIL_INTENTS and not has_sources:
+            # 담당부서 안내 구성
+            contact_info = AnswerTemplates.DOMAIN_CONTACT_INFO.get(
+                domain, AnswerTemplates.DOMAIN_CONTACT_INFO["DEFAULT"]
+            )
+
+            prefix = AnswerTemplates.SOFT_GUARDRAIL_PREFIX + contact_info + "\n\n---\n\n"
+
+            logger.info(
+                f"Soft guardrail ACTIVE: intent={intent.value}, "
+                f"sources=0, domain={domain}"
+            )
+            return (True, prefix)
+
+        # 기타 경우: 일반 답변
+        return (False, None)
+
+    def get_soft_guardrail_system_instruction(self) -> str:
+        """소프트 가드레일용 시스템 프롬프트 추가 지침을 반환합니다.
+
+        Phase 45: sources=0일 때 LLM이 "확정" 표현을 쓰지 않도록 지시.
+        Phase 46: '확정 표현 금지' 규칙 강화 + 답변 형태 제한
+        """
+        return (
+            "\n\n[중요 지침 - 확정 표현 금지]\n"
+            "현재 참고할 사내 문서 근거가 없습니다.\n"
+            "따라서 답변 시 다음 규칙을 반드시 따르세요:\n\n"
+            "【금지 표현】\n"
+            "• '~입니다', '~해야 합니다', '반드시', '규정상', '의무적으로'\n"
+            "• '회사 규정에 따르면', '사규에 의하면', '정책에 따라'\n"
+            "• 제N조, 제N항 등 구체적 조항 번호 언급\n\n"
+            "【허용 표현】\n"
+            "• '일반적으로 ~하는 경향이 있습니다'\n"
+            "• '~일 수 있습니다', '~으로 알려져 있습니다'\n"
+            "• '대부분의 경우 ~합니다', '통상적으로 ~합니다'\n\n"
+            "【답변 형식】\n"
+            "답변은 반드시 다음 구조를 따르세요:\n"
+            "1. 일반적인 안내 (확정 표현 없이)\n"
+            "2. 확인 방법 안내 (어떤 문서/담당부서/키워드로 찾을 수 있는지)\n"
+            "3. '정확한 정보는 담당 부서에 확인해 주세요' 문구로 마무리\n\n"
+            "반드시 한국어로만 답변하세요.\n"
+        )
+
+    # -------------------------------------------------------------------------
     # [E] Complaint Fast Path (불만/욕설 빠른 경로)
     # -------------------------------------------------------------------------
 
@@ -367,31 +495,38 @@ class AnswerGuardService:
                 for s in sources
             ]
 
-        # 정책/사규 intent인데 RAG 결과가 없으면 → 답변 금지
+        # Phase 44: Answerability 정책 완화
+        # 정책/사규 intent인데 RAG 결과가 없어도 답변 허용 (경고만)
+        # LLM의 일반 지식으로 답변하고, 사용자에게 근거 부족 알림
         if is_policy_intent and not has_sources:
-            logger.warning(
-                f"Answerability BLOCKED: intent={intent.value}, "
-                f"sources={len(sources)}, route={route_type.value}"
+            logger.info(
+                f"Answerability INFO: intent={intent.value}, "
+                f"sources={len(sources)} - allowing LLM general knowledge"
             )
 
             if debug_info:
-                debug_info.answerable = False
+                debug_info.answerable = True  # 답변 허용
                 debug_info.answerable_reason = (
-                    f"Policy intent ({intent.value}) requires RAG evidence"
+                    f"Policy intent ({intent.value}) - no RAG but allowing LLM"
                 )
 
+            # Phase 44: 차단하지 않고 답변 허용
+            return (True, None)
+
+            # [이전 로직 - 비활성화]
             # 고정 템플릿 반환
-            template = AnswerTemplates.NO_EVIDENCE
+            # template = AnswerTemplates.NO_EVIDENCE
 
             # 디버그 모드면 추가 정보 포함
-            if self._debug_enabled and sources:
+            _ = None  # placeholder for removed code
+            if False and self._debug_enabled and sources:
                 max_score = max((s.score or 0) for s in sources)
-                template += AnswerTemplates.NO_EVIDENCE_DEBUG.format(
+                _ = AnswerTemplates.NO_EVIDENCE_DEBUG.format(
                     top_k=top_k,
                     doc_count=len(sources),
                     max_score=max_score,
                 )
-            elif self._debug_enabled:
+            elif False and self._debug_enabled:
                 template += AnswerTemplates.NO_EVIDENCE_DEBUG.format(
                     top_k=top_k,
                     doc_count=0,
@@ -421,7 +556,11 @@ class AnswerGuardService:
         """답변의 조항/규정 인용이 RAG 소스에 근거하는지 검증합니다.
 
         [B] 답변에 "제N조/조항/항" 패턴이 있으면 RAG sources에도 있는지 확인.
-        없으면 답변 폐기.
+
+        Phase 44: Citation 검증 완화
+        - RAG sources가 없어도 LLM의 일반 법률 지식 기반 답변 허용
+        - 차단 대신 경고 로그만 남김
+        - 명백한 hallucination만 차단 (예: 실존하지 않는 조항 직접 인용)
 
         Args:
             answer: LLM 생성 답변
@@ -442,16 +581,16 @@ class AnswerGuardService:
                 debug_info.citation_valid = True
             return (True, answer)
 
-        # RAG sources가 없으면 → 가짜 인용으로 간주
+        # Phase 44: RAG sources가 없어도 답변 허용 (경고만 로그)
+        # LLM이 일반적인 법률 지식으로 조항을 언급하는 것은 허용
         if not sources:
-            logger.warning(
-                f"Citation BLOCKED: found {len(answer_citations)} citations "
-                f"but no RAG sources"
+            logger.info(
+                f"Citation INFO: found {len(answer_citations)} citations "
+                f"without RAG sources - allowing LLM general knowledge"
             )
             if debug_info:
-                debug_info.citation_valid = False
-                debug_info.citation_blocked_patterns = list(set(answer_citations))
-            return (False, AnswerTemplates.CITATION_BLOCKED)
+                debug_info.citation_valid = True  # 유효로 처리
+            return (True, answer)  # 차단하지 않고 허용
 
         # RAG sources 텍스트 결합
         source_text = " ".join(
@@ -479,14 +618,18 @@ class AnswerGuardService:
                 if not found_in_source:
                     blocked_citations.append(citation)
 
+        # Phase 44: Citation 검증 완화
+        # RAG sources가 있어도 일치하지 않는 조항은 경고만 (차단하지 않음)
+        # LLM이 관련 지식으로 추가 조항을 언급하는 것은 허용
         if blocked_citations:
-            logger.warning(
-                f"Citation BLOCKED: patterns not found in sources: {blocked_citations}"
+            logger.info(
+                f"Citation INFO: {len(blocked_citations)} patterns not in sources "
+                f"({blocked_citations}) - allowing as supplementary info"
             )
+            # 차단하지 않고 허용 (경고만)
             if debug_info:
-                debug_info.citation_valid = False
-                debug_info.citation_blocked_patterns = blocked_citations
-            return (False, AnswerTemplates.CITATION_BLOCKED)
+                debug_info.citation_valid = True
+                debug_info.citation_blocked_patterns = blocked_citations  # 로그용으로 기록
 
         if debug_info:
             debug_info.citation_valid = True

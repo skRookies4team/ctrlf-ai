@@ -657,9 +657,11 @@ class ChatService:
 
         # =====================================================================
         # Phase 39: [A] Answerability Gate (답변 가능 여부 게이트)
+        # Phase 45: [G] Soft Guardrail (소프트 가드레일)
         # =====================================================================
-        # 내부 규정/사규/정책 질문에서 RAG 근거가 없으면 답변 생성 금지
-        # 고정 템플릿으로 "문서 근거 없음" 안내하고 종료
+        # 내부 규정/사규/정책 질문에서 RAG 근거가 없으면:
+        # - Phase 44: 답변 허용 (차단하지 않음)
+        # - Phase 45: 소프트 가드레일 적용 (prefix + 유보적 표현 지시)
 
         # Tier0Intent 결정: orchestration_result가 있으면 사용, 없으면 매핑
         tier0_intent = Tier0Intent.UNKNOWN
@@ -669,6 +671,8 @@ class ChatService:
             tier0_intent = Tier0Intent.POLICY_QA
         elif intent == IntentType.EDUCATION_QA:
             tier0_intent = Tier0Intent.EDUCATION_QA
+        elif intent == IntentType.GENERAL_CHAT:
+            tier0_intent = Tier0Intent.GENERAL_CHAT
 
         # RouterRouteType 매핑
         router_route_type = self._map_route_type_to_router_route_type(route)
@@ -720,8 +724,23 @@ class ChatService:
                 ),
             )
 
+        # =====================================================================
+        # Phase 45: 소프트 가드레일 체크
+        # =====================================================================
+        # POLICY_QA/EDUCATION_QA에서 sources=0이면 소프트 가드레일 활성화
+        needs_soft_guardrail, soft_guardrail_prefix = self._answer_guard.check_soft_guardrail(
+            intent=tier0_intent,
+            sources=sources,
+            domain=domain,
+        )
+
         # Step 5: Build LLM prompt messages (with guardrails)
         # Phase 11: 라우트에 따라 다른 프롬프트 빌더 사용
+        # Phase 45/46: 소프트 가드레일 활성화 시 시스템 지침 추가
+        soft_guardrail_instruction: Optional[str] = None
+        if needs_soft_guardrail:
+            soft_guardrail_instruction = self._answer_guard.get_soft_guardrail_system_instruction()
+
         if route in mixed_routes:
             # MIXED_BACKEND_RAG: RAG + Backend 통합 컨텍스트
             llm_messages = self._build_mixed_llm_messages(
@@ -751,6 +770,7 @@ class ChatService:
                 user_role=intent_result.user_role,
                 domain=domain,
                 intent=intent,
+                soft_guardrail_instruction=soft_guardrail_instruction,
             )
 
         # Step 6: Generate LLM response
@@ -773,8 +793,13 @@ class ChatService:
             )
             llm_latency_ms = int((time.perf_counter() - llm_start) * 1000)
 
-            # RAG 시도했지만 결과 없으면 안내 문구 추가
-            if rag_search_attempted and not sources and not rag_search_failed:
+            # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
+            if needs_soft_guardrail and soft_guardrail_prefix:
+                raw_answer = soft_guardrail_prefix + raw_answer
+                logger.info("Soft guardrail prefix added to response")
+
+            # RAG 시도했지만 결과 없으면 안내 문구 추가 (소프트 가드레일 미적용 시)
+            elif rag_search_attempted and not sources and not rag_search_failed:
                 # LLM 응답에 안내 문구 추가 (RAG 결과 0건인 경우)
                 raw_answer = raw_answer.rstrip() + NO_RAG_RESULTS_NOTICE
 
@@ -1086,11 +1111,13 @@ class ChatService:
         user_role: Optional["UserRole"] = None,
         domain: Optional[str] = None,
         intent: Optional["IntentType"] = None,
+        soft_guardrail_instruction: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
         Build message list for LLM chat completion (위임).
 
         Phase 2 리팩토링: MessageBuilder로 로직 위임.
+        Phase 46: 소프트 가드레일 시스템 지침 파라미터 추가.
         """
         return self._message_builder.build_rag_messages(
             user_query=user_query,
@@ -1100,6 +1127,7 @@ class ChatService:
             user_role=user_role,
             domain=domain,
             intent=intent,
+            soft_guardrail_instruction=soft_guardrail_instruction,
         )
 
     def _format_sources_for_prompt(self, sources: List[ChatSource]) -> str:
