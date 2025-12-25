@@ -177,6 +177,19 @@ class Settings(BaseSettings):
     # 기본값: False (RAGFlow 사용). 환경변수로 MILVUS_ENABLED=true 설정 시 Milvus 활성화
     MILVUS_ENABLED: bool = False
 
+    # =========================================================================
+    # Option 3: Retrieval Backend 설정
+    # =========================================================================
+    # 검색 백엔드 선택 (ragflow | milvus)
+    # - ragflow: RAGFlow API를 통한 검색 (기본값)
+    # - milvus: Milvus 직접 검색 (Option 3, text도 Milvus에서 조회)
+    RETRIEVAL_BACKEND: Literal["ragflow", "milvus"] = "ragflow"
+
+    # 임베딩 계약 검증 (앱 시작 시 dim 불일치 감지)
+    # True: dim 불일치 시 서버 기동 실패 (Fail-fast)
+    # False: 경고만 출력하고 계속 진행
+    EMBEDDING_CONTRACT_STRICT: bool = True
+
     # Embedding 모델 설정 (vLLM 서버에서 사용)
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원
