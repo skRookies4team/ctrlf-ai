@@ -478,6 +478,92 @@ class MilvusSearchClient:
             logger.error(f"Milvus search_as_sources failed: {e}")
             return []  # 실패 시 빈 결과 반환 (기존 동작과 일치)
 
+    async def get_document_chunks(
+        self,
+        doc_id: str,
+        dataset_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        문서의 모든 청크를 chunk_id 순서로 조회합니다.
+
+        선택지 3 (B안): 영상 스크립트 생성을 위해 Milvus에서 직접 텍스트 조회.
+        Spring DB 읽기 API 없이 Milvus가 텍스트 소스가 됩니다.
+
+        Args:
+            doc_id: 문서 ID (파일명 또는 문서 식별자)
+            dataset_id: 데이터셋 ID (선택, 더 정확한 필터링용)
+
+        Returns:
+            List[Dict[str, Any]]: chunk_id로 정렬된 청크 리스트
+                각 항목: {
+                    "chunk_id": int,
+                    "text": str,
+                    "doc_id": str,
+                    "dataset_id": str
+                }
+
+        Raises:
+            MilvusError: 조회 실패 시
+        """
+        logger.info(f"get_document_chunks: doc_id='{doc_id}', dataset_id={dataset_id}")
+
+        try:
+            collection = self._get_collection()
+
+            # 필터 표현식 구성
+            expr = f'doc_id == "{doc_id}"'
+            if dataset_id:
+                expr = f'{expr} && dataset_id == "{dataset_id}"'
+
+            # 청크 조회 (최대 1000개)
+            results = collection.query(
+                expr=expr,
+                output_fields=["chunk_id", "text", "doc_id", "dataset_id"],
+                limit=1000,
+            )
+
+            if not results:
+                logger.warning(f"No chunks found for doc_id='{doc_id}'")
+                return []
+
+            # chunk_id로 정렬
+            sorted_chunks = sorted(results, key=lambda x: x.get("chunk_id", 0))
+
+            logger.info(f"Retrieved {len(sorted_chunks)} chunks for doc_id='{doc_id}'")
+            return sorted_chunks
+
+        except MilvusError:
+            raise
+
+        except Exception as e:
+            logger.exception(f"Failed to get document chunks: {e}")
+            raise MilvusError(f"Failed to get document chunks: {e}", original_error=e)
+
+    async def get_full_document_text(
+        self,
+        doc_id: str,
+        dataset_id: Optional[str] = None,
+    ) -> str:
+        """
+        문서의 전체 텍스트를 chunk_id 순서로 합쳐서 반환합니다.
+
+        영상 스크립트 원문 조회 등에 사용됩니다.
+
+        Args:
+            doc_id: 문서 ID
+            dataset_id: 데이터셋 ID (선택)
+
+        Returns:
+            str: 전체 문서 텍스트 (청크 순서대로 연결)
+        """
+        chunks = await self.get_document_chunks(doc_id, dataset_id)
+        if not chunks:
+            return ""
+
+        # 청크 텍스트 연결 (이미 chunk_id 순서로 정렬됨)
+        texts = [chunk.get("text", "") for chunk in chunks]
+        return "\n\n".join(texts)
+
     async def health_check(self) -> bool:
         """
         Milvus 서비스 상태를 확인합니다.
