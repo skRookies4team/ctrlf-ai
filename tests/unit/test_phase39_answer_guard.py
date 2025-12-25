@@ -155,17 +155,19 @@ class TestAnswerabilityGate:
         assert is_answerable is True
         assert template is None
 
-    def test_policy_intent_without_sources_blocked(self, answer_guard, empty_sources):
-        """정책 질문 + RAG 소스 없음 → 답변 금지."""
+    def test_policy_intent_without_sources_allowed_with_warning(self, answer_guard, empty_sources):
+        """정책 질문 + RAG 소스 없음 → 답변 허용 (Phase 44 정책 완화).
+
+        Phase 44: 차단 대신 경고만 로그하고 LLM 일반 지식으로 답변 허용.
+        """
         is_answerable, template = answer_guard.check_answerability(
             intent=Tier0Intent.POLICY_QA,
             sources=empty_sources,
             route_type=RouterRouteType.RAG_INTERNAL,
         )
-        assert is_answerable is False
-        assert template is not None
-        assert "찾지 못했어요" in template
-        assert "문서 업로드" in template
+        # Phase 44: 답변 허용 (차단하지 않음)
+        assert is_answerable is True
+        assert template is None
 
     def test_llm_only_route_skips_check(self, answer_guard, empty_sources):
         """LLM_ONLY 경로는 RAG 체크 스킵."""
@@ -188,7 +190,10 @@ class TestAnswerabilityGate:
         assert template is None
 
     def test_debug_info_updated(self, answer_guard, empty_sources):
-        """디버그 정보가 업데이트됨."""
+        """디버그 정보가 업데이트됨.
+
+        Phase 44: 정책 완화로 answerable=True, 경고 사유만 기록.
+        """
         debug_info = DebugInfo()
         answer_guard.check_answerability(
             intent=Tier0Intent.POLICY_QA,
@@ -196,8 +201,9 @@ class TestAnswerabilityGate:
             route_type=RouterRouteType.RAG_INTERNAL,
             debug_info=debug_info,
         )
-        assert debug_info.answerable is False
-        assert "requires RAG evidence" in debug_info.answerable_reason
+        # Phase 44: 답변 허용
+        assert debug_info.answerable is True
+        assert "allowing LLM" in debug_info.answerable_reason
 
 
 # =============================================================================
@@ -215,12 +221,17 @@ class TestCitationHallucinationGuard:
         assert is_valid is True
         assert result == answer
 
-    def test_hallucinated_citation_blocked(self, answer_guard, sample_sources):
-        """RAG 소스에 없는 조항 인용은 차단."""
+    def test_hallucinated_citation_allowed_with_warning(self, answer_guard, sample_sources):
+        """RAG 소스에 없는 조항 인용 → 허용 (Phase 44 정책 완화).
+
+        Phase 44: RAG sources가 있어도 일치하지 않는 조항은 경고만 로그.
+        LLM이 관련 지식으로 추가 조항을 언급하는 것은 허용.
+        """
         answer = "제99조 제5항에 따르면 특별휴가를 사용할 수 있습니다."
         is_valid, result = answer_guard.validate_citation(answer, sample_sources)
-        assert is_valid is False
-        assert "근거를 확인할 수 없는" in result
+        # Phase 44: 차단하지 않고 허용
+        assert is_valid is True
+        assert result == answer
 
     def test_no_citation_in_answer_passes(self, answer_guard, sample_sources):
         """조항 인용이 없는 답변은 통과."""
@@ -229,12 +240,17 @@ class TestCitationHallucinationGuard:
         assert is_valid is True
         assert result == answer
 
-    def test_citation_without_sources_blocked(self, answer_guard, empty_sources):
-        """RAG 소스 없이 조항 인용 시 차단."""
+    def test_citation_without_sources_allowed_with_warning(self, answer_guard, empty_sources):
+        """RAG 소스 없이 조항 인용 시 → 허용 (Phase 44 정책 완화).
+
+        Phase 44: RAG sources가 없어도 LLM의 일반적인 법률 지식으로
+        조항을 언급하는 것은 허용.
+        """
         answer = "제10조에 의하면 연차가 발생합니다."
         is_valid, result = answer_guard.validate_citation(answer, empty_sources)
-        assert is_valid is False
-        assert "근거를 확인할 수 없는" in result
+        # Phase 44: 차단하지 않고 허용
+        assert is_valid is True
+        assert result == answer
 
     def test_llm_only_answer_no_citation_section(self, answer_guard, empty_sources):
         """LLM_ONLY 답변에 조항 없으면 통과."""
@@ -521,20 +537,34 @@ class TestIntegration:
         is_korean, _ = answer_guard.check_language(result)
         assert is_korean is True
 
-    def test_full_guard_flow_blocked_no_rag(self, answer_guard, empty_sources):
-        """전체 가드 플로우 - RAG 없음으로 차단."""
+    def test_full_guard_flow_allowed_no_rag_with_soft_guardrail(self, answer_guard, empty_sources):
+        """전체 가드 플로우 - RAG 없음이어도 허용 (Phase 44/45).
+
+        Phase 44: 차단 대신 경고만 로그하고 LLM 일반 지식으로 답변 허용.
+        Phase 45: 소프트 가드레일 prefix 추가로 사용자에게 주의 안내.
+        """
         # 1. 불만 체크 - 통과
         complaint = answer_guard.check_complaint_fast_path("퇴직금 규정", None)
         assert complaint is None
 
-        # 2. Answerability 체크 - 차단
+        # 2. Answerability 체크 - 허용 (Phase 44)
         is_answerable, template = answer_guard.check_answerability(
             intent=Tier0Intent.POLICY_QA,
             sources=empty_sources,
             route_type=RouterRouteType.RAG_INTERNAL,
         )
-        assert is_answerable is False
-        assert "찾지 못했어요" in template
+        assert is_answerable is True
+        assert template is None
+
+        # 3. 소프트 가드레일 체크 - POLICY_QA + sources=0 → 활성화 (Phase 45)
+        needs_soft_guardrail, prefix = answer_guard.check_soft_guardrail(
+            intent=Tier0Intent.POLICY_QA,
+            sources=empty_sources,
+            domain="POLICY",
+        )
+        assert needs_soft_guardrail is True
+        assert prefix is not None
+        assert "승인된 사내 문서" in prefix
 
     def test_edu_status_template_not_mixed_with_policy(self, answer_guard, sample_sources):
         """[C] 교육 현황 템플릿이 정책 질문에 섞이지 않음 확인."""
