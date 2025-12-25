@@ -1,5 +1,5 @@
 """
-FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3 + Phase 19-AI-4 + Phase 20-AI-3/4)
+FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3 + Phase 19-AI-4 + Phase 20-AI-3/4 + Option 3)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
 RAG + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
@@ -26,6 +26,11 @@ Phase 20-AI-3 업데이트:
 
 Phase 20-AI-4 업데이트:
 - 품질 모니터링 로그: ai_confidence 기반 경고 로그
+
+Option 3 (B안) 업데이트:
+- MILVUS_ENABLED=true 시 Milvus 직접 검색 사용
+- MilvusSearchClient로 벡터 검색 + text 직접 조회
+- answer_source: MILVUS 추가
 """
 
 import json
@@ -36,6 +41,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.clients.llm_client import LLMClient
+from app.clients.milvus_client import (
+    MilvusSearchClient,
+    MilvusSearchError,
+    get_milvus_client,
+)
 from app.clients.ragflow_search_client import (
     RagflowSearchClient,
     RagflowSearchError,
@@ -161,17 +171,30 @@ class FaqDraftService:
 
     Phase 19-AI-4 업데이트:
     - PII 강차단: 입력/출력에 PII 검출 시 즉시 실패
+
+    Option 3 (B안) 업데이트:
+    - MILVUS_ENABLED=true 시 Milvus 직접 검색 사용
+    - answer_source: MILVUS 추가
     """
 
     def __init__(
         self,
         search_client: Optional[RagflowSearchClient] = None,
+        milvus_client: Optional[MilvusSearchClient] = None,
         llm_client: Optional[LLMClient] = None,
         pii_service: Optional[PiiService] = None,
     ) -> None:
+        settings = get_settings()
         self._search_client = search_client or RagflowSearchClient()
+        self._milvus_client = milvus_client
+        self._milvus_enabled = settings.MILVUS_ENABLED
         self._llm = llm_client or LLMClient()
         self._pii_service = pii_service or PiiService()
+
+        if self._milvus_enabled:
+            logger.info("FaqDraftService: Milvus direct search enabled (Option 3)")
+            if self._milvus_client is None:
+                self._milvus_client = get_milvus_client()
 
     async def generate_faq_draft(
         self,
@@ -191,15 +214,14 @@ class FaqDraftService:
         # 0. Phase 19-AI-4: 입력 PII 검사
         await self._check_input_pii(req)
 
-        # 1. 문서 컨텍스트 확보 (Phase 19-AI-2)
-        context_docs, used_top_docs = await self._get_context_docs(req)
+        # 1. 문서 컨텍스트 확보 (Phase 19-AI-2 + Option 3)
+        context_docs, answer_source = await self._get_context_docs(req)
         logger.info(
-            f"Got {len(context_docs)} context documents "
-            f"(source: {'TOP_DOCS' if used_top_docs else 'RAGFLOW'})"
+            f"Got {len(context_docs)} context documents (source: {answer_source})"
         )
 
         # 2. LLM 메시지 구성
-        messages = self._build_llm_messages(req, context_docs, used_top_docs)
+        messages = self._build_llm_messages(req, context_docs, answer_source)
 
         # 3. LLM 호출
         try:
@@ -231,11 +253,11 @@ class FaqDraftService:
             logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
             raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
 
-        # 7. FaqDraft 생성 (Phase 19-AI-3)
-        draft = self._create_faq_draft(req, parsed, context_docs, used_top_docs)
+        # 7. FaqDraft 생성 (Phase 19-AI-3 + Option 3)
+        draft = self._create_faq_draft(req, parsed, context_docs, answer_source)
 
         # 8. Phase 20-AI-4: 품질 모니터링 로그
-        self._log_quality_metrics(draft, context_docs, used_top_docs)
+        self._log_quality_metrics(draft, context_docs, answer_source)
 
         logger.info(
             f"FAQ draft generated: id={draft.faq_draft_id}, "
@@ -245,36 +267,112 @@ class FaqDraftService:
         return draft
 
     # =========================================================================
-    # Phase 19-AI-2: 문서 컨텍스트 확보
+    # Phase 19-AI-2 + Option 3: 문서 컨텍스트 확보
     # =========================================================================
 
     async def _get_context_docs(
         self,
         req: FaqDraftGenerateRequest,
-    ) -> Tuple[DocContext, bool]:
+    ) -> Tuple[DocContext, str]:
         """
         FAQ 생성에 사용할 문서 컨텍스트를 확보합니다.
 
         우선순위:
         1. request.top_docs가 비어있지 않으면 그대로 사용
-        2. request.top_docs가 비어있으면 RagflowSearchClient.search_chunks() 호출
+        2. MILVUS_ENABLED=true면 MilvusSearchClient 사용 (Option 3)
+        3. 그 외에는 RagflowSearchClient.search_chunks() 호출
 
         Args:
             req: FAQ 초안 생성 요청
 
         Returns:
-            Tuple[DocContext, bool]: (문서 컨텍스트, top_docs 사용 여부)
+            Tuple[DocContext, str]: (문서 컨텍스트, 소스 타입)
+                소스 타입: "TOP_DOCS", "MILVUS", "RAGFLOW"
 
         Raises:
-            FaqGenerationError: RAGFlow 검색 결과가 없는 경우 (NO_DOCS_FOUND)
+            FaqGenerationError: 검색 결과가 없는 경우 (NO_DOCS_FOUND)
         """
         # 1. top_docs가 있으면 그대로 사용
         if req.top_docs:
             logger.info(f"Using {len(req.top_docs)} provided top_docs")
-            return req.top_docs, True
+            return req.top_docs, "TOP_DOCS"
 
-        # 2. RAGFlow 검색
+        # 2. Option 3: Milvus 직접 검색
+        if self._milvus_enabled and self._milvus_client:
+            return await self._search_milvus(req)
+
+        # 3. Fallback: RAGFlow 검색
+        return await self._search_ragflow(req)
+
+    async def _search_milvus(
+        self,
+        req: FaqDraftGenerateRequest,
+    ) -> Tuple[DocContext, str]:
+        """
+        Option 3: Milvus에서 직접 벡터 검색 + text 조회.
+
+        Args:
+            req: FAQ 초안 생성 요청
+
+        Returns:
+            Tuple[DocContext, str]: (문서 컨텍스트, "MILVUS")
+        """
+        logger.info(f"Searching Milvus (Option 3) for: '{req.canonical_question[:50]}...'")
+
+        try:
+            # Milvus 벡터 검색 (text 포함)
+            results = await self._milvus_client.search(
+                query=req.canonical_question,
+                domain=req.domain,
+                top_k=5,
+            )
+        except MilvusSearchError as e:
+            logger.error(f"Milvus search error: {e}")
+            # Milvus 실패 시 RAGFlow로 폴백
+            logger.info("Falling back to RAGFlow search")
+            return await self._search_ragflow(req)
+        except Exception as e:
+            logger.error(f"Milvus unexpected error: {e}")
+            logger.info("Falling back to RAGFlow search")
+            return await self._search_ragflow(req)
+
+        # 결과가 없으면 NO_DOCS_FOUND 에러
+        if not results:
+            logger.warning(f"No documents found in Milvus for query: '{req.canonical_question[:50]}...'")
+            raise FaqGenerationError("NO_DOCS_FOUND")
+
+        # RagSearchResult로 변환 (Milvus 응답 형식)
+        context_docs = []
+        for r in results:
+            context_docs.append(RagSearchResult(
+                title=r.get("doc_id", ""),  # doc_id를 title로 사용
+                page=r.get("metadata", {}).get("chunk_id"),
+                score=r.get("score", 0.0),
+                snippet=r.get("content", "")[:500],  # text → snippet
+            ))
+
+        logger.info(f"Found {len(context_docs)} documents from Milvus search (Option 3)")
+
+        # 컨텍스트 PII 검사
+        await self._check_context_pii(context_docs, req.domain, req.cluster_id)
+
+        return context_docs, "MILVUS"
+
+    async def _search_ragflow(
+        self,
+        req: FaqDraftGenerateRequest,
+    ) -> Tuple[DocContext, str]:
+        """
+        RAGFlow에서 검색.
+
+        Args:
+            req: FAQ 초안 생성 요청
+
+        Returns:
+            Tuple[DocContext, str]: (문서 컨텍스트, "RAGFLOW")
+        """
         logger.info(f"Searching RAGFlow for: '{req.canonical_question[:50]}...'")
+
         try:
             results = await self._search_client.search_chunks(
                 query=req.canonical_question,
@@ -288,19 +386,19 @@ class FaqDraftService:
             logger.error(f"RAGFlow search error: {e}")
             raise FaqGenerationError(f"RAGFlow 검색 실패: {str(e)}")
 
-        # 3. 결과가 없으면 NO_DOCS_FOUND 에러
+        # 결과가 없으면 NO_DOCS_FOUND 에러
         if not results:
             logger.warning(f"No documents found for query: '{req.canonical_question[:50]}...'")
             raise FaqGenerationError("NO_DOCS_FOUND")
 
-        # 4. RagSearchResult로 변환
+        # RagSearchResult로 변환
         context_docs = [RagSearchResult.from_chunk(chunk) for chunk in results]
         logger.info(f"Found {len(context_docs)} documents from RAGFlow search")
 
-        # 5. Phase 20-AI-3: 컨텍스트 PII 검사
+        # 컨텍스트 PII 검사
         await self._check_context_pii(context_docs, req.domain, req.cluster_id)
 
-        return context_docs, False
+        return context_docs, "RAGFLOW"
 
     # =========================================================================
     # Phase 19-AI-3: LLM 메시지 구성
@@ -310,7 +408,7 @@ class FaqDraftService:
         self,
         req: FaqDraftGenerateRequest,
         context_docs: DocContext,
-        used_top_docs: bool,
+        answer_source: str,
     ) -> List[dict]:
         """
         LLM 호출용 메시지를 구성합니다.
@@ -318,7 +416,7 @@ class FaqDraftService:
         Args:
             req: FAQ 초안 생성 요청
             context_docs: 문서 컨텍스트 (FaqSourceDoc 또는 RagSearchResult)
-            used_top_docs: top_docs 사용 여부
+            answer_source: 소스 타입 ("TOP_DOCS", "MILVUS", "RAGFLOW")
 
         Returns:
             LLM 메시지 목록
@@ -332,7 +430,7 @@ class FaqDraftService:
             sample_questions_text = "(없음)"
 
         # 문서 발췌 포맷
-        docs_text = self._format_docs_for_prompt(context_docs, used_top_docs)
+        docs_text = self._format_docs_for_prompt(context_docs, answer_source)
 
         # User 메시지 생성
         user_message = USER_PROMPT_TEMPLATE.format(
@@ -350,14 +448,14 @@ class FaqDraftService:
     def _format_docs_for_prompt(
         self,
         context_docs: DocContext,
-        used_top_docs: bool,
+        answer_source: str,
     ) -> str:
         """
         문서 컨텍스트를 LLM 프롬프트용 문자열로 포맷합니다.
 
         Args:
             context_docs: 문서 컨텍스트
-            used_top_docs: top_docs 사용 여부
+            answer_source: 소스 타입 ("TOP_DOCS", "MILVUS", "RAGFLOW")
 
         Returns:
             포맷된 문서 문자열
@@ -367,7 +465,7 @@ class FaqDraftService:
 
         docs_lines = []
 
-        if used_top_docs:
+        if answer_source == "TOP_DOCS":
             # FaqSourceDoc 포맷
             for i, doc in enumerate(context_docs[:5], start=1):
                 doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
@@ -377,11 +475,11 @@ class FaqDraftService:
                     doc_info += f"\n{doc.snippet[:500]}"
                 docs_lines.append(doc_info)
         else:
-            # RagSearchResult 포맷 (Phase 19-AI-2)
+            # RagSearchResult 포맷 (MILVUS / RAGFLOW)
             for i, doc in enumerate(context_docs[:5], start=1):
                 doc_info = f"### 문서 {i}: {doc.title or '제목 없음'}"
                 if doc.page is not None:
-                    doc_info += f" (p.{doc.page})"
+                    doc_info += f" (chunk #{doc.page})"
                 doc_info += f" [유사도: {doc.score:.2f}]"
                 if doc.snippet:
                     doc_info += f"\n{doc.snippet}"
@@ -398,32 +496,29 @@ class FaqDraftService:
         req: FaqDraftGenerateRequest,
         parsed: dict,
         context_docs: DocContext,
-        used_top_docs: bool,
+        answer_source: str,
     ) -> FaqDraft:
         """
         파싱된 LLM 응답으로 FaqDraft를 생성합니다.
 
-        Phase 19-AI-3 스펙:
-        - answer_source: TOP_DOCS 또는 RAGFLOW
+        Phase 19-AI-3 + Option 3 스펙:
+        - answer_source: TOP_DOCS, MILVUS, 또는 RAGFLOW
         - top_docs 사용 시: source_doc_id 등 그대로 사용
-        - RAGFlow 검색 시: source 필드는 null
+        - MILVUS/RAGFLOW 검색 시: source 필드는 null
 
         Args:
             req: FAQ 초안 생성 요청
             parsed: 파싱된 LLM 응답
             context_docs: 문서 컨텍스트
-            used_top_docs: top_docs 사용 여부
+            answer_source: 소스 타입 ("TOP_DOCS", "MILVUS", "RAGFLOW")
 
         Returns:
             FaqDraft: 생성된 FAQ 초안
         """
         answer_markdown = parsed.get("answer_markdown", "")
 
-        # Phase 19-AI-3: answer_source 결정
-        answer_source = "TOP_DOCS" if used_top_docs else "RAGFLOW"
-
         # source 필드 결정
-        if used_top_docs and context_docs:
+        if answer_source == "TOP_DOCS" and context_docs:
             first_doc = context_docs[0]
             source_doc_id = first_doc.doc_id
             source_doc_version = first_doc.doc_version
@@ -754,7 +849,7 @@ class FaqDraftService:
         self,
         draft: FaqDraft,
         context_docs: DocContext,
-        used_top_docs: bool,
+        answer_source: str,
     ) -> None:
         """FAQ 생성 품질 메트릭을 로그에 기록합니다.
 
@@ -765,17 +860,17 @@ class FaqDraftService:
         Args:
             draft: 생성된 FAQ 초안
             context_docs: 사용된 문서 컨텍스트
-            used_top_docs: top_docs 사용 여부
+            answer_source: 소스 타입 ("TOP_DOCS", "MILVUS", "RAGFLOW")
         """
         settings = get_settings()
         threshold = settings.FAQ_CONFIDENCE_WARN_THRESHOLD
 
-        # RAGFlow top score 추출 (가능하면)
-        ragflow_top_score = None
-        if not used_top_docs and context_docs:
+        # 검색 top score 추출 (MILVUS / RAGFLOW)
+        search_top_score = None
+        if answer_source in ("MILVUS", "RAGFLOW") and context_docs:
             first_doc = context_docs[0]
             if hasattr(first_doc, "score"):
-                ragflow_top_score = first_doc.score
+                search_top_score = first_doc.score
 
         log_extra = {
             "event": "faq_quality",
@@ -785,7 +880,7 @@ class FaqDraftService:
             "ai_confidence": draft.ai_confidence,
             "status": "SUCCESS",
             "error_message": None,
-            "ragflow_top_score": ragflow_top_score,
+            "search_top_score": search_top_score,
         }
 
         # ai_confidence가 낮으면 경고 로그
@@ -854,7 +949,7 @@ class FaqDraftService:
         self, source: Optional[str]
     ) -> str:
         """answer_source를 정규화합니다. (하위 호환용)"""
-        valid_sources = {"TOP_DOCS", "RAGFLOW", "AI_RAG", "LOG_REUSE", "MIXED"}
+        valid_sources = {"TOP_DOCS", "RAGFLOW", "MILVUS", "AI_RAG", "LOG_REUSE", "MIXED"}
         if source and source.upper() in valid_sources:
             return source.upper()
         return "RAGFLOW"
