@@ -587,11 +587,14 @@ class ChatService:
         # Phase 11/12: 라우트별 처리 로직 (latency 측정 포함)
         # =====================================================================
 
+        # Option 3: retriever_used 추적
+        retriever_used: Optional[str] = None
+
         if route in rag_only_routes:
             # RAG_INTERNAL: RAG만 사용
             rag_search_attempted = True
             rag_start = time.perf_counter()
-            sources, rag_search_failed = await self._perform_rag_search_with_fallback(
+            sources, rag_search_failed, retriever_used = await self._perform_rag_search_with_fallback(
                 masked_query, domain, req, request_id=request_id
             )
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
@@ -614,7 +617,7 @@ class ChatService:
                 department=req.department,
             )
 
-            (sources, rag_search_failed), backend_context = await asyncio.gather(
+            (sources, rag_search_failed, retriever_used), backend_context = await asyncio.gather(
                 rag_task, backend_task
             )
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
@@ -622,7 +625,8 @@ class ChatService:
 
             logger.info(
                 f"MIXED_BACKEND_RAG: RAG sources={len(sources)}, rag_failed={rag_search_failed}, "
-                f"backend_data_fetched={backend_data_fetched}, rag_latency_ms={rag_latency_ms}"
+                f"backend_data_fetched={backend_data_fetched}, rag_latency_ms={rag_latency_ms}, "
+                f"retriever_used={retriever_used}"
             )
 
         elif route in backend_api_routes:
@@ -977,6 +981,8 @@ class ChatService:
             has_pii_output=pii_output.has_pii,
             rag_used=rag_used,
             rag_source_count=len(sources),
+            # Option 3: 실제 사용된 검색 엔진 (운영 디버깅용)
+            retriever_used=retriever_used,
             latency_ms=latency_ms,
             # Phase 12: 에러 정보 및 개별 latency
             error_type=error_type,
@@ -1166,8 +1172,15 @@ class ChatService:
         domain: str,
         req: ChatRequest,
         request_id: Optional[str] = None,
-    ) -> Tuple[List[ChatSource], bool]:
-        """RAG 검색을 수행하고 실패 여부를 함께 반환합니다 (위임)."""
+    ) -> Tuple[List[ChatSource], bool, str]:
+        """RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다 (위임).
+
+        Returns:
+            Tuple[List[ChatSource], bool, str]:
+                - 검색 결과
+                - 실패 여부
+                - 사용된 retriever (MILVUS, RAGFLOW, RAGFLOW_FALLBACK)
+        """
         return await self._rag_handler.perform_search_with_fallback(
             query, domain, req, request_id
         )

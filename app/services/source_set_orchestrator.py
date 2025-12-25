@@ -37,7 +37,13 @@ from app.clients.backend_client import (
     SourceSetDocumentsFetchError,
     get_backend_client,
 )
+from app.clients.milvus_client import (
+    MilvusSearchClient,
+    MilvusError,
+    get_milvus_client,
+)
 from app.clients.ragflow_client import RagflowClient
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.source_set import (
     ChunkBulkUpsertRequest,
@@ -126,17 +132,38 @@ class SourceSetOrchestrator:
         self,
         backend_client: Optional[BackendClient] = None,
         ragflow_client: Optional[RagflowClient] = None,
+        milvus_client: Optional[MilvusSearchClient] = None,
     ):
         """초기화.
 
         Args:
             backend_client: 백엔드 클라이언트 (None이면 싱글톤 사용)
             ragflow_client: RAGFlow 클라이언트 (None이면 새로 생성)
+            milvus_client: Milvus 클라이언트 (None이면 싱글톤 사용, Option 3)
         """
         self._backend_client = backend_client or get_backend_client()
         self._ragflow_client = ragflow_client or RagflowClient()
         self._processing_jobs: Dict[str, ProcessingJob] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
+
+        # Option 3: Milvus 클라이언트 (SCRIPT_RETRIEVER_BACKEND=milvus 시 사용)
+        self._settings = get_settings()
+        self._use_milvus = (
+            self._settings.script_retriever_backend == "milvus"
+            and self._settings.MILVUS_ENABLED
+        )
+        if self._use_milvus:
+            self._milvus_client = milvus_client or get_milvus_client()
+            logger.info(
+                f"SourceSetOrchestrator initialized with Milvus "
+                f"(SCRIPT_RETRIEVER_BACKEND={self._settings.script_retriever_backend})"
+            )
+        else:
+            self._milvus_client = None
+            logger.info(
+                f"SourceSetOrchestrator initialized with RAGFlow only "
+                f"(SCRIPT_RETRIEVER_BACKEND={self._settings.script_retriever_backend})"
+            )
 
     # =========================================================================
     # Public API
@@ -254,6 +281,7 @@ class SourceSetOrchestrator:
             )
 
             # 2. 각 문서 처리 및 청크 수집
+            # Option 3: SCRIPT_RETRIEVER_BACKEND에 따라 Milvus 또는 RAGFlow 사용
             all_document_chunks: Dict[str, List[Dict[str, Any]]] = {}  # doc_id → chunks
             document_results: List[DocumentResult] = []
             processing_results: List[DocumentProcessingResult] = []
@@ -261,7 +289,9 @@ class SourceSetOrchestrator:
 
             for doc in job.documents:
                 try:
-                    result = await self._process_document(source_set_id, doc, job)
+                    result = await self._process_document_with_routing(
+                        source_set_id, doc, job
+                    )
                     processing_results.append(result)
                     document_results.append(
                         DocumentResult(
@@ -496,6 +526,125 @@ class SourceSetOrchestrator:
                 fail_reason=str(e)[:200],
             )
 
+    async def _process_document_with_routing(
+        self,
+        source_set_id: str,
+        doc: SourceSetDocument,
+        job: ProcessingJob,
+    ) -> DocumentProcessingResult:
+        """문서를 처리합니다 (Option 3: Milvus → RAGFlow 라우팅).
+
+        SCRIPT_RETRIEVER_BACKEND 설정에 따라:
+        - milvus: Milvus에서 청크 조회 시도 → 실패 시 RAGFlow 처리
+        - ragflow: RAGFlow로만 처리
+
+        Args:
+            source_set_id: 소스셋 ID
+            doc: 처리할 문서
+            job: 처리 작업 상태
+
+        Returns:
+            DocumentProcessingResult: 처리 결과
+        """
+        # Milvus 사용 시: Milvus 먼저 시도 → RAGFlow fallback
+        if self._use_milvus and self._milvus_client:
+            try:
+                result = await self._process_document_milvus(source_set_id, doc, job)
+                if result.success and result.chunks:
+                    logger.info(
+                        f"Document processed via Milvus: doc_id={doc.document_id}, "
+                        f"chunks={len(result.chunks)}"
+                    )
+                    return result
+
+                # Milvus에서 청크가 없으면 RAGFlow fallback
+                logger.warning(
+                    f"Milvus returned no chunks for doc_id={doc.document_id}, "
+                    f"falling back to RAGFlow"
+                )
+
+            except MilvusError as e:
+                logger.warning(
+                    f"Milvus processing failed for doc_id={doc.document_id}, "
+                    f"falling back to RAGFlow: {e}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Milvus unexpected error for doc_id={doc.document_id}, "
+                    f"falling back to RAGFlow: {e}"
+                )
+
+        # RAGFlow 처리 (기본 또는 fallback)
+        return await self._process_document(source_set_id, doc, job)
+
+    async def _process_document_milvus(
+        self,
+        source_set_id: str,
+        doc: SourceSetDocument,
+        job: ProcessingJob,
+    ) -> DocumentProcessingResult:
+        """Milvus에서 문서 청크를 조회합니다 (Option 3).
+
+        RAGFlow를 거치지 않고 Milvus에서 직접 청크를 조회합니다.
+        이미 인덱싱된 문서에 대해 사용합니다.
+
+        Args:
+            source_set_id: 소스셋 ID
+            doc: 처리할 문서
+            job: 처리 작업 상태
+
+        Returns:
+            DocumentProcessingResult: 처리 결과
+
+        Raises:
+            MilvusError: Milvus 조회 실패 시
+        """
+        # source_url null 체크
+        if not doc.source_url or not doc.source_url.strip():
+            logger.error(
+                f"Document source_url is empty: source_set_id={source_set_id}, "
+                f"doc_id={doc.document_id}"
+            )
+            return DocumentProcessingResult(
+                document_id=doc.document_id,
+                success=False,
+                fail_reason="source_url is empty or null",
+            )
+
+        logger.info(
+            f"Processing document via Milvus: source_set_id={source_set_id}, "
+            f"doc_id={doc.document_id}"
+        )
+
+        # Milvus에서 청크 조회
+        chunks = await self._fetch_document_chunks_milvus(doc)
+
+        if not chunks:
+            logger.warning(
+                f"No chunks found in Milvus for doc_id={doc.document_id}"
+            )
+            return DocumentProcessingResult(
+                document_id=doc.document_id,
+                success=False,
+                fail_reason="No chunks found in Milvus",
+            )
+
+        # Spring DB에 청크 저장 (선택적 - Milvus에서 가져온 청크도 저장)
+        # 주의: 이미 저장된 청크일 수 있으므로 upsert 사용
+        await self._save_chunks_to_backend(doc.document_id, chunks, job)
+
+        logger.info(
+            f"Document processed via Milvus: doc_id={doc.document_id}, "
+            f"chunks={len(chunks)}"
+        )
+
+        return DocumentProcessingResult(
+            document_id=doc.document_id,
+            success=True,
+            chunks_count=len(chunks),
+            chunks=chunks,
+        )
+
     async def _poll_document_status(
         self,
         dataset_id: str,
@@ -614,6 +763,104 @@ class SourceSetOrchestrator:
 
         logger.info(f"Fetched {len(all_chunks)} chunks from RAGFlow")
         return all_chunks
+
+    # =========================================================================
+    # Option 3: Milvus 기반 문서 텍스트 조회
+    # =========================================================================
+
+    def _extract_milvus_doc_id(self, source_url: str, fallback_id: str) -> str:
+        """source_url에서 Milvus doc_id (파일명)를 추출합니다.
+
+        Milvus에서 doc_id는 파일명으로 저장됩니다.
+        source_url 예: https://bucket.s3.amazonaws.com/path/to/장애인식관련법령.docx?signature=...
+
+        Args:
+            source_url: 문서 원본 URL
+            fallback_id: 추출 실패 시 사용할 ID
+
+        Returns:
+            str: Milvus doc_id (파일명)
+        """
+        try:
+            # URL에서 파일명 추출
+            # 1. 쿼리 파라미터 제거
+            url_without_query = source_url.split("?")[0]
+            # 2. 마지막 경로 요소 추출
+            filename = url_without_query.split("/")[-1]
+            # 3. URL 디코딩 (한글 파일명 처리)
+            from urllib.parse import unquote
+            filename = unquote(filename)
+
+            if filename and len(filename) > 0:
+                logger.debug(f"Extracted Milvus doc_id: {filename} from {source_url[:50]}...")
+                return filename
+        except Exception as e:
+            logger.warning(f"Failed to extract filename from URL: {e}")
+
+        return fallback_id
+
+    async def _fetch_document_chunks_milvus(
+        self,
+        doc: "SourceSetDocument",
+    ) -> List[Dict[str, Any]]:
+        """Milvus에서 문서 전체 청크를 조회합니다 (Option 3).
+
+        Args:
+            doc: 소스셋 문서 정보
+
+        Returns:
+            List[Dict[str, Any]]: 청크 리스트 (chunk_index, chunk_text, chunk_meta 포함)
+
+        Raises:
+            MilvusError: Milvus 조회 실패 시
+        """
+        if not self._milvus_client:
+            raise MilvusError("Milvus client not initialized")
+
+        # source_url에서 Milvus doc_id (파일명) 추출
+        milvus_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
+
+        logger.info(
+            f"Fetching document from Milvus: spring_doc_id={doc.document_id}, "
+            f"milvus_doc_id={milvus_doc_id}"
+        )
+
+        try:
+            # Milvus에서 청크 조회
+            milvus_chunks = await self._milvus_client.get_document_chunks(
+                doc_id=milvus_doc_id,
+                dataset_id=None,  # dataset_id 필터 없이 전체 조회
+            )
+
+            if not milvus_chunks:
+                logger.warning(
+                    f"No chunks found in Milvus for doc_id={milvus_doc_id}"
+                )
+                return []
+
+            # 청크 포맷 변환 (RAGFlow 포맷과 동일하게)
+            all_chunks = []
+            for idx, chunk in enumerate(milvus_chunks):
+                all_chunks.append({
+                    "chunk_index": idx,
+                    "chunk_text": chunk.get("text", ""),
+                    "chunk_meta": {
+                        "milvus_chunk_id": chunk.get("chunk_id"),
+                        "milvus_doc_id": milvus_doc_id,
+                        "source": "milvus",
+                    },
+                })
+
+            logger.info(
+                f"Fetched {len(all_chunks)} chunks from Milvus for doc_id={milvus_doc_id}"
+            )
+            return all_chunks
+
+        except MilvusError:
+            raise
+        except Exception as e:
+            logger.error(f"Milvus chunk fetch failed: {e}")
+            raise MilvusError(f"Failed to fetch chunks from Milvus: {e}")
 
     async def _save_chunks_to_backend(
         self,
