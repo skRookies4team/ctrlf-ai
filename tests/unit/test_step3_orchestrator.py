@@ -53,7 +53,7 @@ def mock_backend_client():
 def mock_ragflow_client():
     """Mock RagflowClient"""
     client = MagicMock()
-    client._dataset_to_kb_id = MagicMock(return_value="kb_education_001")
+    client._dataset_to_kb_id = MagicMock(return_value="정보보안교육")
     client.upload_document = AsyncMock()
     client.trigger_parsing = AsyncMock()
     client.get_document_status = AsyncMock()

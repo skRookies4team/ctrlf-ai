@@ -96,13 +96,12 @@ class RagflowClient:
     # False로 설정하면 기존 /retrieval_test 직접 호출
     USE_SEARCH_WRAPPER = True
 
-    # dataset(도메인) → kb_id 매핑 테이블
-    # TODO: 실제 kb_id가 확정되면 업데이트 필요
-    # TODO: 향후 .env 또는 설정 파일에서 로드하도록 개선 가능
+    # dataset(도메인) → dataset_id 매핑 테이블 (Fallback)
+    # 실제 값은 .env의 MILVUS_DATASET_MAPPING에서 로드됨
+    # 이 값은 settings 매핑이 없을 때의 기본값
     DATASET_TO_KB_ID: Dict[str, str] = {
-        "POLICY": "kb_policy_001",
-        "INCIDENT": "kb_incident_001",
-        "EDUCATION": "kb_education_001",
+        "POLICY": "사내규정",
+        "EDUCATION": "정보보안교육",  # 교육 도메인 대표값
     }
 
     def __init__(

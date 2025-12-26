@@ -211,6 +211,7 @@ class MessageBuilder:
         domain: str,
         user_role: "UserRole",
         intent: "IntentType",
+        soft_guardrail_instruction: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
         MIXED_BACKEND_RAG용 LLM 메시지를 구성합니다.
@@ -222,6 +223,7 @@ class MessageBuilder:
             domain: 도메인
             user_role: 사용자 역할
             intent: 의도
+            soft_guardrail_instruction: Phase 47: 소프트 가드레일용 시스템 지침
 
         Returns:
             List[Dict[str, str]]: LLM 메시지 목록
@@ -254,6 +256,10 @@ class MessageBuilder:
         if guardrail_prefix:
             system_content = guardrail_prefix + "\n\n" + system_content
 
+        # Phase 47: 소프트 가드레일 시스템 지침 추가 (모든 경로 적용)
+        if soft_guardrail_instruction:
+            system_content = system_content + soft_guardrail_instruction
+
         messages.append({
             "role": "system",
             "content": system_content,
@@ -273,6 +279,7 @@ class MessageBuilder:
         user_role: "UserRole",
         domain: str,
         intent: "IntentType",
+        soft_guardrail_instruction: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
         BACKEND_API용 LLM 메시지를 구성합니다.
@@ -283,6 +290,7 @@ class MessageBuilder:
             user_role: 사용자 역할
             domain: 도메인
             intent: 의도
+            soft_guardrail_instruction: Phase 47: 소프트 가드레일용 시스템 지침
 
         Returns:
             List[Dict[str, str]]: LLM 메시지 목록
@@ -306,6 +314,10 @@ class MessageBuilder:
 
         if guardrail_prefix:
             system_content = guardrail_prefix + "\n\n" + system_content
+
+        # Phase 47: 소프트 가드레일 시스템 지침 추가 (모든 경로 적용)
+        if soft_guardrail_instruction:
+            system_content = system_content + soft_guardrail_instruction
 
         messages.append({
             "role": "system",

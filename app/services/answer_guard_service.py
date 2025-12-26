@@ -178,19 +178,27 @@ class AnswerTemplates:
         "정확한 정보가 필요하시면 담당 부서에 문의해 주세요:\n"
     )
 
-    # Phase 45/46: 도메인별 담당 부서 안내
-    # Phase 46: EDUCATION/EDU 둘 다 지원 (API에서 EDUCATION, 내부 enum은 EDU)
+    # Phase 47: 도메인별 담당 부서 안내 (정규화된 구조)
+    # - 시스템 도메인(POLICY, EDUCATION, INCIDENT, GENERAL)
+    # - 교육 주제 카테고리(PIP, SHP, BHP, DEP, JOB 등)는 별도 매핑
     DOMAIN_CONTACT_INFO = {
+        # 시스템 도메인 (라우팅용)
         "POLICY": "• 인사팀 / 총무팀 (사내 규정 관련)",
         "EDU": "• 교육팀 / HR팀 (교육 관련)",
-        "EDUCATION": "• 교육팀 / HR팀 (교육 관련)",  # Phase 46: EDU alias
+        "EDUCATION": "• 교육팀 / HR팀 (교육 관련)",  # EDU alias
         "INCIDENT": "• 보안팀 / 감사팀 (사건/사고 관련)",
+        "GENERAL": "• 담당 부서에 문의해 주세요.",
+        "DEFAULT": "• 담당 부서에 문의해 주세요.",
+    }
+
+    # Phase 47: 교육 주제 카테고리별 담당부서 (dataset/topic용)
+    # 더 구체적인 안내가 필요한 경우 사용
+    TOPIC_CONTACT_INFO = {
         "PIP": "• 개인정보보호팀 (개인정보 관련)",
         "SHP": "• 인사팀 / 고충처리위원회 (성희롱 예방)",
         "BHP": "• 인사팀 / 고충처리위원회 (직장내 괴롭힘)",
         "DEP": "• 인사팀 (장애인 인식개선)",
         "JOB": "• 교육팀 / 해당 부서 (직무교육)",
-        "DEFAULT": "• 담당 부서에 문의해 주세요.",
     }
 
 
@@ -313,6 +321,16 @@ class AnswerGuardService:
     [A]~[F] 요구사항을 통합 관리합니다.
     """
 
+    # Phase 47: 교육 주제 카테고리 → 시스템 도메인 매핑
+    # 교육 관련 카테고리는 모두 EDUCATION 계열로 통합
+    _TOPIC_TO_DOMAIN_MAP: Dict[str, str] = {
+        "PIP": "EDUCATION",
+        "SHP": "EDUCATION",
+        "BHP": "EDUCATION",
+        "DEP": "EDUCATION",
+        "JOB": "EDUCATION",
+    }
+
     def __init__(self) -> None:
         """AnswerGuardService 초기화."""
         settings = get_settings()
@@ -323,6 +341,72 @@ class AnswerGuardService:
             self._debug_enabled = True
 
     # -------------------------------------------------------------------------
+    # Phase 47: 도메인/토픽 정규화
+    # -------------------------------------------------------------------------
+
+    def normalize_domain_key(self, domain: Optional[str]) -> str:
+        """도메인 키를 정규화하여 담당부서 안내에 사용합니다.
+
+        Phase 47: 시스템 도메인과 교육 주제 카테고리를 통합하여 일관된 키 반환.
+
+        정규화 규칙:
+        1. EDUCATION/EDU → EDUCATION
+        2. PIP/SHP/BHP/DEP/JOB → EDUCATION (교육 주제 카테고리)
+        3. POLICY/INCIDENT/GENERAL → 그대로 유지
+        4. None 또는 알 수 없는 값 → DEFAULT
+
+        Args:
+            domain: 입력 도메인 또는 토픽 키
+
+        Returns:
+            정규화된 도메인 키
+        """
+        if not domain:
+            return "DEFAULT"
+
+        domain_upper = domain.upper()
+
+        # EDU → EDUCATION 정규화
+        if domain_upper == "EDU":
+            return "EDUCATION"
+
+        # 교육 주제 카테고리 → EDUCATION 매핑
+        if domain_upper in self._TOPIC_TO_DOMAIN_MAP:
+            return self._TOPIC_TO_DOMAIN_MAP[domain_upper]
+
+        # 알려진 시스템 도메인
+        if domain_upper in ("POLICY", "EDUCATION", "INCIDENT", "GENERAL"):
+            return domain_upper
+
+        # 알 수 없는 값 → DEFAULT
+        return "DEFAULT"
+
+    def get_contact_info(self, domain: Optional[str], topic: Optional[str] = None) -> str:
+        """도메인/토픽에 맞는 담당부서 안내를 반환합니다.
+
+        Phase 47: 토픽이 있으면 토픽 기준, 없으면 도메인 기준으로 안내.
+
+        Args:
+            domain: 시스템 도메인 (POLICY, EDUCATION, INCIDENT 등)
+            topic: 교육 주제 카테고리 (PIP, SHP, BHP 등, 선택적)
+
+        Returns:
+            담당부서 안내 문자열
+        """
+        # 토픽이 있고 TOPIC_CONTACT_INFO에 있으면 더 구체적인 안내 사용
+        if topic:
+            topic_upper = topic.upper()
+            if topic_upper in AnswerTemplates.TOPIC_CONTACT_INFO:
+                return AnswerTemplates.TOPIC_CONTACT_INFO[topic_upper]
+
+        # 도메인 기준 안내
+        normalized_domain = self.normalize_domain_key(domain)
+        return AnswerTemplates.DOMAIN_CONTACT_INFO.get(
+            normalized_domain,
+            AnswerTemplates.DOMAIN_CONTACT_INFO["DEFAULT"]
+        )
+
+    # -------------------------------------------------------------------------
     # Phase 45: Soft Guardrail (소프트 가드레일)
     # -------------------------------------------------------------------------
 
@@ -331,6 +415,7 @@ class AnswerGuardService:
         intent: Tier0Intent,
         sources: List[ChatSource],
         domain: Optional[str] = None,
+        topic: Optional[str] = None,
     ) -> Tuple[bool, Optional[str]]:
         """소프트 가드레일 적용 여부를 판정합니다.
 
@@ -338,10 +423,15 @@ class AnswerGuardService:
         - "확정 답변" 대신 "KB 근거 없음 + 담당부서 안내" prefix 반환
         - GENERAL_CHAT/SYSTEM_HELP는 자유 답변 허용
 
+        Phase 47: 도메인/토픽 정규화 적용
+        - 토픽(PIP, SHP 등)이 있으면 더 구체적인 담당부서 안내
+        - 도메인(EDUCATION, POLICY 등) 정규화로 일관된 매핑
+
         Args:
             intent: Tier0 의도
             sources: RAG 검색 결과
             domain: 도메인 (담당부서 안내용)
+            topic: 교육 주제 카테고리 (선택적, 더 구체적인 안내용)
 
         Returns:
             (needs_soft_guardrail, prefix) 튜플
@@ -356,16 +446,14 @@ class AnswerGuardService:
 
         # 소프트 가드레일 대상 intent이고 sources가 없는 경우
         if intent in SOFT_GUARDRAIL_INTENTS and not has_sources:
-            # 담당부서 안내 구성
-            contact_info = AnswerTemplates.DOMAIN_CONTACT_INFO.get(
-                domain, AnswerTemplates.DOMAIN_CONTACT_INFO["DEFAULT"]
-            )
+            # Phase 47: 정규화된 담당부서 안내 구성
+            contact_info = self.get_contact_info(domain=domain, topic=topic)
 
             prefix = AnswerTemplates.SOFT_GUARDRAIL_PREFIX + contact_info + "\n\n---\n\n"
 
             logger.info(
                 f"Soft guardrail ACTIVE: intent={intent.value}, "
-                f"sources=0, domain={domain}"
+                f"sources=0, domain={domain}, topic={topic}"
             )
             return (True, prefix)
 
@@ -377,22 +465,25 @@ class AnswerGuardService:
 
         Phase 45: sources=0일 때 LLM이 "확정" 표현을 쓰지 않도록 지시.
         Phase 46: '확정 표현 금지' 규칙 강화 + 답변 형태 제한
+        Phase 47: '~입니다' 종결어미 금지 제거 (한국어 기본 서술 종결어미)
+                  → '회사 기준 확정/근거 주장'만 금지하도록 변경
         """
         return (
-            "\n\n[중요 지침 - 확정 표현 금지]\n"
+            "\n\n[중요 지침 - 회사 기준 확정 표현 금지]\n"
             "현재 참고할 사내 문서 근거가 없습니다.\n"
             "따라서 답변 시 다음 규칙을 반드시 따르세요:\n\n"
-            "【금지 표현】\n"
-            "• '~입니다', '~해야 합니다', '반드시', '규정상', '의무적으로'\n"
-            "• '회사 규정에 따르면', '사규에 의하면', '정책에 따라'\n"
-            "• 제N조, 제N항 등 구체적 조항 번호 언급\n\n"
-            "【허용 표현】\n"
-            "• '일반적으로 ~하는 경향이 있습니다'\n"
-            "• '~일 수 있습니다', '~으로 알려져 있습니다'\n"
-            "• '대부분의 경우 ~합니다', '통상적으로 ~합니다'\n\n"
+            "【금지 표현 - 회사 기준 확정/근거 주장】\n"
+            "• '회사 규정상', '사규에 따르면', '정책에 따라', '회사 방침으로'\n"
+            "• '의무적으로', '반드시', '무조건'\n"
+            "• 제N조, 제N항, 제N호 등 구체적 조항 번호 단정 인용\n\n"
+            "【허용 표현 - 일반 지식/조건부 표현】\n"
+            "• '일반적으로는 ~로 운영되는 경우가 많습니다'\n"
+            "• '회사마다 다를 수 있습니다', '~일 수 있습니다'\n"
+            "• '통상적으로 ~합니다', '대부분의 경우 ~합니다'\n"
+            "• 일반적인 서술형 종결('~입니다', '~합니다')은 사용 가능\n\n"
             "【답변 형식】\n"
             "답변은 반드시 다음 구조를 따르세요:\n"
-            "1. 일반적인 안내 (확정 표현 없이)\n"
+            "1. 일반적인 안내 (회사 기준 확정 표현 없이)\n"
             "2. 확인 방법 안내 (어떤 문서/담당부서/키워드로 찾을 수 있는지)\n"
             "3. '정확한 정보는 담당 부서에 확인해 주세요' 문구로 마무리\n\n"
             "반드시 한국어로만 답변하세요.\n"

@@ -747,6 +747,7 @@ class ChatService:
 
         if route in mixed_routes:
             # MIXED_BACKEND_RAG: RAG + Backend 통합 컨텍스트
+            # Phase 47: 소프트 가드레일 모든 경로 적용
             llm_messages = self._build_mixed_llm_messages(
                 user_query=masked_query,
                 sources=sources,
@@ -754,15 +755,18 @@ class ChatService:
                 domain=domain,
                 user_role=intent_result.user_role,
                 intent=intent,
+                soft_guardrail_instruction=soft_guardrail_instruction,
             )
         elif route in backend_api_routes:
             # BACKEND_API: Backend 컨텍스트만
+            # Phase 47: 소프트 가드레일 모든 경로 적용
             llm_messages = self._build_backend_api_llm_messages(
                 user_query=masked_query,
                 backend_context=backend_context,
                 user_role=intent_result.user_role,
                 domain=domain,
                 intent=intent,
+                soft_guardrail_instruction=soft_guardrail_instruction,
             )
         else:
             # 기존 로직: RAG_INTERNAL, LLM_ONLY 등
@@ -1227,11 +1231,13 @@ class ChatService:
         domain: str,
         user_role: UserRole,
         intent: IntentType,
+        soft_guardrail_instruction: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
         MIXED_BACKEND_RAG용 LLM 메시지를 구성합니다 (위임).
 
         Phase 2 리팩토링: MessageBuilder로 로직 위임.
+        Phase 47: 소프트 가드레일 시스템 지침 파라미터 추가.
         """
         return self._message_builder.build_mixed_messages(
             user_query=user_query,
@@ -1240,6 +1246,7 @@ class ChatService:
             domain=domain,
             user_role=user_role,
             intent=intent,
+            soft_guardrail_instruction=soft_guardrail_instruction,
         )
 
     # =========================================================================
@@ -1298,11 +1305,13 @@ class ChatService:
         user_role: UserRole,
         domain: str,
         intent: IntentType,
+        soft_guardrail_instruction: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
         BACKEND_API용 LLM 메시지를 구성합니다 (위임).
 
         Phase 2 리팩토링: MessageBuilder로 로직 위임.
+        Phase 47: 소프트 가드레일 시스템 지침 파라미터 추가.
         """
         return self._message_builder.build_backend_api_messages(
             user_query=user_query,
@@ -1310,4 +1319,5 @@ class ChatService:
             user_role=user_role,
             domain=domain,
             intent=intent,
+            soft_guardrail_instruction=soft_guardrail_instruction,
         )
