@@ -1,155 +1,251 @@
-# AI Gateway 백엔???�동 가?�드
+# 백엔드팀 연동 가이드
 
-> **?�성??*: 2025-12-11
-> **?�??*: ctrlf-back (Spring Backend) 개발?�
-> **버전**: Phase 15 ?�료
+> **최종 수정일**: 2025-12-26
+> **대상**: ctrlf-back (Spring Backend) 개발팀
+
+---
+
+## 핵심 요약 (Quick Start)
+
+### 서비스 연결 정보
+
+| 서비스 | URL | 용도 |
+|--------|-----|------|
+| **Milvus** | `58.127.241.84:19540` | 벡터 DB (RAG 검색) |
+| **Embedding Server** | `http://58.127.241.84:1234/v1/embeddings` | 임베딩 생성 |
+| **LLM Server** | `http://58.127.241.84:1237/v1` | LLM 응답 생성 |
+| **RAGFlow** | `http://58.127.241.84:9380` | RAG 검색 (대안) |
+| **AI Gateway** | `http://localhost:8000` | 통합 API |
+
+### Milvus 핵심 정보
+
+```
+Collection: ragflow_chunks_sroberta
+Embedding Model: jhgan/ko-sroberta-multitask
+Dimension: 768
+Metric: COSINE
+```
+
+### Dataset ID (한글 카테고리명)
+
+| dataset_id | 도메인 | 청크 수 |
+|------------|--------|--------|
+| `사내규정` | POLICY | 390 |
+| `정보보안교육` | EDUCATION | 1,442 |
+| `직장내성희롱교육` | EDUCATION | 486 |
+| `직무교육` | EDUCATION | 330 |
+| `직장내괴롭힘교육` | EDUCATION | 152 |
+| `장애인인식개선교육` | EDUCATION | 125 |
+
+> **주의**: `kb_policy_001` 같은 ID는 존재하지 않습니다. 실제 dataset_id는 위의 한글 값입니다.
 
 ---
 
 ## 목차
 
-1. [?�로?�트 개요](#1-?�로?�트-개요)
-2. [?�경 ?�정 �??�행](#2-?�경-?�정-�??�행)
-3. [API ?�드?�인??목록](#3-api-?�드?�인??목록)
-4. [채팅 API ?�동 가?�드](#4-채팅-api-?�동-가?�드)
-5. [RAG Gap ?�안 API ?�동 가?�드](#5-rag-gap-?�안-api-?�동-가?�드)
-6. [?�러 처리](#6-?�러-처리)
-7. [?�동 체크리스??(#7-?�동-체크리스??
+1. [Milvus 직접 연동](#1-milvus-직접-연동)
+2. [AI Gateway API 연동](#2-ai-gateway-api-연동)
+3. [채팅 API 상세](#3-채팅-api-상세)
+4. [에러 처리](#4-에러-처리)
+5. [체크리스트](#5-체크리스트)
 
 ---
 
-## 1. ?�로?�트 개요
+## 1. Milvus 직접 연동
 
-### 1.1 AI Gateway?�?
+### 1.1 컬렉션 스키마
 
-AI Gateway???�용??질문??받아 RAG(검?? + LLM(?�성)??거쳐 ?��???반환?�는 FastAPI ?�버?�니??
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `pk` | INT64 | Primary Key (자동 생성) |
+| `dataset_id` | VARCHAR | 데이터셋 ID (한글 카테고리명) |
+| `doc_id` | VARCHAR | 문서 ID (파일명) |
+| `chunk_id` | INT64 | 청크 번호 (0부터 시작) |
+| `chunk_hash` | VARCHAR | 청크 해시값 |
+| `text` | VARCHAR | 청크 텍스트 내용 |
+| `embedding` | FLOAT_VECTOR(768) | 임베딩 벡터 |
 
-```
-?��??�?�?�?�?�?�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?�?�?�?�?�??
-??ctrlf-back  ?��??�?�?�?�│  AI Gateway     ?��??�?�?�?�│  RAGFlow    ??
-?? (Spring)   ??    ?? (FastAPI)      ??    ?? (검?�엔�?  ??
-?��??�?�?�?�?�?�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?��??�?�?�?�?�?�?�??    ?��??�?�?�?�?�?�?�?�?�?�?�?�??
-                             ??
-                             ??
-                    ?��??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�??
-                    ?? LLM Server     ??
-                    ?? (Qwen2.5-7B)   ??
-                    ?��??�?�?�?�?�?�?�?�?�?�?�?�?�?�?�?�??
-```
-
-### 1.2 주요 기능
-
-| 기능 | ?�명 |
-|------|------|
-| 채팅 ?�답 ?�성 | ?�규/교육/?�고 관??질문??AI ?��? |
-| PII 마스??| 개인?�보 ?�동 ?��? �?마스??|
-| ??���??�우??| EMPLOYEE/ADMIN�??�른 처리 로직 |
-| RAG Gap 분석 | 문서 부�?질문 ?�별 �?보완 ?�안 |
-
----
-
-## 2. ?�경 ?�정 �??�행
-
-### 2.1 ?�전 ?�구?�항
-
-- Python 3.12.7
-- pip (?�키지 관리자)
-
-### 2.2 ?�치 �??�행
+### 1.2 임베딩 생성 API
 
 ```bash
-# 1. ?�로?�트 ?�론
+curl -X POST http://58.127.241.84:1234/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "연차휴가 규정이 어떻게 되나요?",
+    "model": "jhgan/ko-sroberta-multitask"
+  }'
+```
+
+**응답:**
+```json
+{
+  "data": [
+    {
+      "embedding": [0.123, -0.456, ...],
+      "index": 0
+    }
+  ],
+  "model": "jhgan/ko-sroberta-multitask"
+}
+```
+
+### 1.3 Python 검색 예시
+
+```python
+from pymilvus import connections, Collection
+import httpx
+
+# 1. 임베딩 생성
+def get_embedding(text: str) -> list[float]:
+    response = httpx.post(
+        "http://58.127.241.84:1234/v1/embeddings",
+        json={"input": text, "model": "jhgan/ko-sroberta-multitask"},
+        timeout=10.0
+    )
+    return response.json()["data"][0]["embedding"]
+
+# 2. Milvus 연결
+connections.connect(host="58.127.241.84", port=19540)
+collection = Collection("ragflow_chunks_sroberta")
+collection.load()
+
+# 3. 검색
+query_embedding = get_embedding("연차휴가 규정이 어떻게 되나요?")
+
+results = collection.search(
+    data=[query_embedding],
+    anns_field="embedding",
+    param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+    limit=5,
+    output_fields=["text", "doc_id", "dataset_id", "chunk_id"]
+)
+
+# 4. 결과 출력
+for hits in results:
+    for hit in hits:
+        print(f"Score: {hit.score:.4f}, Doc: {hit.entity.get('doc_id')}")
+        print(f"Text: {hit.entity.get('text')[:200]}...")
+```
+
+### 1.4 Java 검색 예시
+
+```java
+import io.milvus.client.*;
+import io.milvus.param.*;
+import io.milvus.param.dml.*;
+
+// 1. 연결
+MilvusServiceClient client = new MilvusServiceClient(
+    ConnectParam.newBuilder()
+        .withHost("58.127.241.84")
+        .withPort(19540)
+        .build()
+);
+
+// 2. 컬렉션 로드
+client.loadCollection(
+    LoadCollectionParam.newBuilder()
+        .withCollectionName("ragflow_chunks_sroberta")
+        .build()
+);
+
+// 3. 임베딩 생성 (별도 HTTP 호출)
+List<Float> queryEmbedding = getEmbeddingFromServer("연차휴가 규정이 어떻게 되나요?");
+
+// 4. 검색
+SearchParam searchParam = SearchParam.newBuilder()
+    .withCollectionName("ragflow_chunks_sroberta")
+    .withVectorFieldName("embedding")
+    .withVectors(List.of(queryEmbedding))
+    .withTopK(5)
+    .withMetricType(MetricType.COSINE)
+    .withParams("{\"nprobe\": 10}")
+    .withOutFields(List.of("text", "doc_id", "dataset_id", "chunk_id"))
+    .build();
+
+R<SearchResults> response = client.search(searchParam);
+```
+
+### 1.5 특정 Dataset 필터링
+
+```python
+# 사내규정만 검색
+results = collection.search(
+    data=[query_embedding],
+    anns_field="embedding",
+    param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+    limit=5,
+    expr='dataset_id == "사내규정"',  # 필터
+    output_fields=["text", "doc_id", "dataset_id"]
+)
+
+# 교육 관련 검색 (여러 dataset_id)
+results = collection.search(
+    data=[query_embedding],
+    anns_field="embedding",
+    param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+    limit=5,
+    expr='dataset_id in ["정보보안교육", "직무교육"]',
+    output_fields=["text", "doc_id", "dataset_id"]
+)
+```
+
+---
+
+## 2. AI Gateway API 연동
+
+### 2.1 아키텍처
+
+```
+┌─────────────┐     ┌─────────────────┐     ┌─────────────┐
+│ ctrlf-back  │────▶│  AI Gateway     │────▶│  Milvus     │
+│ (Spring)    │     │  (FastAPI)      │     │  (벡터 DB)  │
+└─────────────┘     └─────────────────┘     └─────────────┘
+                            │
+                            ▼
+                    ┌─────────────────┐
+                    │  LLM Server     │
+                    │  (Qwen2.5-7B)   │
+                    └─────────────────┘
+```
+
+### 2.2 API 엔드포인트
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/health` | GET | 서버 상태 확인 |
+| `/health/ready` | GET | 준비 상태 확인 |
+| `/ai/chat/messages` | POST | **채팅 응답 생성** |
+| `/ai/rag/process` | POST | RAG 문서 처리 |
+| `/ai/gap/policy-edu/suggestions` | POST | RAG Gap 보완 제안 |
+
+### 2.3 환경 설정
+
+```bash
+# 서버 실행
 git clone https://github.com/skRookies4team/ctrlf-ai.git
 cd ctrlf-ai
-
-# 2. 가?�환�??�성 �??�성??
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 3. ?�존???�치
 pip install -r requirements.txt
-
-# 4. ?�경변???�정
 cp .env.example .env
-# .env ?�일 ?�집?�여 ?�요??�??�정
-
-# 5. ?�버 ?�행
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 2.3 ?�경변??(.env)
-
+**.env 설정:**
 ```env
-# ???�정
-APP_NAME=ctrlf-ai-gateway
-APP_ENV=development
-
-# LLM ?�버 (?�수)
-LLM_BASE_URL=http://your-llm-server:port/v1
-
-# RAGFlow ?�버 (RAG 검?�용)
-RAGFLOW_BASE_URL=http://your-ragflow-server:9380
-
-# PII 마스???�버 (?�택)
-PII_BASE_URL=http://your-pii-server:8000
-PII_ENABLED=true
-
-# 백엔???�버 (로그 ?�송??
-BACKEND_BASE_URL=http://localhost:8080
+LLM_BASE_URL=http://58.127.241.84:1237/v1
+RAGFLOW_BASE_URL=http://58.127.241.84:9380
+MILVUS_HOST=58.127.241.84
+MILVUS_PORT=19540
+MILVUS_COLLECTION_NAME=ragflow_chunks_sroberta
 ```
-
-### 2.4 API 문서 ?�인
-
-?�버 ?�행 ??브라?��??�서:
-
-| URL | ?�명 |
-|-----|------|
-| http://localhost:8000/docs | **Swagger UI** (추천) |
-| http://localhost:8000/redoc | ReDoc 문서 |
-| http://localhost:8000/health | ?�스체크 |
 
 ---
 
-## 3. API ?�드?�인??목록
+## 3. 채팅 API 상세
 
-| ?�드?�인??| 메서??| ?�명 | ?�도 |
-|-----------|--------|------|------|
-| `/health` | GET | ?�버 ?�태 ?�인 | ?�스체크 |
-| `/health/ready` | GET | 준�??�태 ?�인 | K8s Readiness |
-| `/ai/chat/messages` | POST | **채팅 ?�답 ?�성** | 메인 채팅 API |
-| `/ai/rag/process` | POST | RAG 문서 처리 | ?��???|
-| `/ai/gap/policy-edu/suggestions` | POST | RAG Gap 보완 ?�안 | 관리자??|
+### 3.1 요청
 
----
-
-## 4. 채팅 API ?�동 가?�드
-
-### 4.1 기본 ?�로??
-
-```
-[?�용?? ??[ctrlf-back] ??[AI Gateway] ??[RAGFlow + LLM] ??[AI Gateway] ??[ctrlf-back] ??[?�용??
-```
-
-**?�세 ?�로??**
-
-```
-1. ?�용?��? ?�론?�엔?�에??질문 ?�력
-2. ctrlf-back???�용???�보?� ?�께 AI Gateway ?�출
-3. AI Gateway 처리:
-   ?��? PII 마스??(개인?�보 ?�거)
-   ?��? Intent 분류 (질문 ?�형 ?�악)
-   ?��? RAG 검??(관??문서 찾기)
-   ?��? LLM ?�답 ?�성
-   ?��? PII 마스??(?�답?�서 개인?�보 ?�거)
-4. AI Gateway ??ctrlf-back ?�답 반환
-5. ctrlf-back ???�론?�엔?????�용??
-```
-
-### 4.2 ?�청 ?�펙
-
-**?�드?�인??** `POST /ai/chat/messages`
-
-**Request Body:**
+**POST** `/ai/chat/messages`
 
 ```json
 {
@@ -157,105 +253,53 @@ BACKEND_BASE_URL=http://localhost:8080
   "user_id": "emp-001",
   "user_role": "EMPLOYEE",
   "domain": "POLICY",
-  "department": "개발?�",
+  "department": "개발팀",
   "channel": "WEB",
   "messages": [
     {
       "role": "user",
-      "content": "?�차 ?�월 규정???�떻�??�나??"
+      "content": "연차 이월 규정이 어떻게 되나요?"
     }
   ]
 }
 ```
 
-**?�드 ?�명:**
-
-| ?�드 | ?�??| ?�수 | ?�명 |
+| 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| `session_id` | string | ??| ?�션 ?�별??(?�??컨텍?�트 ?��??? |
-| `user_id` | string | ??| ?�용??ID |
-| `user_role` | string | ??| ??��: `EMPLOYEE`, `ADMIN`, `INCIDENT_MANAGER` |
-| `domain` | string | ??| ?�메???�트: `POLICY`, `EDU`, `INCIDENT` |
-| `department` | string | ??| 부?�명 |
-| `channel` | string | ??| 채널: `WEB`, `MOBILE`, `SLACK` |
-| `messages` | array | ??| 메시지 배열 (최소 1�? |
-| `messages[].role` | string | ??| `user` ?�는 `assistant` |
-| `messages[].content` | string | ??| 메시지 ?�용 |
+| `session_id` | string | O | 세션 식별자 |
+| `user_id` | string | O | 사용자 ID |
+| `user_role` | string | O | `EMPLOYEE`, `ADMIN`, `INCIDENT_MANAGER` |
+| `domain` | string | O | `POLICY`, `EDU`, `INCIDENT` |
+| `department` | string | X | 부서명 |
+| `channel` | string | X | `WEB`, `MOBILE`, `SLACK` |
+| `messages` | array | O | 메시지 배열 |
 
-### 4.3 ?�답 ?�펙
-
-**Response Body:**
+### 3.2 응답
 
 ```json
 {
-  "answer": "?�차?��????�음 ??말일까�? 최�? 10?�까지 ?�월?????�습?�다.\n\n[참고 근거]\n- ?�차?��? 관�?규정 ??0�?(?�차 ?�월) ????,
+  "answer": "연차휴가는 다음 해 말일까지 최대 10일까지 이월할 수 있습니다.\n\n[참고 근거]\n- 연차휴가 관리 규정 제10조(연차 이월) 참조",
   "sources": [
     {
       "doc_id": "doc-001",
-      "title": "?�차?��? 관�?규정",
+      "title": "연차휴가 관리 규정",
       "page": 5,
       "score": 0.92,
-      "snippet": "?�차???�음 ??말일까�? 최�? 10?�까지 ?�월?????�다...",
-      "article_label": "??0�?(?�차 ?�월) ????,
-      "article_path": "????> ??0�?> ????
+      "snippet": "연차는 다음 해 말일까지 최대 10일까지 이월할 수 있다...",
+      "article_label": "제10조(연차 이월) 참조"
     }
   ],
   "meta": {
     "user_role": "EMPLOYEE",
-    "used_model": "internal-llm",
     "route": "RAG_INTERNAL",
     "intent": "POLICY_QA",
-    "domain": "POLICY",
-    "masked": false,
-    "has_pii_input": false,
-    "has_pii_output": false,
     "rag_used": true,
-    "rag_source_count": 1,
-    "latency_ms": 1250,
-    "rag_latency_ms": 350,
-    "llm_latency_ms": 850,
-    "rag_gap_candidate": false
+    "latency_ms": 1250
   }
 }
 ```
 
-**?�답 ?�드 ?�명:**
-
-| ?�드 | ?�??| ?�명 |
-|------|------|------|
-| `answer` | string | AI ?�성 ?��? |
-| `sources` | array | RAG 검??결과 (근거 문서) |
-| `sources[].doc_id` | string | 문서 ID |
-| `sources[].title` | string | 문서 ?�목 |
-| `sources[].score` | float | 관?�도 ?�수 (0~1) |
-| `sources[].snippet` | string | 발췌 ?�용 |
-| `sources[].article_label` | string | 조항 ?�벨 (?? ??0�????? |
-| `meta.route` | string | 처리 경로 |
-| `meta.intent` | string | 분류???�도 |
-| `meta.rag_used` | boolean | RAG ?�용 ?��? |
-| `meta.latency_ms` | int | ?�체 처리 ?�간 (ms) |
-| `meta.rag_gap_candidate` | boolean | RAG Gap ?�보 ?��? |
-
-### 4.4 ??���?처리 차이
-
-| ??�� | ?�명 | ?�징 |
-|------|------|------|
-| `EMPLOYEE` | ?�반 직원 | ?�규 질의, 교육 ?�황 조회, ?�고 ?�고 |
-| `ADMIN` | 관리자 | 부???�계 조회, ?�체 ?�황 ?�악 |
-| `INCIDENT_MANAGER` | ?�고 ?�당??| ?�고 ?�황 조회, ?�세 분석 |
-
-### 4.5 Intent(?�도) 종류
-
-| Intent | ?�명 | Route |
-|--------|------|-------|
-| `POLICY_QA` | ?�규/?�책 질문 | RAG_INTERNAL |
-| `EDUCATION_QA` | 교육 ?�용 질문 | RAG_INTERNAL |
-| `EDU_STATUS` | 교육 ?�황 조회 | BACKEND_API |
-| `INCIDENT_REPORT` | ?�고 ?�고 | BACKEND_API |
-| `INCIDENT_QA` | ?�고 관??질문 | MIXED_BACKEND_RAG |
-| `GENERAL_CHAT` | ?�반 ?�??| LLM_ONLY |
-
-### 4.6 Java/Spring ?�동 ?�시
+### 3.3 Java/Spring 연동 예시
 
 ```java
 @Service
@@ -278,241 +322,72 @@ public class AiGatewayClient {
             .bodyToMono(ChatResponse.class);
     }
 }
-
-// DTO
-@Data
-public class ChatRequest {
-    private String sessionId;
-    private String userId;
-    private String userRole;
-    private String domain;
-    private String department;
-    private List<Message> messages;
-
-    @Data
-    public static class Message {
-        private String role;
-        private String content;
-    }
-}
-
-@Data
-public class ChatResponse {
-    private String answer;
-    private List<Source> sources;
-    private Meta meta;
-
-    @Data
-    public static class Source {
-        private String docId;
-        private String title;
-        private Integer page;
-        private Double score;
-        private String snippet;
-        private String articleLabel;
-        private String articlePath;
-    }
-
-    @Data
-    public static class Meta {
-        private String userRole;
-        private String route;
-        private String intent;
-        private String domain;
-        private Boolean ragUsed;
-        private Integer ragSourceCount;
-        private Integer latencyMs;
-        private Boolean ragGapCandidate;
-    }
-}
 ```
 
-### 4.7 curl ?�스???�시
+### 3.4 curl 테스트
 
 ```bash
-# 기본 채팅 ?�청
 curl -X POST http://localhost:8000/ai/chat/messages \
   -H "Content-Type: application/json" \
   -d '{
-    "session_id": "test-session-001",
+    "session_id": "test-001",
     "user_id": "emp-001",
     "user_role": "EMPLOYEE",
     "domain": "POLICY",
-    "messages": [
-      {"role": "user", "content": "?�차 ?�월 규정???�떻�??�나??"}
-    ]
-  }'
-
-# 교육 ?�황 조회 (EMPLOYEE)
-curl -X POST http://localhost:8000/ai/chat/messages \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "test-session-002",
-    "user_id": "emp-001",
-    "user_role": "EMPLOYEE",
-    "messages": [
-      {"role": "user", "content": "??교육 ?�수 ?�황 ?�려�?}
-    ]
-  }'
-
-# 관리자 부???�계 조회
-curl -X POST http://localhost:8000/ai/chat/messages \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "test-session-003",
-    "user_id": "admin-001",
-    "user_role": "ADMIN",
-    "department": "개발?�",
-    "messages": [
-      {"role": "user", "content": "?�리 부??교육 ?�수???�려�?}
-    ]
+    "messages": [{"role": "user", "content": "연차 이월 규정이 어떻게 되나요?"}]
   }'
 ```
 
 ---
 
-## 5. RAG Gap ?�안 API ?�동 가?�드
+## 4. 에러 처리
 
-### 5.1 ?�도
+### 4.1 HTTP 상태 코드
 
-- 관리자 ?�?�보?�에??"RAG Gap 질문"???�집????
-- AI Gateway??보내�?"?�떤 ?�규/교육??보완?�면 좋을지" ?�안
+| 코드 | 설명 |
+|------|------|
+| 200 | 성공 |
+| 400 | 잘못된 요청 |
+| 422 | 유효성 검증 실패 |
+| 500 | 서버 내부 오류 |
+| 503 | 서비스 불가 |
 
-### 5.2 ?�청 ?�펙
-
-**?�드?�인??** `POST /ai/gap/policy-edu/suggestions`
-
-**Request Body:**
-
-```json
-{
-  "timeRange": {
-    "from": "2025-12-01T00:00:00",
-    "to": "2025-12-10T23:59:59"
-  },
-  "domain": "POLICY",
-  "questions": [
-    {
-      "questionId": "log-123",
-      "text": "?�택근무????VPN ???�면 ?�떻�??�나??",
-      "userRole": "EMPLOYEE",
-      "intent": "POLICY_QA",
-      "domain": "POLICY",
-      "askedCount": 5
-    },
-    {
-      "questionId": "log-456",
-      "text": "개인 ?��??�으�??�사 메일 보면 보안 ?�반?��???",
-      "userRole": "EMPLOYEE",
-      "intent": "POLICY_QA",
-      "domain": "POLICY",
-      "askedCount": 3
-    }
-  ]
-}
-```
-
-### 5.3 ?�답 ?�펙
+### 4.2 Fallback 응답
 
 ```json
 {
-  "summary": "?�택근무 ??보안 규정�?BYOD ?�책???�??문서가 부족합?�다.",
-  "suggestions": [
-    {
-      "id": "SUG-001",
-      "title": "?�택근무 ???�보보호 ?�칙 ?�세 ?�시 추�?",
-      "description": "VPN ?�용 ?�무, 공용 Wi-Fi 금�?, ?�면 ?�금 기�? ?�을 ?�함??조문???�설?�는 것이 좋습?�다.",
-      "relatedQuestionIds": ["log-123"],
-      "priority": "HIGH"
-    },
-    {
-      "id": "SUG-002",
-      "title": "개인 ?��????�트�??�용 가?�드 조항 ?�설",
-      "description": "BYOD(Bring Your Own Device) ?�책??명확???�고, ?�떤 경우가 ?�반?��? ?�시�?추�??�야 ?�니??",
-      "relatedQuestionIds": ["log-456"],
-      "priority": "MEDIUM"
-    }
-  ]
-}
-```
-
----
-
-## 6. ?�러 처리
-
-### 6.1 HTTP ?�태 코드
-
-| 코드 | ?�명 | ?�??|
-|------|------|------|
-| 200 | ?�공 | ?�상 처리 |
-| 400 | ?�못???�청 | ?�청 ?�이???�인 |
-| 422 | ?�효??검???�패 | ?�수 ?�드 ?�락 ?�인 |
-| 500 | ?�버 ?��? ?�류 | ?�시???�는 fallback |
-| 503 | ?�비??불�? | LLM/RAG ?�버 ?�태 ?�인 |
-
-### 6.2 ?�러 ?�답 ?�시
-
-```json
-{
-  "detail": "Validation error: messages field is required"
-}
-```
-
-### 6.3 Fallback ?�답
-
-LLM/RAG ?�애 ?�에???�답?� 반환?�니??
-
-```json
-{
-  "answer": "죄송?�니?? ?�재 AI ?�비?�에 ?�시?�인 문제가 발생?�습?�다. ?�시 ???�시 ?�도??주세??",
+  "answer": "죄송합니다. 현재 AI 서비스에 일시적인 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
   "sources": [],
   "meta": {
     "route": "ERROR",
-    "error_type": "UPSTREAM_TIMEOUT",
-    "error_message": "LLM service timeout"
+    "error_type": "UPSTREAM_TIMEOUT"
   }
 }
 ```
 
 ---
 
-## 7. ?�동 체크리스??
+## 5. 체크리스트
 
-### 7.1 기본 ?�동
+### Milvus 직접 연동 시
 
-- [ ] AI Gateway ?�버 URL ?�정
-- [ ] `/health` ?�드?�인?�로 ?�결 ?�인
-- [ ] `/ai/chat/messages` 기본 ?�출 ?�스??
-- [ ] ?�답 ?�싱 �??�면 ?�시
+- [ ] Milvus 연결 확인 (`58.127.241.84:19540`)
+- [ ] 임베딩 서버 연결 확인 (`58.127.241.84:1234`)
+- [ ] `jhgan/ko-sroberta-multitask` 모델 사용
+- [ ] 768차원 벡터 확인
+- [ ] `collection.load()` 호출
+- [ ] dataset_id는 한글 사용 (예: `사내규정`)
 
-### 7.2 ?�용???�보 ?�동
+### AI Gateway 연동 시
 
-- [ ] `session_id` ?�성 �?관�?
-- [ ] `user_id` ?�달
-- [ ] `user_role` 매핑 (EMPLOYEE/ADMIN/INCIDENT_MANAGER)
-- [ ] `department` ?�달 (?�택)
-
-### 7.3 ?�??컨텍?�트
-
-- [ ] ?�전 ?�???�역 `messages` 배열�??�달
-- [ ] 멀?�턴 ?�???�스??
-
-### 7.4 ?�러 처리
-
-- [ ] HTTP ?�러 ?�들�?
-- [ ] Fallback ?�답 처리
-- [ ] ?�?�아???�정 (권장: 30�?
-
-### 7.5 로깅/모니?�링
-
-- [ ] AI 로그 ?�신 API 구현 (?�택)
-- [ ] `meta.rag_gap_candidate=true` 질문 ?�집
+- [ ] `/health` 엔드포인트로 연결 확인
+- [ ] `session_id`, `user_id`, `user_role` 필수 전달
+- [ ] 타임아웃 설정 (권장: 30초)
+- [ ] Fallback 응답 처리
 
 ---
 
 ## 문의
-
-AI Gateway 관??문의?�항?� AI ?�???�락?�주?�요.
 
 - GitHub: https://github.com/skRookies4team/ctrlf-ai
 - Swagger: http://[AI_GATEWAY_HOST]:8000/docs
