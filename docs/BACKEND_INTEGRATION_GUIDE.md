@@ -11,10 +11,10 @@
 
 | 서비스 | URL | 용도 |
 |--------|-----|------|
-| **Milvus** | `58.127.241.84:19540` | 벡터 DB (RAG 검색) |
-| **Embedding Server** | `http://58.127.241.84:1234/v1/embeddings` | 임베딩 생성 |
-| **LLM Server** | `http://58.127.241.84:1237/v1` | LLM 응답 생성 |
-| **RAGFlow** | `http://58.127.241.84:9380` | RAG 검색 (대안) |
+| **Milvus** | `your-milvus-host:19540` | 벡터 DB (RAG 검색) |
+| **Embedding Server** | `http://your-embedding-server:port/v1/embeddings` | 임베딩 생성 |
+| **LLM Server** | `http://your-llm-server:port/v1` | LLM 응답 생성 |
+| **RAGFlow** | `http://your-ragflow-host:9380` | RAG 검색 (대안) |
 | **AI Gateway** | `http://localhost:8000` | 통합 API |
 
 ### Milvus 핵심 정보
@@ -68,7 +68,7 @@ Metric: COSINE
 ### 1.2 임베딩 생성 API
 
 ```bash
-curl -X POST http://58.127.241.84:1234/v1/embeddings \
+curl -X POST http://your-embedding-server:port/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{
     "input": "연차휴가 규정이 어떻게 되나요?",
@@ -98,14 +98,14 @@ import httpx
 # 1. 임베딩 생성
 def get_embedding(text: str) -> list[float]:
     response = httpx.post(
-        "http://58.127.241.84:1234/v1/embeddings",
+        "http://your-embedding-server:port/v1/embeddings",
         json={"input": text, "model": "jhgan/ko-sroberta-multitask"},
         timeout=10.0
     )
     return response.json()["data"][0]["embedding"]
 
 # 2. Milvus 연결
-connections.connect(host="58.127.241.84", port=19540)
+connections.connect(host="your-milvus-host", port=19540)
 collection = Collection("ragflow_chunks_sroberta")
 collection.load()
 
@@ -137,7 +137,7 @@ import io.milvus.param.dml.*;
 // 1. 연결
 MilvusServiceClient client = new MilvusServiceClient(
     ConnectParam.newBuilder()
-        .withHost("58.127.241.84")
+        .withHost("your-milvus-host")
         .withPort(19540)
         .build()
 );
@@ -232,9 +232,9 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 **.env 설정:**
 ```env
-LLM_BASE_URL=http://58.127.241.84:1237/v1
-RAGFLOW_BASE_URL=http://58.127.241.84:9380
-MILVUS_HOST=58.127.241.84
+LLM_BASE_URL=http://your-llm-server:port/v1
+RAGFLOW_BASE_URL=http://your-ragflow-host:9380
+MILVUS_HOST=your-milvus-host
 MILVUS_PORT=19540
 MILVUS_COLLECTION_NAME=ragflow_chunks_sroberta
 ```
@@ -371,8 +371,8 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 
 ### Milvus 직접 연동 시
 
-- [ ] Milvus 연결 확인 (`58.127.241.84:19540`)
-- [ ] 임베딩 서버 연결 확인 (`58.127.241.84:1234`)
+- [ ] Milvus 연결 확인 (`your-milvus-host:19540`)
+- [ ] 임베딩 서버 연결 확인 (`your-embedding-server:port`)
 - [ ] `jhgan/ko-sroberta-multitask` 모델 사용
 - [ ] 768차원 벡터 확인
 - [ ] `collection.load()` 호출

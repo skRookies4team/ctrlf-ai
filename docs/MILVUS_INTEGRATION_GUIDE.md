@@ -9,7 +9,7 @@
 
 | 항목 | 값 |
 |------|-----|
-| **Host** | `58.127.241.84` |
+| **Host** | `your-milvus-host` |
 | **Port** | `19540` |
 | **Collection** | `ragflow_chunks_sroberta` |
 | **Embedding Model** | `jhgan/ko-sroberta-multitask` |
@@ -56,14 +56,14 @@
 ### vLLM 임베딩 서버
 
 ```
-URL: http://58.127.241.84:1234/v1/embeddings
+URL: http://your-embedding-server:port/v1/embeddings
 Model: jhgan/ko-sroberta-multitask
 ```
 
 ### API 호출 예시
 
 ```bash
-curl -X POST http://58.127.241.84:1234/v1/embeddings \
+curl -X POST http://your-embedding-server:port/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{
     "input": "연차휴가 규정이 어떻게 되나요?",
@@ -102,7 +102,7 @@ import httpx
 # 1. 임베딩 생성
 def get_embedding(text: str) -> list[float]:
     response = httpx.post(
-        "http://58.127.241.84:1234/v1/embeddings",
+        "http://your-embedding-server:port/v1/embeddings",
         json={
             "input": text,
             "model": "jhgan/ko-sroberta-multitask"
@@ -112,7 +112,7 @@ def get_embedding(text: str) -> list[float]:
     return response.json()["data"][0]["embedding"]
 
 # 2. Milvus 연결
-connections.connect(host="58.127.241.84", port=19540)
+connections.connect(host="your-milvus-host", port=19540)
 
 # 3. 컬렉션 로드
 collection = Collection("ragflow_chunks_sroberta")
@@ -154,7 +154,7 @@ import io.milvus.response.*;
 // 1. 연결
 MilvusServiceClient client = new MilvusServiceClient(
     ConnectParam.newBuilder()
-        .withHost("58.127.241.84")
+        .withHost("your-milvus-host")
         .withPort(19540)
         .build()
 );
@@ -239,7 +239,7 @@ full_text = "\n\n".join([c["text"] for c in sorted_chunks])
 ```python
 from pymilvus import connections, utility
 
-connections.connect(host="58.127.241.84", port=19540)
+connections.connect(host="your-milvus-host", port=19540)
 
 # 컬렉션 존재 확인
 has_collection = utility.has_collection("ragflow_chunks_sroberta")
