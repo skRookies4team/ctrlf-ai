@@ -55,8 +55,8 @@ def mock_settings():
     settings.ragflow_base_url = "http://ragflow-test:8080"
     settings.RAGFLOW_API_KEY = "test-api-key"
     settings.ragflow_dataset_to_kb_mapping = {
-        "policy": "kb_policy_001",
-        "training": "kb_training_001",
+        "policy": "사내규정",
+        "education": "정보보안교육",
     }
     settings.RAGFLOW_KB_ID_POLICY = None
     settings.RAGFLOW_KB_ID_TRAINING = None
@@ -127,7 +127,7 @@ class TestRagflowSearchClient:
         assert "/v1/chunk/search" in call_args[0][0]
         payload = call_args[1]["json"]
         assert payload["query"] == "연차휴가 이월 규정"
-        assert payload["dataset"] == "kb_policy_001"  # 매핑된 kb_id
+        assert payload["dataset"] == "사내규정"  # 매핑된 dataset_id
         assert payload["top_k"] == 5
 
     # =========================================================================
@@ -304,10 +304,10 @@ class TestRagflowSearchClient:
         # Assert
         assert results == expected_results
 
-        # 요청의 dataset이 kb_id로 매핑되었는지 확인
+        # 요청의 dataset이 dataset_id로 매핑되었는지 확인
         call_args = mock_http_client.post.call_args
         payload = call_args[1]["json"]
-        assert payload["dataset"] == "kb_policy_001"
+        assert payload["dataset"] == "사내규정"
 
     # =========================================================================
     # 테스트: 인증 헤더 포함

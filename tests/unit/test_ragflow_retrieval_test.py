@@ -41,8 +41,7 @@ def mock_dataset_mapping():
     """
     original = os.environ.get("RAGFLOW_DATASET_MAPPING")
     os.environ["RAGFLOW_DATASET_MAPPING"] = (
-        "policy:kb_policy_001,training:kb_training_001,"
-        "incident:kb_incident_001,education:kb_education_001"
+        "POLICY:사내규정,EDUCATION:정보보안교육"
     )
     clear_settings_cache()
 
@@ -143,18 +142,17 @@ async def test_retrieval_test_request_payload_mapping() -> None:
     payload = captured_request["payload"]
     assert payload["question"] == "연차휴가 이월 규정이 어떻게 되나요?"
     assert payload["size"] == 5
-    assert payload["kb_id"] == "kb_policy_001"
+    assert payload["kb_id"] == "사내규정"
     assert payload["page"] == 1
 
 
 @pytest.mark.anyio
 async def test_retrieval_test_different_datasets() -> None:
     """
-    테스트 2: 다양한 dataset → kb_id 매핑 검증
+    테스트 2: 다양한 dataset → dataset_id 매핑 검증
 
-    POLICY → kb_policy_001
-    INCIDENT → kb_incident_001
-    EDUCATION → kb_education_001
+    POLICY → 사내규정
+    EDUCATION → 정보보안교육
     """
     captured_payloads = []
 
@@ -175,19 +173,15 @@ async def test_retrieval_test_different_datasets() -> None:
 
         # Test POLICY
         await ragflow.search(query="test", dataset="POLICY")
-        assert captured_payloads[-1]["kb_id"] == "kb_policy_001"
-
-        # Test INCIDENT
-        await ragflow.search(query="test", dataset="INCIDENT")
-        assert captured_payloads[-1]["kb_id"] == "kb_incident_001"
+        assert captured_payloads[-1]["kb_id"] == "사내규정"
 
         # Test EDUCATION
         await ragflow.search(query="test", dataset="EDUCATION")
-        assert captured_payloads[-1]["kb_id"] == "kb_education_001"
+        assert captured_payloads[-1]["kb_id"] == "정보보안교육"
 
         # Test lowercase (should be converted to uppercase)
         await ragflow.search(query="test", dataset="policy")
-        assert captured_payloads[-1]["kb_id"] == "kb_policy_001"
+        assert captured_payloads[-1]["kb_id"] == "사내규정"
 
 
 @pytest.mark.anyio
@@ -213,7 +207,7 @@ async def test_retrieval_test_default_dataset() -> None:
 
         await ragflow.search(query="test query", dataset=None)
 
-    assert captured_payload["kb_id"] == "kb_policy_001"
+    assert captured_payload["kb_id"] == "사내규정"
 
 
 @pytest.mark.anyio
@@ -240,7 +234,7 @@ async def test_retrieval_test_unknown_dataset_fallback() -> None:
         await ragflow.search(query="test", dataset="UNKNOWN_DOMAIN")
 
     # Unknown dataset should fall back to POLICY
-    assert captured_payload["kb_id"] == "kb_policy_001"
+    assert captured_payload["kb_id"] == "사내규정"
 
 
 # =============================================================================
@@ -455,21 +449,19 @@ def test_dataset_to_kb_id_helper() -> None:
     ragflow = RagflowClient(base_url="http://test:8080")
 
     # 정상 매핑
-    assert ragflow._dataset_to_kb_id("POLICY") == "kb_policy_001"
-    assert ragflow._dataset_to_kb_id("INCIDENT") == "kb_incident_001"
-    assert ragflow._dataset_to_kb_id("EDUCATION") == "kb_education_001"
+    assert ragflow._dataset_to_kb_id("POLICY") == "사내규정"
+    assert ragflow._dataset_to_kb_id("EDUCATION") == "정보보안교육"
 
     # 소문자 → 대문자 변환
-    assert ragflow._dataset_to_kb_id("policy") == "kb_policy_001"
-    assert ragflow._dataset_to_kb_id("incident") == "kb_incident_001"
-    assert ragflow._dataset_to_kb_id("Policy") == "kb_policy_001"
+    assert ragflow._dataset_to_kb_id("policy") == "사내규정"
+    assert ragflow._dataset_to_kb_id("education") == "정보보안교육"
 
     # None → POLICY 기본값
-    assert ragflow._dataset_to_kb_id(None) == "kb_policy_001"
+    assert ragflow._dataset_to_kb_id(None) == "사내규정"
 
     # 알 수 없는 값 → POLICY fallback
-    assert ragflow._dataset_to_kb_id("UNKNOWN") == "kb_policy_001"
-    assert ragflow._dataset_to_kb_id("") == "kb_policy_001"
+    assert ragflow._dataset_to_kb_id("UNKNOWN") == "사내규정"
+    assert ragflow._dataset_to_kb_id("") == "사내규정"
 
 
 # =============================================================================

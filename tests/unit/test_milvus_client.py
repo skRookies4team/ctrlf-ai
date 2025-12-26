@@ -308,7 +308,7 @@ class TestVectorSearch:
         mock_hit.entity.get = MagicMock(side_effect=lambda k, d="": {
             "text": "테스트 내용",  # ragflow_chunks는 text 필드 사용
             "doc_id": "doc_1",
-            "dataset_id": "kb_policy_001",
+            "dataset_id": "사내규정",
             "chunk_id": 1,
         }.get(k, d))
 

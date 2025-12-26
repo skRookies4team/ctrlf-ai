@@ -294,11 +294,10 @@ from api.apps.chunk_app import retrieval_test_internal
 
 search_bp = Blueprint('search', __name__)
 
-# dataset(도메인) → kb_id 매핑
+# dataset(도메인) → dataset_id 매핑 (실제 Milvus 값)
 DATASET_TO_KB = {
-    "POLICY": "kb_policy_001",
-    "INCIDENT": "kb_incident_001",
-    "EDUCATION": "kb_education_001",
+    "POLICY": "사내규정",
+    "EDUCATION": "정보보안교육",  # 교육 도메인 대표값
 }
 
 @search_bp.route('/search', methods=['POST'])
@@ -388,13 +387,12 @@ async def search(
     return documents
 
 def _dataset_to_kb_id(self, dataset: Optional[str]) -> str:
-    """도메인을 지식베이스 ID로 변환"""
+    """도메인을 dataset_id로 변환 (실제 Milvus 값)"""
     mapping = {
-        "POLICY": "kb_policy_001",
-        "INCIDENT": "kb_incident_001",
-        "EDUCATION": "kb_education_001",
+        "POLICY": "사내규정",
+        "EDUCATION": "정보보안교육",
     }
-    return mapping.get(dataset or "POLICY", "kb_policy_001")
+    return mapping.get(dataset or "POLICY", "사내규정")
 ```
 
 ---
@@ -505,8 +503,8 @@ src/
 
 | 단계 | 테스트 | 명령어/방법 |
 |------|--------|------------|
-| 1 | RAGFlow 헬스체크 | `curl http://ragflow:8080/health` |
-| 2 | RAGFlow 검색 API | `curl -X POST http://ragflow:8080/search -d '{"query":"연차"}'` |
+| 1 | RAGFlow 헬스체크 | `curl http://localhost:9380/health` |
+| 2 | RAGFlow 검색 API | `curl -X POST http://localhost:9380/search -d '{"query":"연차"}'` |
 | 3 | LLM 헬스체크 | `curl http://llm:8001/health` |
 | 4 | 백엔드 AI Log API | `curl -X POST http://backend:9001/api/ai-logs -d '{...}'` |
 | 5 | AI Gateway E2E | `docker compose up -d && pytest -m integration` |
@@ -519,7 +517,7 @@ docker compose up -d
 
 # 2. 헬스체크
 curl http://localhost:8000/health  # AI Gateway
-curl http://localhost:8080/health  # RAGFlow
+curl http://localhost:9380/health  # RAGFlow
 curl http://localhost:8001/health  # LLM
 curl http://localhost:9001/health  # Backend
 
