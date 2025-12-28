@@ -1,6 +1,6 @@
 # 백엔드팀 연동 가이드
 
-> **최종 수정일**: 2025-12-26
+> **최종 수정일**: 2025-12-28
 > **대상**: ctrlf-back (Spring Backend) 개발팀
 
 ---
@@ -11,7 +11,7 @@
 
 | 서비스 | URL | 용도 |
 |--------|-----|------|
-| **Milvus** | `your-milvus-host:19540` | 벡터 DB (RAG 검색) |
+| **Milvus** | `<MILVUS_HOST>:<MILVUS_PORT>` | 벡터 DB (RAG 검색) |
 | **Embedding Server** | `http://your-embedding-server:port/v1/embeddings` | 임베딩 생성 |
 | **LLM Server** | `http://your-llm-server:port/v1` | LLM 응답 생성 |
 | **RAGFlow** | `http://your-ragflow-host:9380` | RAG 검색 (대안) |
@@ -43,17 +43,161 @@ Metric: COSINE
 
 ## 목차
 
-1. [Milvus 직접 연동](#1-milvus-직접-연동)
-2. [AI Gateway API 연동](#2-ai-gateway-api-연동)
-3. [채팅 API 상세](#3-채팅-api-상세)
-4. [에러 처리](#4-에러-처리)
-5. [체크리스트](#5-체크리스트)
+1. [로컬 테스트 환경 구축](#1-로컬-테스트-환경-구축)
+2. [Milvus 직접 연동](#2-milvus-직접-연동)
+3. [AI Gateway API 연동](#3-ai-gateway-api-연동)
+4. [채팅 API 상세](#4-채팅-api-상세)
+5. [에러 처리](#5-에러-처리)
+6. [체크리스트](#6-체크리스트)
 
 ---
 
-## 1. Milvus 직접 연동
+## 1. 로컬 테스트 환경 구축
 
-### 1.1 컬렉션 스키마
+### 1.1 아키텍처 개요
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        로컬 PC                                  │
+│  ┌─────────────────┐      ┌─────────────────┐                  │
+│  │  AI Gateway     │◄────►│  Backend        │                  │
+│  │  (FastAPI)      │      │  (Spring)       │                  │
+│  │  localhost:8000 │      │  localhost:9002 │                  │
+│  └────────┬────────┘      └─────────────────┘                  │
+└───────────┼─────────────────────────────────────────────────────┘
+            │
+            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    외부 GPU 서버                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │ vLLM (LLM)   │  │ Embedding    │  │ Milvus       │          │
+│  │ :<LLM_PORT>  │  │ :<EMB_PORT>  │  │ :<MILVUS_PORT>│         │
+│  └──────────────┘  └──────────────┘  └──────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 서비스별 역할
+
+| 서비스 | 위치 | 포트 | 역할 |
+|--------|------|------|------|
+| **AI Gateway** | 로컬 | 8000 | 채팅/RAG API, LLM 호출 |
+| **Backend** | 로컬 | 9002 | 콜백 수신, 사용자/세션 관리 |
+| **vLLM** | 외부 | .env 참조 | LLM 응답 생성 (Qwen2.5-7B) |
+| **Embedding** | 외부 | .env 참조 | 임베딩 벡터 생성 (ko-sroberta) |
+| **Milvus** | 외부 | .env 참조 | 벡터 검색 |
+| **RAGFlow** | - | - | 불필요 (MILVUS_ENABLED=true) |
+
+### 1.3 AI Gateway 실행 (터미널 1)
+
+```bash
+# 1. ctrlf-ai 폴더로 이동
+cd ctrlf-ai
+
+# 2. 가상환경 생성 & 활성화
+python -m venv venv
+.\venv\Scripts\activate        # Windows
+# source venv/bin/activate     # Linux/Mac
+
+# 3. 의존성 설치
+pip install -r requirements.txt
+
+# 4. .env 확인 (기본 설정 그대로 사용)
+# AI_ENV=real
+# LLM_BASE_URL=http://<GPU_SERVER_IP>:<LLM_PORT>
+# EMBEDDING_BASE_URL=http://<GPU_SERVER_IP>:<EMBEDDING_PORT>
+# MILVUS_HOST=<GPU_SERVER_IP>
+# MILVUS_PORT=<MILVUS_PORT>
+# MILVUS_ENABLED=true
+# BACKEND_BASE_URL=http://localhost:9002
+
+# 5. 서버 실행
+uvicorn app.main:app --reload --port 8000
+```
+
+**확인:**
+```bash
+curl http://localhost:8000/health
+```
+
+### 1.4 Backend 실행 (터미널 2)
+
+```bash
+# 1. ctrlf-back 폴더로 이동
+cd ctrlf-back
+
+# 2. 실행
+./gradlew bootRun
+# 또는
+java -jar build/libs/ctrlf-back-*.jar
+```
+
+> **주의**: Backend는 `9002` 포트로 실행해야 AI Gateway의 `BACKEND_BASE_URL`과 일치합니다.
+
+### 1.5 테스트
+
+**채팅 API:**
+```bash
+curl -X POST http://localhost:8000/ai/chat/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "test-001",
+    "user_id": "emp-001",
+    "user_role": "EMPLOYEE",
+    "domain": "POLICY",
+    "messages": [{"role": "user", "content": "연차휴가 규정 알려줘"}]
+  }'
+```
+
+**CLI 테스트:**
+```bash
+python chat_cli.py
+```
+
+**Swagger UI:**
+```
+http://localhost:8000/docs
+```
+
+### 1.6 기능별 필요 서비스
+
+| 기능 | AI Gateway | Backend | LLM | Milvus | Embedding |
+|------|:----------:|:-------:|:---:|:------:|:---------:|
+| 채팅 (RAG) | O | - | O | O | O |
+| 채팅 로깅/콜백 | O | O | O | O | O |
+| SourceSet/영상 생성 | O | O | O | O | O |
+| FAQ/퀴즈 생성 | O | - | O | O | O |
+
+### 1.7 트러블슈팅
+
+**외부 서버 연결 안 될 때:**
+```bash
+# LLM 서버 확인
+curl http://<GPU_SERVER_IP>:<LLM_PORT>/health
+
+# Embedding 서버 확인
+curl http://<GPU_SERVER_IP>:<EMBEDDING_PORT>/health
+
+# Milvus 확인
+curl http://<GPU_SERVER_IP>:<MILVUS_PORT>/health
+```
+
+**Backend 콜백 에러:**
+```
+ERROR | Failed to send callback: Name or service not known
+```
+→ Backend가 `localhost:9002`에서 실행 중인지 확인
+
+**Docker로 AI Gateway 띄울 때:**
+```env
+# .env에서 localhost 대신 host.docker.internal 사용
+BACKEND_BASE_URL=http://host.docker.internal:9002
+```
+
+---
+
+## 2. Milvus 직접 연동
+
+### 2.1 컬렉션 스키마
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
@@ -65,7 +209,7 @@ Metric: COSINE
 | `text` | VARCHAR | 청크 텍스트 내용 |
 | `embedding` | FLOAT_VECTOR(768) | 임베딩 벡터 |
 
-### 1.2 임베딩 생성 API
+### 2.2 임베딩 생성 API
 
 ```bash
 curl -X POST http://your-embedding-server:port/v1/embeddings \
@@ -89,7 +233,7 @@ curl -X POST http://your-embedding-server:port/v1/embeddings \
 }
 ```
 
-### 1.3 Python 검색 예시
+### 2.3 Python 검색 예시
 
 ```python
 from pymilvus import connections, Collection
@@ -127,7 +271,7 @@ for hits in results:
         print(f"Text: {hit.entity.get('text')[:200]}...")
 ```
 
-### 1.4 Java 검색 예시
+### 2.4 Java 검색 예시
 
 ```java
 import io.milvus.client.*;
@@ -166,7 +310,7 @@ SearchParam searchParam = SearchParam.newBuilder()
 R<SearchResults> response = client.search(searchParam);
 ```
 
-### 1.5 특정 Dataset 필터링
+### 2.5 특정 Dataset 필터링
 
 ```python
 # 사내규정만 검색
@@ -192,9 +336,9 @@ results = collection.search(
 
 ---
 
-## 2. AI Gateway API 연동
+## 3. AI Gateway API 연동
 
-### 2.1 아키텍처
+### 3.1 아키텍처
 
 ```
 ┌─────────────┐     ┌─────────────────┐     ┌─────────────┐
@@ -209,7 +353,7 @@ results = collection.search(
                     └─────────────────┘
 ```
 
-### 2.2 API 엔드포인트
+### 3.2 API 엔드포인트
 
 | 엔드포인트 | 메서드 | 설명 |
 |-----------|--------|------|
@@ -219,7 +363,7 @@ results = collection.search(
 | `/ai/rag/process` | POST | RAG 문서 처리 |
 | `/ai/gap/policy-edu/suggestions` | POST | RAG Gap 보완 제안 |
 
-### 2.3 환경 설정
+### 3.3 환경 설정
 
 ```bash
 # 서버 실행
@@ -241,9 +385,9 @@ MILVUS_COLLECTION_NAME=ragflow_chunks_sroberta
 
 ---
 
-## 3. 채팅 API 상세
+## 4. 채팅 API 상세
 
-### 3.1 요청
+### 4.1 요청
 
 **POST** `/ai/chat/messages`
 
@@ -274,7 +418,7 @@ MILVUS_COLLECTION_NAME=ragflow_chunks_sroberta
 | `channel` | string | X | `WEB`, `MOBILE`, `SLACK` |
 | `messages` | array | O | 메시지 배열 |
 
-### 3.2 응답
+### 4.2 응답
 
 ```json
 {
@@ -299,7 +443,7 @@ MILVUS_COLLECTION_NAME=ragflow_chunks_sroberta
 }
 ```
 
-### 3.3 Java/Spring 연동 예시
+### 4.3 Java/Spring 연동 예시
 
 ```java
 @Service
@@ -324,7 +468,7 @@ public class AiGatewayClient {
 }
 ```
 
-### 3.4 curl 테스트
+### 4.4 curl 테스트
 
 ```bash
 curl -X POST http://localhost:8000/ai/chat/messages \
@@ -340,9 +484,9 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 
 ---
 
-## 4. 에러 처리
+## 5. 에러 처리
 
-### 4.1 HTTP 상태 코드
+### 5.1 HTTP 상태 코드
 
 | 코드 | 설명 |
 |------|------|
@@ -352,7 +496,7 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 | 500 | 서버 내부 오류 |
 | 503 | 서비스 불가 |
 
-### 4.2 Fallback 응답
+### 5.2 Fallback 응답
 
 ```json
 {
@@ -367,11 +511,11 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 
 ---
 
-## 5. 체크리스트
+## 6. 체크리스트
 
 ### Milvus 직접 연동 시
 
-- [ ] Milvus 연결 확인 (`your-milvus-host:19540`)
+- [ ] Milvus 연결 확인 (`<MILVUS_HOST>:<MILVUS_PORT>`)
 - [ ] 임베딩 서버 연결 확인 (`your-embedding-server:port`)
 - [ ] `jhgan/ko-sroberta-multitask` 모델 사용
 - [ ] 768차원 벡터 확인
