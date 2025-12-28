@@ -119,19 +119,59 @@ uvicorn app.main:app --reload --port 8000
 curl http://localhost:8000/health
 ```
 
-### 1.4 Backend 실행 (터미널 2)
+### 1.4 Backend 실행 (터미널 2~6)
 
-```bash
-# 1. ctrlf-back 폴더로 이동
+백엔드는 여러 마이크로서비스로 구성됨. 필요한 서비스만 실행.
+
+#### 백엔드 서비스 목록
+
+| 서비스 | 포트 | 용도 | AI 연동 |
+|--------|------|------|---------|
+| `api-gateway` | 9000 | API 게이트웨이 | - |
+| `chat-service` | 9002 | 채팅 콜백 수신 | ✅ 채팅 |
+| `education-service` | - | 교육/영상 관리 | ✅ 스크립트/영상 |
+| `infra-service` | 9003 | S3 presigned URL | ✅ 파일 업로드 |
+| `quiz-service` | - | 퀴즈 관리 | ✅ 퀴즈 |
+
+#### Windows (PowerShell)
+
+```powershell
 cd ctrlf-back
 
-# 2. 실행
-./gradlew bootRun
-# 또는
-java -jar build/libs/ctrlf-back-*.jar
+# AWS 프로파일 설정 (S3 연동 필요 시)
+$env:AWS_PROFILE = "sk_4th_team04"
+
+# 각 서비스 별도 터미널에서 실행
+./gradlew :chat-service:bootRun
+./gradlew :education-service:bootRun --no-configuration-cache
+./gradlew :infra-service:bootRun --no-configuration-cache
+./gradlew :quiz-service:bootRun
+./gradlew :api-gateway:bootRun
 ```
 
-> **주의**: Backend는 `9002` 포트로 실행해야 AI Gateway의 `BACKEND_BASE_URL`과 일치합니다.
+#### Mac/Linux
+
+```bash
+cd ctrlf-back
+
+# 각 서비스 별도 터미널에서 실행
+AWS_PROFILE=sk_4th_team04 ./gradlew :chat-service:bootRun
+AWS_PROFILE=sk_4th_team04 ./gradlew :education-service:bootRun --no-configuration-cache
+AWS_PROFILE=sk_4th_team04 ./gradlew :infra-service:bootRun --no-configuration-cache
+AWS_PROFILE=sk_4th_team04 ./gradlew :quiz-service:bootRun
+AWS_PROFILE=sk_4th_team04 ./gradlew :api-gateway:bootRun
+```
+
+#### 기능별 필요한 백엔드 서비스
+
+| 테스트 기능 | 필요한 백엔드 서비스 |
+|------------|---------------------|
+| 채팅만 테스트 | `chat-service` |
+| 스크립트/영상 생성 | `education-service`, `infra-service` |
+| 퀴즈 생성 | `quiz-service` |
+| 전체 테스트 | 모두 실행 |
+
+> **주의**: `chat-service`는 `9002` 포트로 실행되어야 AI Gateway의 `BACKEND_BASE_URL`과 일치합니다.
 
 ### 1.5 테스트
 
@@ -158,16 +198,122 @@ python chat_cli.py
 http://localhost:8000/docs
 ```
 
-### 1.6 기능별 필요 서비스
+### 1.6 스크립트/영상 생성 테스트
 
-| 기능 | AI Gateway | Backend | LLM | Milvus | Embedding |
-|------|:----------:|:-------:|:---:|:------:|:---------:|
-| 채팅 (RAG) | O | - | O | O | O |
-| 채팅 로깅/콜백 | O | O | O | O | O |
-| SourceSet/영상 생성 | O | O | O | O | O |
-| FAQ/퀴즈 생성 | O | - | O | O | O |
+#### 전체 흐름 (Backend → AI)
 
-### 1.7 트러블슈팅
+```
+Backend                         AI Gateway
+   │                                │
+   │  POST /internal/ai/source-sets/{id}/start
+   │ ─────────────────────────────► │
+   │                                │ (문서 처리 + 스크립트 생성)
+   │  ◄───────── 콜백 ───────────── │
+   │                                │
+   │  POST /internal/ai/render-jobs │
+   │ ─────────────────────────────► │
+   │                                │ (TTS + 영상 렌더링)
+   │  ◄───────── 콜백 ───────────── │
+```
+
+#### 스크립트 생성 API 테스트 (curl)
+
+```bash
+# SourceSet 처리 시작 (스크립트 자동 생성)
+curl -X POST http://localhost:8000/internal/ai/source-sets/test-source-set-001/start \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: your-token" \
+  -d '{
+    "video_id": "video-001",
+    "education_id": "edu-001"
+  }'
+```
+
+**응답 (202 Accepted):**
+```json
+{
+  "source_set_id": "test-source-set-001",
+  "status": "PROCESSING",
+  "message": "Processing started"
+}
+```
+
+#### 렌더 잡 API 테스트 (curl)
+
+```bash
+# 렌더 잡 시작 (영상 생성)
+curl -X POST http://localhost:8000/internal/ai/render-jobs \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: your-token" \
+  -d '{
+    "job_id": "render-job-001",
+    "video_id": "video-001",
+    "script_id": "script-001"
+  }'
+```
+
+**응답 (202 Accepted):**
+```json
+{
+  "job_id": "render-job-001",
+  "status": "PROCESSING"
+}
+```
+
+#### 테스트 스크립트 사용 (script.json → 영상)
+
+```bash
+cd ctrlf-ai/scripts
+
+# script.json 파일로 영상 생성 테스트
+python test_script_video.py
+```
+
+**결과:** `test_output_script/` 폴더에 영상 생성
+- `video.mp4` - 렌더링된 영상
+- `audio.mp3` - TTS 오디오
+- `subtitle.srt` - 자막
+
+#### 필요한 환경변수 (.env)
+
+```env
+# TTS 설정 (gtts = 무료, polly = AWS 유료)
+TTS_PROVIDER=gtts
+
+# 영상 스타일 (basic = 텍스트만, animated = 이미지+효과)
+VIDEO_VISUAL_STYLE=basic
+
+# 렌더링 출력 디렉토리
+RENDER_OUTPUT_DIR=./video_output
+```
+
+#### FFmpeg 설치 (영상 렌더링 필수)
+
+```bash
+# Windows
+winget install FFmpeg
+
+# Mac
+brew install ffmpeg
+
+# Linux
+sudo apt install ffmpeg
+
+# 설치 확인
+ffmpeg -version
+```
+
+### 1.7 기능별 필요 서비스
+
+| 기능 | AI Gateway | Backend | LLM | Milvus | Embedding | FFmpeg |
+|------|:----------:|:-------:|:---:|:------:|:---------:|:------:|
+| 채팅 (RAG) | O | - | O | O | O | - |
+| 채팅 로깅/콜백 | O | chat-service | O | O | O | - |
+| 스크립트 생성 | O | education-service | O | O | O | - |
+| 영상 렌더링 | O | education-service, infra-service | - | - | - | **O** |
+| FAQ/퀴즈 생성 | O | quiz-service | O | O | O | - |
+
+### 1.8 트러블슈팅
 
 **외부 서버 연결 안 될 때:**
 ```bash
@@ -192,6 +338,17 @@ ERROR | Failed to send callback: Name or service not known
 # .env에서 localhost 대신 host.docker.internal 사용
 BACKEND_BASE_URL=http://host.docker.internal:9002
 ```
+
+**FFmpeg 없음 에러:**
+```
+[ERROR] FFmpeg not found
+```
+→ FFmpeg 설치 필요: `winget install FFmpeg` (Windows) / `brew install ffmpeg` (Mac)
+
+**영상 렌더링 실패:**
+1. FFmpeg 설치 확인: `ffmpeg -version`
+2. 출력 디렉토리 권한 확인
+3. 디스크 공간 확인
 
 ---
 
