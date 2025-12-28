@@ -180,12 +180,12 @@ class AnswerTemplates:
 
     # Phase 47: 도메인별 담당 부서 안내 (정규화된 구조)
     # - 시스템 도메인(POLICY, EDUCATION, INCIDENT, GENERAL)
-    # - 교육 주제 카테고리(PIP, SHP, BHP, DEP, JOB 등)는 별도 매핑
+    # - 교육 주제 카테고리(PIP, SHP, BHP, DEP, JOB 등)는 TOPIC_CONTACT_INFO에 별도 정의
+    # - Phase 47.1: 정규화된 키만 유지 (EDU는 normalize_domain_key()에서 EDUCATION으로 매핑)
     DOMAIN_CONTACT_INFO = {
-        # 시스템 도메인 (라우팅용)
+        # 시스템 도메인 (라우팅용) - 정규화된 키만 유지
         "POLICY": "• 인사팀 / 총무팀 (사내 규정 관련)",
-        "EDU": "• 교육팀 / HR팀 (교육 관련)",
-        "EDUCATION": "• 교육팀 / HR팀 (교육 관련)",  # EDU alias
+        "EDUCATION": "• 교육팀 / HR팀 (교육 관련)",
         "INCIDENT": "• 보안팀 / 감사팀 (사건/사고 관련)",
         "GENERAL": "• 담당 부서에 문의해 주세요.",
         "DEFAULT": "• 담당 부서에 문의해 주세요.",
