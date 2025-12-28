@@ -138,6 +138,73 @@ curl -X POST http://localhost:8000/ai/chat/messages \
   }'
 ```
 
+## 연결 테스트 (단계별)
+
+### Step 1: AI Gateway 실행
+
+```powershell
+# Windows PowerShell
+cd ctrlf-ai
+.\venv\Scripts\activate
+uvicorn app.main:app --reload --port 8000
+```
+
+### Step 2: 헬스체크
+
+```bash
+curl http://localhost:8000/health
+```
+
+**성공 응답:**
+```json
+{"status":"healthy","version":"0.1.0"}
+```
+
+### Step 3: 채팅 테스트
+
+**방법 A - CLI (권장):**
+```bash
+python chat_cli.py
+```
+
+**방법 B - Swagger UI:**
+```
+브라우저에서 http://localhost:8000/docs 접속
+→ /ai/chat/messages → Try it out → Execute
+```
+
+**방법 C - curl (PowerShell):**
+```powershell
+curl -X POST http://localhost:8000/ai/chat/messages `
+  -H "Content-Type: application/json" `
+  -d '{\"session_id\":\"test\",\"user_id\":\"user1\",\"user_role\":\"EMPLOYEE\",\"domain\":\"POLICY\",\"messages\":[{\"role\":\"user\",\"content\":\"연차휴가 규정 알려줘\"}]}'
+```
+
+### Step 4: 스크립트/영상 테스트 (선택)
+
+```powershell
+# 소스셋 처리 시작 (스크립트 자동 생성)
+curl -X POST http://localhost:8000/internal/ai/source-sets/test-001/start `
+  -H "Content-Type: application/json" `
+  -H "X-Internal-Token: your-token" `
+  -d '{\"video_id\":\"v1\",\"education_id\":\"e1\"}'
+
+# 렌더 잡 시작 (영상 생성)
+curl -X POST http://localhost:8000/internal/ai/render-jobs `
+  -H "Content-Type: application/json" `
+  -H "X-Internal-Token: your-token" `
+  -d '{\"job_id\":\"job-001\",\"video_id\":\"v1\",\"script_id\":\"s1\"}'
+```
+
+### 문제 해결
+
+| 증상 | 해결 방법 |
+|------|----------|
+| `Connection refused` | AI Gateway 실행 확인 |
+| `LLM timeout` | .env의 LLM_BASE_URL 확인 |
+| `Milvus error` | .env의 MILVUS_HOST/PORT 확인 |
+| `Callback failed` | 백엔드 서비스 실행 확인 |
+
 ## API 엔드포인트
 
 ### 채팅
@@ -147,15 +214,14 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 | POST   | `/ai/chat/messages` | AI 채팅       |
 | POST   | `/ai/chat/stream`   | 스트리밍 채팅 |
 
-### 교육 영상 생성
+### 교육 영상 생성 (Backend → AI)
 
-| 메서드 | 경로                           | 설명             |
-| ------ | ------------------------------ | ---------------- |
-| POST   | `/api/scripts`                 | 스크립트 생성    |
-| GET    | `/api/scripts/{id}`            | 스크립트 조회    |
-| POST   | `/api/scripts/{id}/approve`    | 스크립트 승인    |
-| POST   | `/api/videos/{id}/render-jobs` | 영상 렌더링 시작 |
-| GET    | `/api/render-jobs/{id}`        | 렌더링 상태 조회 |
+| 메서드 | 경로                                        | 설명                 |
+| ------ | ------------------------------------------- | -------------------- |
+| POST   | `/internal/ai/source-sets/{id}/start`       | 소스셋 처리 시작     |
+| GET    | `/internal/ai/source-sets/{id}/status`      | 처리 상태 조회       |
+| POST   | `/internal/ai/render-jobs`                  | 렌더 잡 생성         |
+| POST   | `/ai/video/job/{job_id}/start`              | 영상 생성 시작       |
 
 ### FAQ/퀴즈
 
