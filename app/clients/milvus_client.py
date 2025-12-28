@@ -12,6 +12,11 @@ Option 3 (B안) 통합:
 - Spring DB 읽기 API 불필요
 - RETRIEVAL_BACKEND=milvus 시 활성화
 
+Phase 48: domain → dataset_id 필터 강제 적용
+- RAG_DATASET_FILTER_ENABLED=True 시 검색에 dataset_id 필터 적용
+- POLICY → dataset_id="사내규정"
+- EDUCATION → dataset_id="정보보안교육"
+
 주요 개선사항:
 1. 임베딩 계약 검증 (Fail-fast): 앱 시작 시 dim 불일치 감지
 2. Pagination: get_document_chunks에서 모든 청크 조회
@@ -94,6 +99,43 @@ def escape_milvus_string(value: str) -> str:
     # 작은따옴표 escape (일부 Milvus 버전에서 사용)
     value = value.replace("'", "\\'")
     return value
+
+
+# =============================================================================
+# Phase 48: Domain → Dataset ID Mapping
+# =============================================================================
+
+# domain → dataset_id 매핑 (Milvus 검색 시 필터 적용)
+# 이 매핑은 Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
+DOMAIN_DATASET_MAPPING: Dict[str, str] = {
+    "POLICY": "사내규정",
+    "EDUCATION": "정보보안교육",
+    # 추가 도메인은 필요 시 확장
+}
+
+
+def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
+    """
+    Phase 48: domain에 해당하는 dataset_id 필터 표현식을 반환합니다.
+
+    Args:
+        domain: 도메인 (POLICY, EDUCATION 등)
+
+    Returns:
+        Optional[str]: Milvus filter expression 또는 None
+    """
+    if not domain:
+        return None
+
+    domain_upper = domain.upper()
+    dataset_id = DOMAIN_DATASET_MAPPING.get(domain_upper)
+
+    if dataset_id:
+        # dataset_id 필터 표현식 생성
+        safe_dataset_id = escape_milvus_string(dataset_id)
+        return f'dataset_id == "{safe_dataset_id}"'
+
+    return None
 
 
 def is_safe_doc_id(doc_id: str) -> bool:
@@ -535,20 +577,33 @@ class MilvusSearchClient:
         벡터 검색을 수행하고 ChatSource 형식으로 반환합니다.
 
         기존 RagflowClient.search_as_sources()와 호환되는 인터페이스입니다.
+
+        Phase 48: RAG_DATASET_FILTER_ENABLED=True 시 domain에 따른 dataset_id 필터 적용
         """
+        settings = get_settings()
+
+        # Phase 48: domain → dataset_id 필터 생성
+        filter_expr = None
+        if settings.RAG_DATASET_FILTER_ENABLED:
+            filter_expr = get_dataset_filter_expr(domain)
+            if filter_expr:
+                logger.info(
+                    f"[Phase48] Dataset filter applied: domain={domain} -> {filter_expr}"
+                )
+
         # Phase 41: [B] retrieval_target 디버그 로그
         if request_id:
             dbg_retrieval_target(
                 request_id=request_id,
                 collection=self._collection_name,
                 partition=None,
-                filter_expr=None,
+                filter_expr=filter_expr,
                 top_k=top_k,
                 domain=domain,
             )
 
         try:
-            results = await self.search(query, domain=domain, top_k=top_k)
+            results = await self.search(query, domain=domain, top_k=top_k, filter_expr=filter_expr)
 
             sources = []
             for result in results:

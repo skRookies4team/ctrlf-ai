@@ -95,23 +95,24 @@ def test_contact_info():
     policy_contact = guard.get_contact_info("POLICY")
     passed = "인사팀" in policy_contact or "총무팀" in policy_contact
     all_passed = all_passed and passed
-    print(f"  [{'PASS' if passed else 'FAIL'}] POLICY → {policy_contact}")
+    # Unicode-safe printing (avoid bullet characters etc.)
+    print(f"  [{'PASS' if passed else 'FAIL'}] POLICY -> contains HR team: {passed}")
 
     edu_contact = guard.get_contact_info("EDUCATION")
     passed = "교육팀" in edu_contact or "HR팀" in edu_contact
     all_passed = all_passed and passed
-    print(f"  [{'PASS' if passed else 'FAIL'}] EDUCATION → {edu_contact}")
+    print(f"  [{'PASS' if passed else 'FAIL'}] EDUCATION -> contains EDU team: {passed}")
 
     # 테스트 3.2: 토픽 기준 안내 (더 구체적)
     pip_contact = guard.get_contact_info("EDUCATION", topic="PIP")
     passed = "개인정보보호팀" in pip_contact
     all_passed = all_passed and passed
-    print(f"  [{'PASS' if passed else 'FAIL'}] EDUCATION + PIP topic → {pip_contact}")
+    print(f"  [{'PASS' if passed else 'FAIL'}] EDUCATION + PIP topic -> contains privacy team: {passed}")
 
     shp_contact = guard.get_contact_info("EDUCATION", topic="SHP")
     passed = "고충처리위원회" in shp_contact
     all_passed = all_passed and passed
-    print(f"  [{'PASS' if passed else 'FAIL'}] EDUCATION + SHP topic → {shp_contact}")
+    print(f"  [{'PASS' if passed else 'FAIL'}] EDUCATION + SHP topic -> contains committee: {passed}")
 
     return all_passed
 
@@ -203,7 +204,7 @@ def test_similarity_logging_defense():
             sources=[],
             search_stage="test",
             domain="TEST",
-            query="test query",
+            query_preview="test query",
         )
         passed = True
         print(f"  [PASS] log_similarity_distribution with empty sources: No error")
@@ -271,10 +272,10 @@ def main():
     print(f"\n총 {passed}/{total} 테스트 통과")
 
     if passed == total:
-        print("\n✅ 모든 Phase 47 변경사항 검증 완료!")
+        print("\n[OK] All Phase 47 tests passed!")
         return 0
     else:
-        print("\n❌ 일부 테스트 실패")
+        print("\n[FAIL] Some tests failed")
         return 1
 
 

@@ -3,7 +3,9 @@
 ## 1. 개요
 
 ### 1.1 문서 목적
-본 보고서는 Phase 47 개선 작업을 기술합니다. GPT 리뷰 피드백을 반영하여 소프트 가드레일 및 도메인 정규화 로직을 개선했습니다.
+본 보고서는 Phase 47~48 개선 작업을 기술합니다.
+- **Phase 47**: GPT 리뷰 피드백 반영 (소프트 가드레일, 도메인 정규화)
+- **Phase 48**: Low-relevance Gate 구현 (저관련 검색 결과 강등, dataset_id 필터)
 
 이전 Phase에 대한 상세 내용은 아래를 참조하세요:
 - [v1 보고서](./PERFORMANCE_IMPROVEMENT_REPORT.md): Phase 43 (1차~5차, "하" 키워드 버그 수정)
@@ -18,7 +20,8 @@
 | v2 | 2025-12-23 | Phase 44: 6차~7차 테스트, 가드레일 완화 |
 | v3 | 2025-12-23 | Phase 45: 8차 테스트, 소프트 가드레일 & 언어 강제 |
 | v4 | 2025-12-24 | Phase 46: 소프트 가드레일 강화, 지표 분리 정의 |
-| **v5** | **2025-12-26** | **Phase 47: GPT 피드백 반영 (3개 필수 수정)** |
+| v5 | 2025-12-26 | Phase 47: GPT 피드백 반영 (3개 필수 수정) |
+| **v5.1** | **2025-12-28** | **Phase 48: Low-relevance Gate + dataset_id 필터** |
 
 ### 1.3 Phase 47 피드백 요약
 
@@ -286,9 +289,118 @@ INCIDENT                →  INCIDENT           →  보안팀 / 감사팀
 
 ---
 
-## 6. 결론
+## 6. Phase 48: Low-relevance Gate
 
-### 6.1 Phase 47 성과 요약
+### 6.1 배경 및 목적
+
+prompt.txt에서 제시된 RAG 품질 문제:
+> "문서에 실제로 없는 주제(연차/근태)를 물었을 때도, RAG가 억지로 TopK를 반환해서 '근거가 있는 것처럼' 보이게 만드는 문제"
+
+**핵심 목표**: 저품질 검색 결과를 sources=[]로 강등 → soft guardrail 정상 발동
+
+### 6.2 구현 내용
+
+#### 6.2.1 Low-relevance Gate (rag_handler.py)
+
+두 단계 게이트로 저관련 결과 필터링:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   RAG 검색 결과                          │
+└──────────────────────┬──────────────────────────────────┘
+                       ▼
+              ┌────────────────┐
+              │  Gate A:       │    max_score < 0.60?
+              │  Score Gate    │ ──────────────────────→ sources=[]
+              └───────┬────────┘                         (강등)
+                      │ 통과
+                      ▼
+              ┌────────────────┐
+              │  Gate B:       │    앵커 키워드가
+              │  Anchor Gate   │    sources에 없음?
+              └───────┬────────┘ ─────────────────────→ sources=[]
+                      │ 통과                             (강등)
+                      ▼
+              ┌────────────────┐
+              │   최종 결과     │
+              └────────────────┘
+```
+
+**구현 함수**:
+- `get_anchor_stopwords()`: 불용어 세트 로드 (config에서)
+- `extract_anchor_keywords(query)`: 쿼리에서 핵심 키워드 추출
+- `check_anchor_keywords_in_sources()`: 키워드가 sources 텍스트에 있는지 확인
+- `apply_low_relevance_gate()`: 두 게이트 적용
+
+**예시**:
+```python
+# 쿼리: "연차 규정 알려줘"
+# 불용어: ["규정", "알려줘", "관련", "문서", ...]
+# 앵커 키워드: {"연차"}
+
+# 만약 sources에 "연차"가 없으면 → sources=[] 강등
+# → soft guardrail 발동 → "근거 없음" 안내
+```
+
+#### 6.2.2 Config 설정 (config.py)
+
+```python
+# Phase 48: Low-relevance Gate 설정
+RAG_MIN_MAX_SCORE: float = 0.60  # max_score 임계값
+RAG_ANCHOR_STOPWORDS: str = (    # 불용어 목록 (쉼표 구분)
+    "관련,규정,정책,문서,요약,알려줘,뭐야,해줘,해주세요,있어,없어,어떻게,"
+    "무엇,뭔가,좀,을,를,이,가,은,는,의,에,에서,로,으로,와,과,하고,그리고,"
+    "또는,및,대한,대해,대해서,것,수,등,내용,사항,부분,전체,모든,각,해당"
+)
+RAG_DATASET_FILTER_ENABLED: bool = True  # dataset_id 필터 활성화
+```
+
+#### 6.2.3 domain → dataset_id 필터 (milvus_client.py)
+
+Milvus 검색 시 domain에 따라 dataset_id 필터를 강제 적용:
+
+```python
+DOMAIN_DATASET_MAPPING = {
+    "POLICY": "사내규정",
+    "EDUCATION": "정보보안교육",
+}
+
+def get_dataset_filter_expr(domain: str) -> Optional[str]:
+    # POLICY → 'dataset_id == "사내규정"'
+    # EDUCATION → 'dataset_id == "정보보안교육"'
+```
+
+**효과**: 도메인별로 검색 범위를 제한하여 관련 없는 문서가 섞이는 것을 방지
+
+### 6.3 테스트 결과
+
+```
+=== Test 4: Low-relevance Gate ===
+[PASS] High score + keyword match -> PASSED: 2 sources
+[PASS] Low score -> DEMOTED: reason=max_score_below_threshold
+[PASS] Keyword mismatch -> DEMOTED: reason=no_anchor_term_match
+[PASS] Empty sources -> stays empty: 0
+
+=== Test 5: Dataset Filter Expression ===
+[PASS] POLICY -> filter=dataset_id == "사내규정"
+[PASS] EDUCATION -> filter=dataset_id == "정보보안교육"
+[PASS] GENERAL -> filter=None
+```
+
+### 6.4 수정 파일 목록
+
+| 파일 | 수정 내용 |
+|------|----------|
+| `app/core/config.py` | RAG_MIN_MAX_SCORE, RAG_ANCHOR_STOPWORDS, RAG_DATASET_FILTER_ENABLED 추가 |
+| `app/services/chat/rag_handler.py` | Low-relevance Gate 함수 4개 추가, perform_search_with_fallback에 게이트 적용 |
+| `app/clients/milvus_client.py` | DOMAIN_DATASET_MAPPING, get_dataset_filter_expr() 추가, search_as_sources에 필터 적용 |
+| `scripts/test_phase48_changes.py` | Phase 48 테스트 스크립트 신규 작성 |
+
+---
+
+## 7. 결론
+
+### 7.1 Phase 47 성과 요약
 
 | 항목 | 구현 내용 | 효과 |
 |------|----------|------|
@@ -297,16 +409,34 @@ INCIDENT                →  INCIDENT           →  보안팀 / 감사팀
 | 도메인/토픽 정규화 | 정규화 함수 + 2단계 매핑 | 안정적인 담당부서 안내 |
 | Similarity 로깅 방어 | 이미 구현됨 확인 | 런타임 안전성 보장 |
 
-### 6.2 코드 품질 개선
+### 7.2 Phase 48 성과 요약
+
+| 항목 | 구현 내용 | 효과 |
+|------|----------|------|
+| Score Hard Gate | max_score < 0.60 → sources=[] | 저품질 검색 결과 자동 강등 |
+| Anchor Keyword Gate | 핵심 키워드가 sources에 없으면 → sources=[] | "없는 주제" 질문 시 근거 없음 처리 |
+| dataset_id 필터 | domain → dataset_id 매핑으로 검색 범위 제한 | 도메인별 문서 분리 검색 |
+| Config 설정화 | 임계값/불용어를 config에서 관리 | 운영 중 튜닝 용이 |
+
+### 7.3 Phase 흐름 정리
 
 ```
 Phase 43~46: 기능 구현 + 버그 수정
 Phase 47:    코드 안정성 + 엣지 케이스 처리 + 구조 개선
              (GPT 리뷰 피드백 반영)
+Phase 48:    RAG 품질 개선 - 저관련 검색 결과 강등
+             (Low-relevance Gate + dataset 필터)
 ```
+
+### 7.4 다음 단계 (Phase 49 권장)
+
+1. **실제 운영 로그 분석**: Low-relevance Gate 강등 비율 모니터링
+2. **임계값 튜닝**: RAG_MIN_MAX_SCORE 값을 운영 데이터 기반으로 조정
+3. **하이브리드 검색**: sparse(BM25) + dense 하이브리드 검색 도입 검토
+4. **리랭킹**: 검색 결과 정렬 품질 향상을 위한 reranker 도입 검토
 
 ---
 
-**작성일**: 2025-12-26
-**버전**: v5
-**작성자**: 모인지
+**작성일**: 2025-12-28
+**버전**: v5.1
+**작성자**: Claude Code

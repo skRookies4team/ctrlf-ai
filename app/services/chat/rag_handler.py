@@ -21,6 +21,11 @@ Phase 44: 2nd-chance retrieval & Query Normalization
 Phase 45: Similarity 분포 로깅 (디버깅/진단용)
 - 검색 결과의 similarity 점수 분포 로깅 (min/max/avg)
 - 0건 결과 시 원인 분석을 위한 상세 로깅
+
+Phase 48: Low-relevance Gate
+- max_score < RAG_MIN_MAX_SCORE → sources=[] 강등
+- 앵커 키워드가 sources 텍스트에 없으면 → sources=[] 강등
+- 저관련 검색 결과로 '근거 있는 척' 하는 현상 방지
 """
 
 import re
@@ -146,6 +151,156 @@ def normalize_query_for_search(query: str) -> str:
     normalized = normalized.strip()
 
     return normalized
+
+
+# =============================================================================
+# Phase 48: Low-relevance Gate
+# =============================================================================
+
+
+def get_anchor_stopwords() -> set:
+    """
+    Phase 48: 앵커 키워드 추출용 불용어 세트를 반환합니다.
+
+    settings.RAG_ANCHOR_STOPWORDS에서 로드.
+    """
+    settings = get_settings()
+    stopwords_str = settings.RAG_ANCHOR_STOPWORDS
+    return set(word.strip() for word in stopwords_str.split(",") if word.strip())
+
+
+def extract_anchor_keywords(query: str) -> set:
+    """
+    Phase 48: 쿼리에서 앵커 키워드를 추출합니다.
+
+    불용어를 제거한 후 남은 토큰들을 반환합니다.
+    형태소 분석기 없이 단순 공백 분리 + 불용어 필터링 방식.
+
+    Args:
+        query: 원본 쿼리
+
+    Returns:
+        set: 앵커 키워드 세트 (소문자)
+    """
+    stopwords = get_anchor_stopwords()
+
+    # 특수문자 제거 (한글, 영문, 숫자만 유지)
+    cleaned = re.sub(r'[^\w\s가-힣]', ' ', query)
+
+    # 공백 분리 및 소문자 변환
+    tokens = cleaned.lower().split()
+
+    # 불용어 및 1글자 토큰 제거
+    anchor_keywords = {
+        token for token in tokens
+        if token not in stopwords and len(token) > 1
+    }
+
+    return anchor_keywords
+
+
+def check_anchor_keywords_in_sources(
+    anchor_keywords: set,
+    sources: List["ChatSource"],
+) -> bool:
+    """
+    Phase 48: 앵커 키워드가 sources 텍스트에 하나라도 있는지 확인합니다.
+
+    Args:
+        anchor_keywords: 앵커 키워드 세트
+        sources: RAG 검색 결과
+
+    Returns:
+        bool: 하나라도 매칭되면 True
+    """
+    if not anchor_keywords:
+        # 앵커 키워드가 없으면 (모두 불용어) → 통과
+        return True
+
+    # 모든 sources의 snippet/title을 합쳐서 검색
+    combined_text = ""
+    for source in sources:
+        if source.snippet:
+            combined_text += source.snippet.lower() + " "
+        if source.title:
+            combined_text += source.title.lower() + " "
+
+    # 앵커 키워드 중 하나라도 있으면 통과
+    for keyword in anchor_keywords:
+        if keyword in combined_text:
+            return True
+
+    return False
+
+
+def apply_low_relevance_gate(
+    sources: List["ChatSource"],
+    query: str,
+    domain: str,
+) -> Tuple[List["ChatSource"], Optional[str]]:
+    """
+    Phase 48: 저관련 검색 결과를 sources=[]로 강등합니다.
+
+    두 가지 게이트를 적용:
+    A. score 하드 게이트: max_score < RAG_MIN_MAX_SCORE → []
+    B. 앵커 키워드 게이트: 핵심어가 sources 텍스트에 없으면 → []
+
+    Args:
+        sources: RAG 검색 결과
+        query: 원본 쿼리
+        domain: 검색 도메인
+
+    Returns:
+        Tuple[List[ChatSource], Optional[str]]:
+            - 필터링된 sources (강등 시 [])
+            - gate_reason (강등 시 사유, 통과 시 None)
+    """
+    settings = get_settings()
+
+    if not sources:
+        return sources, None
+
+    # score 계산
+    scores = [s.score for s in sources if s.score is not None]
+    if not scores:
+        # score가 없는 경우 → 통과 (RAGFlow 등에서 score 없이 반환하는 경우)
+        return sources, None
+
+    max_score = max(scores)
+    avg_score = sum(scores) / len(scores)
+    min_threshold = settings.RAG_MIN_MAX_SCORE
+
+    # Gate A: score 하드 게이트
+    if max_score < min_threshold:
+        logger.warning(
+            f"[LowRelevanceGate] DEMOTED by score_gate | "
+            f"max_score={max_score:.3f} < threshold={min_threshold} | "
+            f"query='{query[:50]}...' | domain={domain} | "
+            f"avg_score={avg_score:.3f} | top_k={len(sources)} | filtered_count=0"
+        )
+        return [], "max_score_below_threshold"
+
+    # Gate B: 앵커 키워드 게이트
+    anchor_keywords = extract_anchor_keywords(query)
+    has_anchor_match = check_anchor_keywords_in_sources(anchor_keywords, sources)
+
+    if not has_anchor_match:
+        logger.warning(
+            f"[LowRelevanceGate] DEMOTED by anchor_gate | "
+            f"anchor_keywords={anchor_keywords} not found in sources | "
+            f"query='{query[:50]}...' | domain={domain} | "
+            f"max_score={max_score:.3f} | avg_score={avg_score:.3f} | "
+            f"top_k={len(sources)} | filtered_count=0"
+        )
+        return [], "no_anchor_term_match"
+
+    # 통과
+    logger.info(
+        f"[LowRelevanceGate] PASSED | "
+        f"max_score={max_score:.3f} >= threshold={min_threshold} | "
+        f"anchor_match=True | query='{query[:30]}...' | domain={domain}"
+    )
+    return sources, None
 
 
 class RagSearchUnavailableError(Exception):
@@ -280,20 +435,32 @@ class RagHandler:
 
         # Milvus 사용 시: Milvus → RAGFlow fallback
         if self._use_milvus and self._milvus:
-            return await self._search_with_milvus_fallback(
+            sources, failed, retriever = await self._search_with_milvus_fallback(
+                query=normalized_query,
+                domain=domain,
+                req=req,
+                request_id=request_id,
+            )
+        else:
+            # RAGFlow만 사용
+            sources, failed, retriever = await self._search_ragflow_only(
                 query=normalized_query,
                 domain=domain,
                 req=req,
                 request_id=request_id,
             )
 
-        # RAGFlow만 사용
-        return await self._search_ragflow_only(
-            query=normalized_query,
-            domain=domain,
-            req=req,
-            request_id=request_id,
-        )
+        # Phase 48: Low-relevance Gate 적용
+        # 저관련 검색 결과를 sources=[]로 강등
+        if sources and not failed:
+            sources, gate_reason = apply_low_relevance_gate(
+                sources=sources,
+                query=query,  # 원본 쿼리 사용 (마스킹 토큰 포함)
+                domain=domain,
+            )
+            # gate_reason은 로깅용으로만 사용 (함수 내에서 이미 로깅됨)
+
+        return sources, failed, retriever
 
     async def _search_with_milvus_fallback(
         self,
