@@ -87,7 +87,55 @@ Metric: COSINE
 | **Milvus** | 외부 | .env 참조 | 벡터 검색 |
 | **RAGFlow** | - | - | 불필요 (MILVUS_ENABLED=true) |
 
-### 1.3 AI Gateway 실행 (터미널 1)
+### 1.3 테스트 시나리오별 최소 구성
+
+**모든 서비스를 다 켜야 하나요?** → 아니요. 테스트 목적에 따라 필요한 서비스만 실행하면 됩니다.
+
+| 테스트 목적 | 필요한 서비스 | 백엔드 |
+|------------|--------------|--------|
+| **기본 AI 채팅** | AI Gateway + vLLM + Milvus | ❌ 불필요 |
+| **채팅 + 로그 저장** | 위 + chat-service | chat-service만 |
+| **스크립트/영상 생성** | AI Gateway + vLLM + education-service + FFmpeg | education-service |
+| **퀴즈 생성** | AI Gateway + vLLM + Milvus | quiz-service (선택) |
+| **전체 통합 테스트** | 모든 서비스 | 모두 |
+
+> **핵심**: 기본 AI 채팅은 **백엔드 없이도** 테스트 가능합니다.
+> - AI Gateway가 백엔드에 보내는 건 로그 저장(`/api/ai-logs`)뿐
+> - 백엔드 없으면 로그만 로컬에 남고 채팅은 정상 동작
+> - `backend_client.py`에서 URL 없으면 mock 응답 반환
+
+#### 최소 구성으로 채팅 테스트 (백엔드 없이)
+
+```bash
+# AI Gateway만 실행 (터미널 1개)
+cd ctrlf-ai
+.\venv\Scripts\activate
+uvicorn app.main:app --reload --port 8000
+
+# 외부 GPU 서버 (vLLM, Milvus)는 .env에 이미 설정됨
+# → 백엔드 없이 바로 테스트 가능
+```
+
+```bash
+# 채팅 테스트
+curl -X POST http://localhost:8000/ai/chat/messages \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"test","user_id":"u1","user_role":"EMPLOYEE","domain":"POLICY","messages":[{"role":"user","content":"연차휴가 규정 알려줘"}]}'
+```
+
+#### 스크립트/영상 생성 테스트
+
+```bash
+# AI Gateway (터미널 1)
+uvicorn app.main:app --reload --port 8000
+
+# education-service (터미널 2)
+cd ctrlf-back
+$env:AWS_PROFILE = "sk_4th_team04"  # Windows PowerShell
+./gradlew :education-service:bootRun --no-configuration-cache
+```
+
+### 1.4 AI Gateway 실행
 
 ```bash
 # 1. ctrlf-ai 폴더로 이동
@@ -119,7 +167,7 @@ uvicorn app.main:app --reload --port 8000
 curl http://localhost:8000/health
 ```
 
-### 1.4 Backend 실행 (터미널 2~6)
+### 1.5 Backend 실행 (터미널 2~6)
 
 백엔드는 여러 마이크로서비스로 구성됨. 필요한 서비스만 실행.
 
@@ -173,7 +221,7 @@ AWS_PROFILE=sk_4th_team04 ./gradlew :api-gateway:bootRun
 
 > **주의**: `chat-service`는 `9002` 포트로 실행되어야 AI Gateway의 `BACKEND_BASE_URL`과 일치합니다.
 
-### 1.5 테스트
+### 1.6 테스트
 
 **채팅 API:**
 ```bash
@@ -198,7 +246,7 @@ python chat_cli.py
 http://localhost:8000/docs
 ```
 
-### 1.6 스크립트/영상 생성 테스트
+### 1.7 스크립트/영상 생성 테스트
 
 #### 전체 흐름 (Backend → AI)
 
@@ -303,7 +351,7 @@ sudo apt install ffmpeg
 ffmpeg -version
 ```
 
-### 1.7 기능별 필요 서비스
+### 1.8 기능별 필요 서비스 (상세)
 
 | 기능 | AI Gateway | Backend | LLM | Milvus | Embedding | FFmpeg |
 |------|:----------:|:-------:|:---:|:------:|:---------:|:------:|
@@ -313,7 +361,7 @@ ffmpeg -version
 | 영상 렌더링 | O | education-service, infra-service | - | - | - | **O** |
 | FAQ/퀴즈 생성 | O | quiz-service | O | O | O | - |
 
-### 1.8 트러블슈팅
+### 1.9 트러블슈팅
 
 **외부 서버 연결 안 될 때:**
 ```bash
