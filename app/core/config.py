@@ -201,6 +201,23 @@ class Settings(BaseSettings):
     CHAT_CONTEXT_MAX_CHARS: int = 8000  # 최대 문자 수
     CHAT_CONTEXT_MAX_SOURCES: int = 5   # 최대 소스 수
 
+    # =========================================================================
+    # Phase 48: Low-relevance Gate 설정
+    # =========================================================================
+    # score 하드 게이트: max_score < threshold → sources=[]로 강등
+    RAG_MIN_MAX_SCORE: float = 0.60  # 관측 로그 기반 (0.543/0.461 실패, 0.690 성공)
+
+    # 앵커 키워드 게이트용 불용어 (쉼표 구분)
+    # 이 단어들을 제거한 후 남은 토큰이 sources 텍스트에 하나도 없으면 강등
+    RAG_ANCHOR_STOPWORDS: str = (
+        "관련,규정,정책,문서,요약,알려줘,뭐야,해줘,해주세요,있어,없어,어떻게,"
+        "무엇,뭔가,좀,을,를,이,가,은,는,의,에,에서,로,으로,와,과,하고,그리고,"
+        "또는,및,대한,대해,대해서,것,수,등,내용,사항,부분,전체,모든,각,해당"
+    )
+
+    # domain → dataset_id 매핑 강제 필터 활성화
+    RAG_DATASET_FILTER_ENABLED: bool = True
+
     # Embedding 모델 설정 (vLLM 서버에서 사용)
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원
