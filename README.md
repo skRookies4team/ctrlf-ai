@@ -28,19 +28,25 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 
 ### 1. 환경 설정
 
-# 가상환경 생성 및 활성화
-
-python -m venv venv
-.\venv\Scripts\activate
-
 ```bash
-source venv/Scripts/activate
+# 가상환경 생성
+python -m venv venv
 
-# Python 3.12+ 권장
+# 가상환경 활성화
+# Windows PowerShell:
+.\venv\Scripts\activate
+# Windows CMD:
+venv\Scripts\activate.bat
+# Linux/Mac:
+source venv/bin/activate
+
+# 의존성 설치 (Python 3.12+ 권장)
 pip install -r requirements.txt
 
 # 환경변수 설정
-cp .env.example .env
+cp .env.example .env   # Linux/Mac
+copy .env.example .env # Windows
+
 # .env 파일에서 서비스 URL 수정
 ```
 
