@@ -732,10 +732,14 @@ class ChatService:
         # Phase 45: 소프트 가드레일 체크
         # =====================================================================
         # POLICY_QA/EDUCATION_QA에서 sources=0이면 소프트 가드레일 활성화
+        # Phase 47.1: topic 파라미터 명시적 전달 (현재는 None, 향후 dataset/topic 메타데이터 연동 시 확장)
+        # - topic이 있으면: TOPIC_CONTACT_INFO에서 더 구체적인 담당부서 안내
+        # - topic이 없으면: DOMAIN_CONTACT_INFO에서 도메인 기준 안내 (폴백)
         needs_soft_guardrail, soft_guardrail_prefix = self._answer_guard.check_soft_guardrail(
             intent=tier0_intent,
             sources=sources,
             domain=domain,
+            topic=None,  # TODO: Phase 48+ dataset/topic 메타데이터 연동 시 req.topic 또는 dataset_topic 전달
         )
 
         # Step 5: Build LLM prompt messages (with guardrails)
