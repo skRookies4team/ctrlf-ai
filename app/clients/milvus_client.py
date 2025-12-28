@@ -107,9 +107,16 @@ def escape_milvus_string(value: str) -> str:
 
 # domain → dataset_id 매핑 (Milvus 검색 시 필터 적용)
 # 이 매핑은 Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
-DOMAIN_DATASET_MAPPING: Dict[str, str] = {
+# 단일 값은 str, 다중 값은 List[str]로 정의
+DOMAIN_DATASET_MAPPING: Dict[str, Any] = {
     "POLICY": "사내규정",
-    "EDUCATION": "정보보안교육",
+    "EDUCATION": [
+        "정보보안교육",
+        "장애인인식개선교육",
+        "직무교육",
+        "직장내괴롭힘교육",
+        "직장내성희롱교육",
+    ],
     # 추가 도메인은 필요 시 확장
 }
 
@@ -128,12 +135,20 @@ def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
         return None
 
     domain_upper = domain.upper()
-    dataset_id = DOMAIN_DATASET_MAPPING.get(domain_upper)
+    dataset_ids = DOMAIN_DATASET_MAPPING.get(domain_upper)
 
-    if dataset_id:
-        # dataset_id 필터 표현식 생성
-        safe_dataset_id = escape_milvus_string(dataset_id)
-        return f'dataset_id == "{safe_dataset_id}"'
+    if not dataset_ids:
+        return None
+
+    # 단일 값인 경우 == 연산자
+    if isinstance(dataset_ids, str):
+        safe_id = escape_milvus_string(dataset_ids)
+        return f'dataset_id == "{safe_id}"'
+
+    # 다중 값인 경우 IN 연산자
+    if isinstance(dataset_ids, list) and dataset_ids:
+        safe_ids = [f'"{escape_milvus_string(ds_id)}"' for ds_id in dataset_ids]
+        return f'dataset_id in [{", ".join(safe_ids)}]'
 
     return None
 
@@ -221,6 +236,7 @@ class MilvusSearchClient:
         self._connected = False
         self._collection: Optional[Collection] = None
         self._collection_dim: Optional[int] = None  # 실제 컬렉션 dim (검증용)
+        self._has_dataset_id_field: Optional[bool] = None  # Phase 48: 스키마 검사 결과 캐시
 
         logger.info(
             f"MilvusSearchClient initialized: host={self._host}:{self._port}, "
@@ -292,12 +308,23 @@ class MilvusSearchClient:
         self._collection = Collection(self._collection_name)
         self._collection.load()
 
-        # 컬렉션 스키마에서 embedding dim 추출
+        # 컬렉션 스키마에서 embedding dim 추출 및 dataset_id 필드 확인
+        field_names = set()
         for field in self._collection.schema.fields:
+            field_names.add(field.name)
             if hasattr(field, 'dim') and field.dim:
                 self._collection_dim = field.dim
                 logger.info(f"Collection embedding dim: {self._collection_dim}")
-                break
+
+        # Phase 48: dataset_id 필드 존재 여부 확인
+        self._has_dataset_id_field = "dataset_id" in field_names
+        if self._has_dataset_id_field:
+            logger.info(f"[Phase48] dataset_id field found in schema")
+        else:
+            logger.warning(
+                f"[Phase48] dataset_id field NOT found in schema. "
+                f"Dataset filtering will be disabled. Fields: {field_names}"
+            )
 
         logger.info(f"Loaded collection: {self._collection_name}")
         return self._collection
@@ -583,13 +610,19 @@ class MilvusSearchClient:
         settings = get_settings()
 
         # Phase 48: domain → dataset_id 필터 생성
+        # 스키마에 dataset_id 필드가 없으면 필터 비활성화
         filter_expr = None
         if settings.RAG_DATASET_FILTER_ENABLED:
-            filter_expr = get_dataset_filter_expr(domain)
-            if filter_expr:
-                logger.info(
-                    f"[Phase48] Dataset filter applied: domain={domain} -> {filter_expr}"
-                )
+            # 스키마 검사가 아직 안 됐으면 None (첫 검색 시 컬렉션 로드됨)
+            # 스키마 검사 완료 후 dataset_id 필드가 없으면 필터 스킵
+            if self._has_dataset_id_field is False:
+                logger.debug("[Phase48] Dataset filter skipped: dataset_id field not in schema")
+            else:
+                filter_expr = get_dataset_filter_expr(domain)
+                if filter_expr:
+                    logger.info(
+                        f"[Phase48] Dataset filter applied: domain={domain} -> {filter_expr}"
+                    )
 
         # Phase 41: [B] retrieval_target 디버그 로그
         if request_id:

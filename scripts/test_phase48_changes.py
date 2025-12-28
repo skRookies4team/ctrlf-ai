@@ -14,6 +14,10 @@ Phase 48 변경사항 검증 테스트 스크립트
 import sys
 import os
 
+# Windows cp949 인코딩 문제 해결
+if sys.stdout:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 # 프로젝트 루트를 path에 추가
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
