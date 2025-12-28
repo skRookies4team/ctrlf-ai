@@ -167,6 +167,63 @@ class RenderJobRunner:
     # Job Creation
     # =========================================================================
 
+    async def create_job_with_id(
+        self,
+        job_id: str,
+        video_id: str,
+        script_id: str,
+        request_id: Optional[str] = None,
+    ) -> JobCreationResult:
+        """백엔드 발급 jobId로 렌더 잡 생성 (idempotent).
+
+        백엔드가 발급한 job_id를 그대로 사용하여 잡을 생성합니다.
+        잡 생성만 하고 실행은 하지 않습니다 (호출부에서 start_job 호출).
+
+        Args:
+            job_id: 백엔드가 발급한 잡 ID
+            video_id: 비디오 ID
+            script_id: 스크립트 ID
+            request_id: 멱등 키 (선택)
+
+        Returns:
+            JobCreationResult: 생성 결과 (job, created, message)
+        """
+        # 1. 기존 잡 확인 (idempotency)
+        existing_job = self._repository.get(job_id)
+        if existing_job:
+            logger.info(
+                f"Existing job found: job_id={job_id}, status={existing_job.status}"
+            )
+            return JobCreationResult(
+                job=existing_job,
+                created=False,
+                message=f"Existing job returned (status: {existing_job.status})",
+            )
+
+        # 2. 새 잡 생성 (백엔드 발급 job_id 사용)
+        job = RenderJobEntity(
+            job_id=job_id,
+            video_id=video_id,
+            script_id=script_id,
+            status="QUEUED",
+            progress=0,
+            message="대기 중...",
+            created_by="backend",
+            created_at=datetime.utcnow(),
+        )
+
+        self._repository.save(job)
+        logger.info(
+            f"New render job created with backend ID: job_id={job_id}, "
+            f"video_id={video_id}, script_id={script_id}"
+        )
+
+        return JobCreationResult(
+            job=job,
+            created=True,
+            message="New job created",
+        )
+
     async def create_job(
         self,
         video_id: str,
