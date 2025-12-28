@@ -26,7 +26,7 @@ else:
     print(f"[WARN] FFmpeg not found at {FFMPEG_PATH}")
 
 # 프로젝트 루트 추가
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # 환경변수 설정
 os.environ.setdefault("AI_ENV", "mock")
@@ -96,7 +96,7 @@ async def generate_video_from_script(
         spec.loader.exec_module(module)
         return module
 
-    base = Path(__file__).parent / "app"
+    base = Path(__file__).parent.parent / "app"
 
     # 모듈 로드
     vc_module = load_module("video_composer", base / "services" / "video_composer.py")
