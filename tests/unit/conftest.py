@@ -15,6 +15,11 @@ os.environ["RAGFLOW_BASE_URL_MOCK"] = ""
 os.environ["LLM_BASE_URL_MOCK"] = ""
 os.environ["BACKEND_BASE_URL_MOCK"] = ""
 
+# Disable Milvus for unit tests (use FakeRagflowClient instead)
+os.environ["MILVUS_ENABLED"] = "false"
+os.environ["RETRIEVAL_BACKEND"] = "ragflow"
+os.environ["CHAT_RETRIEVER_BACKEND"] = "ragflow"
+
 # Remove direct URL env vars (HttpUrl type doesn't accept empty string)
 # So we need to unset them entirely
 for key in ["RAGFLOW_BASE_URL", "LLM_BASE_URL", "BACKEND_BASE_URL"]:
