@@ -591,7 +591,10 @@ class RagHandler:
         request_id: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
-        Milvus 검색을 시도하고 실패 시 RAGFlow로 fallback합니다.
+        Milvus 전용 검색을 수행합니다.
+
+        Phase 48 bugfix: RAGFlow fallback 제거 - Milvus만 사용합니다.
+        Milvus 실패 시 503 에러를 반환하고, 결과 0건은 정상 처리됩니다.
 
         Returns:
             Tuple[List[ChatSource], bool, RetrieverUsed]
@@ -628,101 +631,32 @@ class RagHandler:
                 domain=domain,
             )
 
-            # 결과가 있으면 Milvus 사용 성공
-            if sources:
-                # 컨텍스트 길이 제한 적용
-                sources = self._truncate_context(sources)
-
-                logger.info(
-                    f"Milvus search returned {len(sources)} sources (retriever_used=MILVUS)"
-                )
-
-                # 디버그 로그: retrieval_top5
-                if request_id:
-                    self._log_retrieval_top5(request_id, sources)
-
-                return sources, False, "MILVUS"
-
-            # Milvus 결과 0건 → RAGFlow fallback
-            logger.warning(
-                f"Milvus search returned 0 results, falling back to RAGFlow"
-            )
-
-        except MilvusSearchError as e:
-            logger.error(f"Milvus search failed: {e}, falling back to RAGFlow")
-        except Exception as e:
-            logger.error(f"Milvus unexpected error: {e}, falling back to RAGFlow")
-
-        # RAGFlow fallback
-        try:
-            # Phase 44: 1차 검색 (top_k=5)
-            sources = await self._ragflow.search_as_sources(
-                query=query,
-                domain=domain,
-                user_role=req.user_role,
-                department=req.department,
-                top_k=DEFAULT_TOP_K,
-            )
-
-            logger.info(f"RAGFlow fallback 1st search returned {len(sources)} sources (top_k={DEFAULT_TOP_K})")
-
-            # Phase 45: 1차 검색 similarity 분포 로깅
-            log_similarity_distribution(
-                sources=sources,
-                search_stage="ragflow_fallback_1st",
-                query_preview=query,
-                domain=domain,
-            )
-
-            # Phase 44: 2nd-chance retrieval - 0건이면 top_k 올려서 재시도
-            if not sources:
-                logger.info(
-                    f"2nd-chance retrieval: 0 results, retrying with top_k={RETRY_TOP_K}"
-                )
-                sources = await self._ragflow.search_as_sources(
-                    query=query,
-                    domain=domain,
-                    user_role=req.user_role,
-                    department=req.department,
-                    top_k=RETRY_TOP_K,
-                )
-                logger.info(
-                    f"RAGFlow fallback 2nd-chance search returned {len(sources)} sources (top_k={RETRY_TOP_K})"
-                )
-
-                # Phase 45: 2nd-chance 검색 similarity 분포 로깅
-                log_similarity_distribution(
-                    sources=sources,
-                    search_stage="ragflow_fallback_2nd",
-                    query_preview=query,
-                    domain=domain,
-                )
-
             # 컨텍스트 길이 제한 적용
             sources = self._truncate_context(sources)
 
             logger.info(
-                f"RAGFlow fallback returned {len(sources)} sources (retriever_used=RAGFLOW_FALLBACK)"
+                f"Milvus search returned {len(sources)} sources (retriever_used=MILVUS)"
             )
 
             # 디버그 로그: retrieval_top5
             if request_id:
                 self._log_retrieval_top5(request_id, sources)
 
-            return sources, False, "RAGFLOW_FALLBACK"
+            # 결과 0건도 정상 처리 (failed=False)
+            return sources, False, "MILVUS"
 
-        except UpstreamServiceError as e:
-            logger.error(f"RAGFlow fallback also failed: {e}")
+        except MilvusSearchError as e:
+            logger.error(f"Milvus search failed: {e}")
             metrics.increment_error(LOG_TAG_RAG_ERROR)
             raise RagSearchUnavailableError(
-                f"RAG 검색 서비스 장애 (Milvus + RAGFlow 모두 실패)"
+                f"Milvus 검색 서비스 장애: {e}"
             ) from e
 
         except Exception as e:
-            logger.exception(f"RAGFlow fallback failed: {e}")
+            logger.exception(f"Milvus unexpected error: {e}")
             metrics.increment_error(LOG_TAG_RAG_ERROR)
             raise RagSearchUnavailableError(
-                f"RAG 검색 서비스 장애: {type(e).__name__}"
+                f"Milvus 검색 서비스 장애: {type(e).__name__}"
             ) from e
 
     async def _search_ragflow_only(
