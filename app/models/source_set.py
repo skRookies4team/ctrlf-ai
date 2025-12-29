@@ -42,6 +42,22 @@ class DocumentStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class DocumentDomain(str, Enum):
+    """문서 도메인 (RAGFlow 라우팅 키).
+
+    문서가 적재될 RAGFlow Dataset(KB)을 결정하는 키입니다.
+    매핑에 없는 domain은 FAILED 처리됩니다 (fallback 금지).
+
+    Attributes:
+        POLICY: 사규/보안 정책 → "사내규정" dataset
+        EDUCATION: 일반 교육 → "정보보안교육" dataset
+        FOUR_MANDATORY: 4대 법정의무교육 → "법정의무교육" dataset
+    """
+    POLICY = "POLICY"
+    EDUCATION = "EDUCATION"
+    FOUR_MANDATORY = "FOUR_MANDATORY"
+
+
 # =============================================================================
 # Request Models (Spring → FastAPI)
 # =============================================================================

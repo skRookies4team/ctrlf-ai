@@ -97,11 +97,13 @@ class RagflowClient:
     USE_SEARCH_WRAPPER = True
 
     # dataset(도메인) → dataset_id 매핑 테이블 (Fallback)
-    # 실제 값은 .env의 MILVUS_DATASET_MAPPING에서 로드됨
+    # 실제 값은 .env의 RAGFLOW_DATASET_MAPPING에서 로드됨
     # 이 값은 settings 매핑이 없을 때의 기본값
+    # 주의: 매핑에 없는 domain은 None 반환 → 호출자가 FAILED 처리
     DATASET_TO_KB_ID: Dict[str, str] = {
         "POLICY": "사내규정",
-        "EDUCATION": "정보보안교육",  # 교육 도메인 대표값
+        "EDUCATION": "정보보안교육",
+        "FOUR_MANDATORY": "법정의무교육",  # 4대 법정의무교육
     }
 
     def __init__(
@@ -153,31 +155,40 @@ class RagflowClient:
             return {"Authorization": f"Bearer {self._api_key}"}
         return {}
 
-    def _dataset_to_kb_id(self, dataset: Optional[str]) -> str:
+    def _dataset_to_kb_id(self, dataset: Optional[str]) -> Optional[str]:
         """
         도메인(dataset)을 지식베이스 ID(dataset_id)로 변환합니다.
 
         Args:
-            dataset: 도메인 이름 (예: "POLICY", "INCIDENT", "EDUCATION")
-                     None이면 "POLICY"로 처리
+            dataset: 도메인 이름 (예: "POLICY", "EDUCATION", "FOUR_MANDATORY")
+                     None이거나 매핑에 없으면 None 반환
 
         Returns:
-            str: 해당 도메인의 dataset ID
+            Optional[str]: 해당 도메인의 dataset ID, 매핑 없으면 None
 
         Note:
             1. 먼저 settings의 RAGFLOW_DATASET_MAPPING에서 찾습니다 (소문자 키)
             2. 없으면 클래스 변수 DATASET_TO_KB_ID에서 찾습니다 (대문자 키)
-            3. 둘 다 없으면 POLICY 기본값 사용
+            3. 둘 다 없으면 None 반환 (fallback 금지 - 호출자가 FAILED 처리)
         """
-        key_lower = (dataset or "policy").lower()
-        key_upper = (dataset or "POLICY").upper()
+        if not dataset:
+            logger.warning("domain is None or empty, returning None")
+            return None
+
+        key_lower = dataset.lower()
+        key_upper = dataset.upper()
 
         # 1. settings 매핑에서 찾기 (우선)
         if key_lower in self._dataset_mapping:
             return self._dataset_mapping[key_lower]
 
-        # 2. 클래스 변수에서 찾기 (fallback)
-        return self.DATASET_TO_KB_ID.get(key_upper, self.DATASET_TO_KB_ID["POLICY"])
+        # 2. 클래스 변수에서 찾기
+        if key_upper in self.DATASET_TO_KB_ID:
+            return self.DATASET_TO_KB_ID[key_upper]
+
+        # 3. 매핑 없음 → None 반환 (fallback 금지)
+        logger.warning(f"No dataset mapping found for domain: {dataset}")
+        return None
 
     async def health(self) -> bool:
         """

@@ -187,54 +187,30 @@ async def test_retrieval_test_different_datasets() -> None:
 @pytest.mark.anyio
 async def test_retrieval_test_default_dataset() -> None:
     """
-    테스트 3: dataset이 None인 경우 기본값 POLICY 사용
+    테스트 3: dataset이 None인 경우 None 반환 (fallback 금지)
+
+    Phase 50 변경: 매핑에 없는 domain은 None 반환, fallback 금지
     """
-    captured_payload = {}
+    ragflow = RagflowClient(base_url="http://test-ragflow:8080")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_payload.update(json.loads(request.content))
-        return httpx.Response(
-            status_code=200,
-            json=create_mock_chunks_response([]),
-        )
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as client:
-        ragflow = RagflowClient(
-            base_url="http://test-ragflow:8080",
-            client=client,
-        )
-
-        await ragflow.search(query="test query", dataset=None)
-
-    assert captured_payload["kb_id"] == "사내규정"
+    # dataset=None이면 _dataset_to_kb_id()는 None 반환
+    result = ragflow._dataset_to_kb_id(None)
+    assert result is None
 
 
 @pytest.mark.anyio
-async def test_retrieval_test_unknown_dataset_fallback() -> None:
+async def test_retrieval_test_unknown_dataset_no_fallback() -> None:
     """
-    테스트 4: 알 수 없는 dataset인 경우 POLICY로 fallback
+    테스트 4: 알 수 없는 dataset인 경우 None 반환 (fallback 금지)
+
+    Phase 50 변경: 매핑에 없는 domain은 None 반환, fallback 금지
+    호출자(orchestrator 등)가 FAILED 처리해야 함
     """
-    captured_payload = {}
+    ragflow = RagflowClient(base_url="http://test-ragflow:8080")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured_payload.update(json.loads(request.content))
-        return httpx.Response(
-            status_code=200,
-            json=create_mock_chunks_response([]),
-        )
-
-    transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(transport=transport) as client:
-        ragflow = RagflowClient(
-            base_url="http://test-ragflow:8080",
-            client=client,
-        )
-
-        await ragflow.search(query="test", dataset="UNKNOWN_DOMAIN")
-
-    # Unknown dataset should fall back to POLICY
-    assert captured_payload["kb_id"] == "사내규정"
+    # Unknown dataset은 None 반환 (fallback 금지)
+    result = ragflow._dataset_to_kb_id("UNKNOWN_DOMAIN")
+    assert result is None
 
 
 # =============================================================================
@@ -445,23 +421,27 @@ async def test_retrieval_test_connection_error() -> None:
 def test_dataset_to_kb_id_helper() -> None:
     """
     테스트 11: _dataset_to_kb_id() 헬퍼 메서드 단위 테스트
+
+    Phase 50 변경: 매핑에 없는 domain은 None 반환 (fallback 금지)
     """
     ragflow = RagflowClient(base_url="http://test:8080")
 
     # 정상 매핑
     assert ragflow._dataset_to_kb_id("POLICY") == "사내규정"
     assert ragflow._dataset_to_kb_id("EDUCATION") == "정보보안교육"
+    assert ragflow._dataset_to_kb_id("FOUR_MANDATORY") == "법정의무교육"
 
     # 소문자 → 대문자 변환
     assert ragflow._dataset_to_kb_id("policy") == "사내규정"
     assert ragflow._dataset_to_kb_id("education") == "정보보안교육"
+    assert ragflow._dataset_to_kb_id("four_mandatory") == "법정의무교육"
 
-    # None → POLICY 기본값
-    assert ragflow._dataset_to_kb_id(None) == "사내규정"
+    # None → None 반환 (fallback 금지)
+    assert ragflow._dataset_to_kb_id(None) is None
 
-    # 알 수 없는 값 → POLICY fallback
-    assert ragflow._dataset_to_kb_id("UNKNOWN") == "사내규정"
-    assert ragflow._dataset_to_kb_id("") == "사내규정"
+    # 알 수 없는 값 → None 반환 (fallback 금지)
+    assert ragflow._dataset_to_kb_id("UNKNOWN") is None
+    assert ragflow._dataset_to_kb_id("") is None
 
 
 # =============================================================================
