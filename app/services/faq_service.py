@@ -248,10 +248,22 @@ class FaqDraftService:
         await self._check_output_pii(parsed)
 
         # 6. Phase 19-AI-3: LOW_RELEVANCE_CONTEXT 체크
+        # 설정에 따라 선택적 검증
+        settings = get_settings()
         status = parsed.get("status", "SUCCESS").upper()
         if status == "LOW_RELEVANCE":
-            logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
-            raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
+            if settings.FAQ_LOW_RELEVANCE_BLOCK:
+                # 차단 모드: 에러 발생
+                logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
+                raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
+            else:
+                # 경고 모드: 경고만 출력하고 계속 진행
+                logger.warning(
+                    f"Low relevance context detected but continuing "
+                    f"(cluster_id={req.cluster_id}, question='{req.canonical_question[:50]}...')"
+                )
+                # status를 SUCCESS로 강제 변경하여 FAQ 생성 허용
+                parsed["status"] = "SUCCESS"
 
         # 7. FaqDraft 생성 (Phase 19-AI-3 + Option 3)
         draft = self._create_faq_draft(req, parsed, context_docs, answer_source)

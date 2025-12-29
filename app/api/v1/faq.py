@@ -99,6 +99,7 @@ async def generate_faq_draft(
             - canonical_question: 대표 질문
             - sample_questions: 실제 직원 질문 예시들 (선택)
             - top_docs: RAG에서 뽑아온 후보 문서들 (선택)
+            - avg_intent_confidence: 평균 의도 신뢰도 (선택, 최소 0.7 필요)
 
     Returns:
         FaqDraftGenerateResponse: 생성 결과
@@ -110,6 +111,33 @@ async def generate_faq_draft(
         f"FAQ generate request: domain={request.domain}, "
         f"cluster_id={request.cluster_id}"
     )
+
+    # 의도 신뢰도 검증 (설정에 따라 선택적 검증)
+    settings = get_settings()
+    if request.avg_intent_confidence is not None:
+        threshold = settings.FAQ_INTENT_CONFIDENCE_THRESHOLD
+        if request.avg_intent_confidence < threshold:
+            if settings.FAQ_INTENT_CONFIDENCE_REQUIRED:
+                # 검증 필수 모드: 차단
+                error_msg = (
+                    f"의도 신뢰도가 부족합니다. "
+                    f"(현재: {request.avg_intent_confidence}, 최소 요구: {threshold})"
+                )
+                logger.warning(
+                    f"FAQ generation blocked: {error_msg}, "
+                    f"cluster_id={request.cluster_id}"
+                )
+                return FaqDraftGenerateResponse(
+                    status="FAILED",
+                    faq_draft=None,
+                    error_message=error_msg,
+                )
+            else:
+                # 경고만 출력하고 계속 진행
+                logger.warning(
+                    f"Low intent confidence detected: {request.avg_intent_confidence} < {threshold}, "
+                    f"but continuing (cluster_id={request.cluster_id})"
+                )
 
     service = get_faq_service()
 
@@ -157,6 +185,33 @@ async def _process_single_item(
     세마포어로 동시성을 제한하고, 예외를 개별적으로 처리합니다.
     """
     async with semaphore:
+        # 의도 신뢰도 검증 (설정에 따라 선택적 검증)
+        settings = get_settings()
+        if request.avg_intent_confidence is not None:
+            threshold = settings.FAQ_INTENT_CONFIDENCE_THRESHOLD
+            if request.avg_intent_confidence < threshold:
+                if settings.FAQ_INTENT_CONFIDENCE_REQUIRED:
+                    # 검증 필수 모드: 차단
+                    error_msg = (
+                        f"의도 신뢰도가 부족합니다. "
+                        f"(현재: {request.avg_intent_confidence}, 최소 요구: {threshold})"
+                    )
+                    logger.warning(
+                        f"FAQ batch item blocked: {error_msg}, "
+                        f"cluster_id={request.cluster_id}"
+                    )
+                    return FaqDraftGenerateResponse(
+                        status="FAILED",
+                        faq_draft=None,
+                        error_message=error_msg,
+                    )
+                else:
+                    # 경고만 출력하고 계속 진행
+                    logger.debug(
+                        f"Low intent confidence detected: {request.avg_intent_confidence} < {threshold}, "
+                        f"but continuing (cluster_id={request.cluster_id})"
+                    )
+
         try:
             draft = await service.generate_faq_draft(request)
             return FaqDraftGenerateResponse(
