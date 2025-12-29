@@ -21,6 +21,24 @@
 | Phase 48 | Low-relevance Gate + dataset_id 필터 | 완료 |
 | **Phase 49** | **도메인 라우팅 개선 + config 분리** | **완료** |
 
+> **참고**: 본 보고서의 내용은 [PERFORMANCE_IMPROVEMENT_REPORT_v5.md](./PERFORMANCE_IMPROVEMENT_REPORT_v5.md) v5.2에도 통합되어 있습니다.
+
+### 1.4 도메인 표기 규칙
+
+본 문서에서 사용하는 도메인 표기 규칙:
+
+| 표기 | 용도 | 설명 |
+|------|------|------|
+| `POLICY` | 필터/라우팅 정규 키 | Milvus 필터, RuleRouter 분류에 사용 |
+| `EDUCATION` | 필터/라우팅 정규 키 | Milvus 필터, RuleRouter 분류에 사용 |
+| `EDU` | 코드 내 표시값 (alias) | `RouterDomain.EDU`로 정의, 내부적으로 `EDUCATION`으로 정규화됨 |
+| `POLICY_QA`, `EDUCATION_QA` | 인텐트 타입 | `Tier0Intent` enum 값 |
+
+**정규화 흐름**:
+```
+RouterDomain.EDU → domain.upper() → "EDUCATION" → Milvus 필터 적용
+```
+
 ---
 
 ## 2. 문제 분석
@@ -270,6 +288,13 @@ def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
 ```
 
 **효과**: 환경변수 `RAG_EDUCATION_DATASET_IDS` 변경만으로 allowlist 수정 가능 (재배포 불필요)
+
+> **⚠️ 중요**: allowlist 값은 Milvus에 저장된 `dataset_id` 실제 값과 **정확히 일치**해야 합니다.
+> 불일치 시 필터 조건에 맞는 문서가 없어 검색 결과가 0이 될 수 있습니다.
+>
+> 예: Milvus에 `직장내성희롱교육`으로 저장된 경우 config에 `성희롱예방교육`으로 설정하면 매칭 실패
+>
+> **확인 방법**: 앱 시작 시 로그에서 `RAG_EDUCATION_DATASET_IDS` 값을 확인하고, Milvus 실제 데이터와 대조
 
 ---
 

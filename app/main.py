@@ -65,6 +65,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"LLM_MODEL_NAME: {settings.LLM_MODEL_NAME}")
     logger.info(f"RAGFLOW_BASE_URL: {settings.ragflow_base_url}")
 
+    # Phase 49: EDUCATION dataset_id allowlist 로깅 (운영 시 불일치 감지용)
+    from app.clients.milvus_client import get_education_dataset_ids
+    edu_dataset_ids = get_education_dataset_ids()
+    logger.info(f"RAG_EDUCATION_DATASET_IDS: {edu_dataset_ids}")
+    if not edu_dataset_ids:
+        logger.warning(
+            "RAG_EDUCATION_DATASET_IDS is empty! "
+            "EDUCATION domain filter will not work."
+        )
+
     # TODO: 향후 추가될 초기화 작업
     # - 데이터베이스 연결 풀 초기화
     # - 캐시 연결 (Redis 등)
