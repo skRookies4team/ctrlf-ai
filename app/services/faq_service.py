@@ -1,36 +1,20 @@
 """
-FAQ Draft Service (Phase 18 + Phase 19-AI-2 + Phase 19-AI-3 + Phase 19-AI-4 + Phase 20-AI-3/4 + Option 3)
+FAQ Draft Service (Phase 18+)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
-RAG + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
+Milvus + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
 
-Phase 19-AI-2 업데이트:
-- RagflowSearchClient 연동 (/v1/chunk/search)
-- NO_DOCS_FOUND 에러 처리
-- RAGFlow 검색 결과 기반 컨텍스트 구성
+Note:
+    RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
 
-Phase 19-AI-3 업데이트:
-- 프롬프트 템플릿 개선 (근거 기반 + 짧고 명확 + 마크다운)
-- answer_source: TOP_DOCS / RAGFLOW 구분
-- LOW_RELEVANCE_CONTEXT 실패 규칙 추가
-- 필드별 텍스트 출력 파싱 지원
-
-Phase 19-AI-4 업데이트:
-- PII 강차단: 입력/출력에 PII 검출 시 즉시 실패
-- PII_DETECTED: 입력(canonical_question, sample_questions, top_docs.snippet)에 PII 발견
-- PII_DETECTED_OUTPUT: LLM 출력(answer_markdown, summary)에 PII 발견
-
-Phase 20-AI-3 업데이트:
-- 컨텍스트 PII 방어: RAGFlow 검색 결과 snippet에 PII 검출 시 강차단
-- PII_DETECTED_CONTEXT: RAGFlow 스니펫에서 PII 발견
-
-Phase 20-AI-4 업데이트:
-- 품질 모니터링 로그: ai_confidence 기반 경고 로그
-
-Option 3 (B안) 업데이트:
-- MILVUS_ENABLED=true 시 Milvus 직접 검색 사용
+주요 기능:
 - MilvusSearchClient로 벡터 검색 + text 직접 조회
-- answer_source: MILVUS 추가
+- NO_DOCS_FOUND 에러 처리
+- 프롬프트 템플릿 (근거 기반 + 짧고 명확 + 마크다운)
+- answer_source: TOP_DOCS / MILVUS 구분
+- LOW_RELEVANCE_CONTEXT 실패 규칙
+- PII 강차단: 입력/출력/컨텍스트에 PII 검출 시 즉시 실패
+- 품질 모니터링 로그: ai_confidence 기반 경고 로그
 """
 
 import json
@@ -45,11 +29,6 @@ from app.clients.milvus_client import (
     MilvusSearchClient,
     MilvusSearchError,
     get_milvus_client,
-)
-from app.clients.ragflow_search_client import (
-    RagflowSearchClient,
-    RagflowSearchError,
-    RagflowConfigError,
 )
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -164,37 +143,35 @@ class FaqDraftService:
     """
     FAQ 초안 생성 서비스.
 
-    Phase 19-AI-3 업데이트:
-    - 프롬프트 템플릿 개선 (근거 기반)
-    - answer_source: TOP_DOCS / RAGFLOW 구분
+    Milvus 벡터 검색 + LLM을 사용하여 FAQ 초안을 생성합니다.
+
+    Note:
+        RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+
+    주요 기능:
+    - 프롬프트 템플릿 (근거 기반)
+    - answer_source: TOP_DOCS / MILVUS 구분
     - LOW_RELEVANCE_CONTEXT 실패 규칙
-
-    Phase 19-AI-4 업데이트:
     - PII 강차단: 입력/출력에 PII 검출 시 즉시 실패
-
-    Option 3 (B안) 업데이트:
-    - MILVUS_ENABLED=true 시 Milvus 직접 검색 사용
-    - answer_source: MILVUS 추가
     """
 
     def __init__(
         self,
-        search_client: Optional[RagflowSearchClient] = None,
         milvus_client: Optional[MilvusSearchClient] = None,
         llm_client: Optional[LLMClient] = None,
         pii_service: Optional[PiiService] = None,
     ) -> None:
-        settings = get_settings()
-        self._search_client = search_client or RagflowSearchClient()
-        self._milvus_client = milvus_client
-        self._milvus_enabled = settings.MILVUS_ENABLED
+        """
+        FaqDraftService 초기화.
+
+        Note:
+            RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+        """
+        self._milvus_client = milvus_client or get_milvus_client()
         self._llm = llm_client or LLMClient()
         self._pii_service = pii_service or PiiService()
 
-        if self._milvus_enabled:
-            logger.info("FaqDraftService: Milvus direct search enabled (Option 3)")
-            if self._milvus_client is None:
-                self._milvus_client = get_milvus_client()
+        logger.info("FaqDraftService: Milvus search enabled (RAGFlow removed)")
 
     async def generate_faq_draft(
         self,
@@ -291,15 +268,17 @@ class FaqDraftService:
 
         우선순위:
         1. request.top_docs가 비어있지 않으면 그대로 사용
-        2. MILVUS_ENABLED=true면 MilvusSearchClient 사용 (Option 3)
-        3. 그 외에는 RagflowSearchClient.search_chunks() 호출
+        2. MilvusSearchClient로 벡터 검색
+
+        Note:
+            RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
 
         Args:
             req: FAQ 초안 생성 요청
 
         Returns:
             Tuple[DocContext, str]: (문서 컨텍스트, 소스 타입)
-                소스 타입: "TOP_DOCS", "MILVUS", "RAGFLOW"
+                소스 타입: "TOP_DOCS", "MILVUS"
 
         Raises:
             FaqGenerationError: 검색 결과가 없는 경우 (NO_DOCS_FOUND)
@@ -309,27 +288,29 @@ class FaqDraftService:
             logger.info(f"Using {len(req.top_docs)} provided top_docs")
             return req.top_docs, "TOP_DOCS"
 
-        # 2. Option 3: Milvus 직접 검색
-        if self._milvus_enabled and self._milvus_client:
-            return await self._search_milvus(req)
-
-        # 3. Fallback: RAGFlow 검색
-        return await self._search_ragflow(req)
+        # 2. Milvus 검색
+        return await self._search_milvus(req)
 
     async def _search_milvus(
         self,
         req: FaqDraftGenerateRequest,
     ) -> Tuple[DocContext, str]:
         """
-        Option 3: Milvus에서 직접 벡터 검색 + text 조회.
+        Milvus에서 직접 벡터 검색 + text 조회.
+
+        Note:
+            RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
 
         Args:
             req: FAQ 초안 생성 요청
 
         Returns:
             Tuple[DocContext, str]: (문서 컨텍스트, "MILVUS")
+
+        Raises:
+            FaqGenerationError: 검색 실패 또는 결과 없음
         """
-        logger.info(f"Searching Milvus (Option 3) for: '{req.canonical_question[:50]}...'")
+        logger.info(f"Searching Milvus for: '{req.canonical_question[:50]}...'")
 
         try:
             # Milvus 벡터 검색 (text 포함)
@@ -340,13 +321,10 @@ class FaqDraftService:
             )
         except MilvusSearchError as e:
             logger.error(f"Milvus search error: {e}")
-            # Milvus 실패 시 RAGFlow로 폴백
-            logger.info("Falling back to RAGFlow search")
-            return await self._search_ragflow(req)
+            raise FaqGenerationError(f"Milvus 검색 실패: {str(e)}")
         except Exception as e:
             logger.error(f"Milvus unexpected error: {e}")
-            logger.info("Falling back to RAGFlow search")
-            return await self._search_ragflow(req)
+            raise FaqGenerationError(f"Milvus 검색 오류: {type(e).__name__}: {str(e)}")
 
         # 결과가 없으면 NO_DOCS_FOUND 에러
         if not results:
@@ -363,54 +341,12 @@ class FaqDraftService:
                 snippet=r.get("content", "")[:500],  # text → snippet
             ))
 
-        logger.info(f"Found {len(context_docs)} documents from Milvus search (Option 3)")
+        logger.info(f"Found {len(context_docs)} documents from Milvus search")
 
         # 컨텍스트 PII 검사
         await self._check_context_pii(context_docs, req.domain, req.cluster_id)
 
         return context_docs, "MILVUS"
-
-    async def _search_ragflow(
-        self,
-        req: FaqDraftGenerateRequest,
-    ) -> Tuple[DocContext, str]:
-        """
-        RAGFlow에서 검색.
-
-        Args:
-            req: FAQ 초안 생성 요청
-
-        Returns:
-            Tuple[DocContext, str]: (문서 컨텍스트, "RAGFLOW")
-        """
-        logger.info(f"Searching RAGFlow for: '{req.canonical_question[:50]}...'")
-
-        try:
-            results = await self._search_client.search_chunks(
-                query=req.canonical_question,
-                dataset=req.domain,
-                top_k=5,
-            )
-        except RagflowConfigError as e:
-            logger.error(f"RAGFlow config error: {e}")
-            raise FaqGenerationError(f"RAGFlow 설정 오류: {str(e)}")
-        except RagflowSearchError as e:
-            logger.error(f"RAGFlow search error: {e}")
-            raise FaqGenerationError(f"RAGFlow 검색 실패: {str(e)}")
-
-        # 결과가 없으면 NO_DOCS_FOUND 에러
-        if not results:
-            logger.warning(f"No documents found for query: '{req.canonical_question[:50]}...'")
-            raise FaqGenerationError("NO_DOCS_FOUND")
-
-        # RagSearchResult로 변환
-        context_docs = [RagSearchResult.from_chunk(chunk) for chunk in results]
-        logger.info(f"Found {len(context_docs)} documents from RAGFlow search")
-
-        # 컨텍스트 PII 검사
-        await self._check_context_pii(context_docs, req.domain, req.cluster_id)
-
-        return context_docs, "RAGFLOW"
 
     # =========================================================================
     # Phase 19-AI-3: LLM 메시지 구성
@@ -961,10 +897,10 @@ class FaqDraftService:
         self, source: Optional[str]
     ) -> str:
         """answer_source를 정규화합니다. (하위 호환용)"""
-        valid_sources = {"TOP_DOCS", "RAGFLOW", "MILVUS", "AI_RAG", "LOG_REUSE", "MIXED"}
+        valid_sources = {"TOP_DOCS", "MILVUS", "AI_RAG", "LOG_REUSE", "MIXED"}
         if source and source.upper() in valid_sources:
             return source.upper()
-        return "RAGFLOW"
+        return "MILVUS"
 
     def _normalize_confidence(
         self, confidence: Optional[float]

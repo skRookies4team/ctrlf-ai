@@ -15,7 +15,7 @@ os.environ["RAGFLOW_BASE_URL_MOCK"] = ""
 os.environ["LLM_BASE_URL_MOCK"] = ""
 os.environ["BACKEND_BASE_URL_MOCK"] = ""
 
-# Disable Milvus for unit tests (use FakeRagflowClient instead)
+# Disable Milvus for unit tests (no external services required)
 os.environ["MILVUS_ENABLED"] = "false"
 os.environ["RETRIEVAL_BACKEND"] = "ragflow"
 os.environ["CHAT_RETRIEVER_BACKEND"] = "ragflow"
@@ -57,11 +57,9 @@ def reset_singletons():
 
     # 테스트 후 정리
     from app.clients.llm_client import clear_llm_client
-    from app.clients.ragflow_client import clear_ragflow_client
     from app.services.pii_service import clear_pii_service
 
     clear_llm_client()
-    clear_ragflow_client()
     clear_pii_service()
     clear_settings_cache()
 

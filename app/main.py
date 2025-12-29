@@ -27,6 +27,7 @@ from app.api.v1 import (
     health,
     internal_rag,
     quiz_generate,
+    rag_documents,
     render_jobs,
     source_sets,
     ws_render_progress,
@@ -198,3 +199,8 @@ app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
 # - POST /internal/ai/source-sets/{sourceSetId}/start: 소스셋 처리 시작
 # - GET /internal/ai/source-sets/{sourceSetId}/status: 처리 상태 조회
 app.include_router(source_sets.router, tags=["SourceSet Orchestration"])
+
+# RAG Documents Ingest API (POLICY 문서 Ingest)
+# - POST /internal/ai/rag-documents/ingest: Backend → AI ingest 요청
+# - POST /internal/ai/callbacks/ragflow/ingest: RAGFlow → AI 콜백
+app.include_router(rag_documents.router, tags=["RAG Documents Ingest"])

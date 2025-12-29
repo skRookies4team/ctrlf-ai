@@ -5,7 +5,7 @@
 - /health: Liveness probe - 애플리케이션이 살아있는지 확인
 - /health/ready: Readiness probe - 트래픽을 받을 준비가 되었는지 확인
 
-Readiness 체크에서는 RAGFlow, LLM, Backend 서비스의 연결 상태를
+Readiness 체크에서는 LLM, Backend 서비스의 연결 상태를
 확인하여 전체적인 서비스 준비 상태를 반환합니다.
 """
 
@@ -16,7 +16,6 @@ from pydantic import BaseModel
 
 from app.clients.http_client import get_async_http_client
 from app.clients.llm_client import LLMClient
-from app.clients.ragflow_client import RagflowClient
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 
@@ -48,7 +47,6 @@ class ReadinessResponse(BaseModel):
     Attributes:
         ready: 서비스가 트래픽을 받을 준비가 되었는지 여부
         checks: 각 의존성 서비스의 상태
-            - ragflow: RAGFlow 서비스 상태 (설정된 경우에만)
             - llm: LLM 서비스 상태 (설정된 경우에만)
             - backend: Spring 백엔드 상태 (설정된 경우에만)
     """
@@ -109,12 +107,7 @@ async def readiness_check(
     """
     checks: Dict[str, bool] = {}
 
-    # Phase 9: mock/real 모드에 따라 자동으로 URL 선택됨
-    # RAGFlow 헬스체크
-    if settings.ragflow_base_url:
-        ragflow_client = RagflowClient()
-        rag_ok = await ragflow_client.health_check()
-        checks["ragflow"] = rag_ok
+    # RAGFlow 헬스체크 제거됨 (RAGFlow API 재개발 예정)
 
     # LLM 헬스체크
     if settings.llm_base_url:

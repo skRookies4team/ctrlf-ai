@@ -5,7 +5,6 @@ HTTP 클라이언트 모듈 (Clients Module)
 
 구성:
     - http_client: 공용 httpx.AsyncClient 싱글턴 관리
-    - ragflow_client: ctrlf-ragflow 서비스 연동 클라이언트
     - llm_client: LLM 서비스 연동 클라이언트
     - milvus_client: Milvus 벡터 검색 클라이언트 (Phase 24)
 """
@@ -24,12 +23,10 @@ from app.clients.milvus_client import (
     MilvusSearchError,
     EmbeddingError,
 )
-from app.clients.ragflow_client import RagflowClient
 
 __all__ = [
     "get_async_http_client",
     "close_async_http_client",
-    "RagflowClient",
     "LLMClient",
     # Phase 24: Milvus
     "MilvusSearchClient",

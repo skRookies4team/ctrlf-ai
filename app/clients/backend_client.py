@@ -83,6 +83,9 @@ BACKEND_SOURCE_SET_COMPLETE_PATH = "/internal/callbacks/source-sets/{source_set_
 BACKEND_CHUNK_BULK_UPSERT_PATH = "/internal/rag/documents/{document_id}/chunks:bulk"
 BACKEND_FAIL_CHUNK_BULK_UPSERT_PATH = "/internal/rag/documents/{document_id}/fail-chunks:bulk"
 
+# RAG 문서 상태 업데이트 (POLICY ingest 콜백 → Backend)
+BACKEND_RAG_DOCUMENT_STATUS_PATH = "/internal/rag/documents/{rag_document_pk}/status"
+
 
 # =============================================================================
 # Request/Response Models
@@ -297,6 +300,25 @@ class FailChunkBulkUpsertError(BackendClientError):
             error_code=error_code,
         )
         self.document_id = document_id
+
+
+class RAGDocumentStatusUpdateError(BackendClientError):
+    """RAG 문서 상태 업데이트 실패 예외."""
+
+    def __init__(
+        self,
+        rag_document_pk: str,
+        status_code: int,
+        message: str,
+        error_code: str = "RAG_DOCUMENT_STATUS_UPDATE_FAILED",
+    ):
+        super().__init__(
+            endpoint=f"/internal/rag/documents/{rag_document_pk}/status",
+            status_code=status_code,
+            message=message,
+            error_code=error_code,
+        )
+        self.rag_document_pk = rag_document_pk
 
 
 # =============================================================================
@@ -1534,6 +1556,155 @@ class BackendClient:
                 status_code=0,
                 message=f"Unexpected error: {str(e)[:200]}",
                 error_code="FAIL_CHUNK_UPSERT_FAILED",
+            )
+
+    # =========================================================================
+    # RAG 문서 상태 업데이트 (POLICY ingest 콜백 처리)
+    # =========================================================================
+
+    async def update_rag_document_status(
+        self,
+        rag_document_pk: str,
+        status: str,
+        document_id: str,
+        version: int,
+        processed_at: Optional[str] = None,
+        fail_reason: Optional[str] = None,
+    ) -> bool:
+        """RAG 문서 상태를 백엔드에 업데이트합니다.
+
+        PATCH /internal/rag/documents/{ragDocumentPk}/status
+
+        Args:
+            rag_document_pk: RAG 문서 PK (UUID)
+            status: 상태 (COMPLETED|FAILED)
+            document_id: 문서 ID
+            version: 문서 버전
+            processed_at: 처리 완료 시간 (ISO-8601)
+            fail_reason: 실패 사유 (status=FAILED인 경우)
+
+        Returns:
+            bool: 업데이트 성공 여부
+
+        Raises:
+            RAGDocumentStatusUpdateError: 업데이트 실패 시
+        """
+        if not self._base_url:
+            logger.warning(
+                "BACKEND_BASE_URL not configured, skipping RAG document status update"
+            )
+            return False
+
+        url = f"{self._base_url}/internal/rag/documents/{rag_document_pk}/status"
+        headers = self._get_internal_headers()
+
+        payload: Dict[str, Any] = {
+            "status": status,
+            "documentId": document_id,
+            "version": version,
+        }
+        if processed_at:
+            payload["processedAt"] = processed_at
+        if fail_reason:
+            payload["failReason"] = fail_reason
+
+        logger.info(
+            f"Updating RAG document status: rag_document_pk={rag_document_pk}, "
+            f"status={status}, document_id={document_id}, version={version}"
+        )
+
+        try:
+            if self._external_client:
+                response = await self._external_client.patch(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=self._timeout,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.patch(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self._timeout,
+                    )
+
+            if response.status_code == 401:
+                raise RAGDocumentStatusUpdateError(
+                    rag_document_pk=rag_document_pk,
+                    status_code=401,
+                    message="Unauthorized - invalid or missing token",
+                    error_code="RAG_STATUS_UPDATE_UNAUTHORIZED",
+                )
+            elif response.status_code == 403:
+                raise RAGDocumentStatusUpdateError(
+                    rag_document_pk=rag_document_pk,
+                    status_code=403,
+                    message="Forbidden",
+                    error_code="RAG_STATUS_UPDATE_FORBIDDEN",
+                )
+            elif response.status_code == 404:
+                raise RAGDocumentStatusUpdateError(
+                    rag_document_pk=rag_document_pk,
+                    status_code=404,
+                    message="RAG document not found on backend",
+                    error_code="RAG_DOCUMENT_NOT_FOUND",
+                )
+            elif response.status_code >= 500:
+                raise RAGDocumentStatusUpdateError(
+                    rag_document_pk=rag_document_pk,
+                    status_code=response.status_code,
+                    message=f"Backend server error: {response.text[:200]}",
+                    error_code="RAG_STATUS_UPDATE_SERVER_ERROR",
+                )
+            elif response.status_code not in (200, 204):
+                raise RAGDocumentStatusUpdateError(
+                    rag_document_pk=rag_document_pk,
+                    status_code=response.status_code,
+                    message=f"Unexpected status: {response.text[:200]}",
+                    error_code="RAG_STATUS_UPDATE_FAILED",
+                )
+
+            logger.info(
+                f"RAG document status updated: rag_document_pk={rag_document_pk}, "
+                f"status={status}"
+            )
+            return True
+
+        except RAGDocumentStatusUpdateError:
+            raise
+        except httpx.TimeoutException:
+            logger.error(
+                f"RAG document status update timeout: rag_document_pk={rag_document_pk}"
+            )
+            raise RAGDocumentStatusUpdateError(
+                rag_document_pk=rag_document_pk,
+                status_code=0,
+                message=f"Timeout after {self._timeout}s",
+                error_code="RAG_STATUS_UPDATE_TIMEOUT",
+            )
+        except httpx.RequestError as e:
+            logger.error(
+                f"RAG document status update network error: "
+                f"rag_document_pk={rag_document_pk}, error={e}"
+            )
+            raise RAGDocumentStatusUpdateError(
+                rag_document_pk=rag_document_pk,
+                status_code=0,
+                message=f"Network error: {str(e)[:200]}",
+                error_code="RAG_STATUS_UPDATE_NETWORK_ERROR",
+            )
+        except Exception as e:
+            logger.error(
+                f"RAG document status update error: "
+                f"rag_document_pk={rag_document_pk}, error={e}"
+            )
+            raise RAGDocumentStatusUpdateError(
+                rag_document_pk=rag_document_pk,
+                status_code=0,
+                message=f"Unexpected error: {str(e)[:200]}",
+                error_code="RAG_STATUS_UPDATE_FAILED",
             )
 
     # =========================================================================

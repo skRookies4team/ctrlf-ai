@@ -247,6 +247,15 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원
 
+    # =========================================================================
+    # OpenAI API 설정 (임베딩용)
+    # =========================================================================
+    # RAGFlow가 OpenAI text-embedding-3-large로 인덱싱한 경우,
+    # 검색 시에도 같은 모델로 쿼리 임베딩 필요
+    OPENAI_API_KEY: Optional[str] = None
+    OPENAI_EMBED_MODEL: str = "text-embedding-3-large"
+    OPENAI_EMBED_DIM: int = 3072
+
     # Milvus 인증 (선택, 보안 설정된 Milvus 서버 사용 시)
     MILVUS_USER: Optional[str] = None
     MILVUS_PASSWORD: Optional[str] = None
@@ -381,7 +390,13 @@ class Settings(BaseSettings):
     # 이후 TTS/렌더/업로드는 이 스냅샷만 사용 (편집 후에도 기존 잡은 영향 없음)
 
     # 백엔드 내부 API 인증 토큰 (X-Internal-Token 헤더)
+    # Backend → AI 요청 시 사용 (예: /internal/ai/rag-documents/ingest)
     BACKEND_INTERNAL_TOKEN: Optional[str] = None
+
+    # RAGFlow 콜백 전용 인증 토큰 (X-Internal-Token 헤더)
+    # RAGFlow → AI 콜백 요청 시 사용 (예: /internal/ai/callbacks/ragflow/ingest)
+    # 보안: Backend 토큰과 분리하여 토큰 유출 시 피해 범위 제한
+    RAGFLOW_CALLBACK_TOKEN: Optional[str] = None
 
     # 백엔드 API 타임아웃 (초)
     BACKEND_TIMEOUT_SEC: float = 30.0

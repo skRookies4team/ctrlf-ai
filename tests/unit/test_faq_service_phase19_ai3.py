@@ -35,8 +35,8 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def mock_search_client():
-    """테스트용 RagflowSearchClient mock"""
+def mock_milvus_client():
+    """테스트용 MilvusSearchClient mock"""
     return AsyncMock()
 
 
@@ -75,10 +75,10 @@ def sample_top_docs() -> list[FaqSourceDoc]:
 class TestFieldTextParsing:
     """필드별 텍스트 형식 파싱 테스트"""
 
-    def test_parse_field_text_format_success(self, mock_search_client):
+    def test_parse_field_text_format_success(self, mock_milvus_client):
         """정상적인 필드별 텍스트 파싱"""
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=MagicMock(),
         )
 
@@ -104,10 +104,10 @@ ai_confidence: 0.92"""
         assert "이월" in result["answer_markdown"]
         assert result["ai_confidence"] == 0.92
 
-    def test_parse_field_text_format_low_relevance(self, mock_search_client):
+    def test_parse_field_text_format_low_relevance(self, mock_milvus_client):
         """LOW_RELEVANCE status 파싱"""
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=MagicMock(),
         )
 
@@ -123,10 +123,10 @@ ai_confidence: 0.15"""
         assert result["status"] == "LOW_RELEVANCE"
         assert result["ai_confidence"] == 0.15
 
-    def test_parse_llm_response_prefers_field_text(self, mock_search_client):
+    def test_parse_llm_response_prefers_field_text(self, mock_milvus_client):
         """필드별 텍스트가 JSON보다 우선"""
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=MagicMock(),
         )
 
@@ -153,10 +153,10 @@ ai_confidence: 0.85"""
 class TestJsonBackwardsCompatibility:
     """JSON 형식 하위 호환 테스트"""
 
-    def test_parse_json_format(self, mock_search_client):
+    def test_parse_json_format(self, mock_milvus_client):
         """JSON 형식 파싱"""
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=MagicMock(),
         )
 
@@ -172,10 +172,10 @@ class TestJsonBackwardsCompatibility:
         assert result["question"] == "연차휴가 이월 규정은?"
         assert result["ai_confidence"] == 0.9
 
-    def test_parse_json_in_code_block(self, mock_search_client):
+    def test_parse_json_in_code_block(self, mock_milvus_client):
         """코드 블록 내 JSON 파싱"""
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=MagicMock(),
         )
 
@@ -203,7 +203,7 @@ class TestLowRelevanceContext:
 
     @pytest.mark.anyio
     async def test_low_relevance_raises_error_when_block_enabled(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """LOW_RELEVANCE status + FAQ_LOW_RELEVANCE_BLOCK=True일 때 에러 발생"""
         sample_request.top_docs = sample_top_docs
@@ -217,7 +217,7 @@ answer_markdown: |
 ai_confidence: 0.2""")
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
         )
 
@@ -234,7 +234,7 @@ ai_confidence: 0.2""")
 
     @pytest.mark.anyio
     async def test_low_relevance_continues_when_block_disabled(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """LOW_RELEVANCE status + FAQ_LOW_RELEVANCE_BLOCK=False일 때 경고만 출력하고 계속 진행"""
         sample_request.top_docs = sample_top_docs
@@ -248,7 +248,7 @@ answer_markdown: |
 ai_confidence: 0.2""")
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
         )
 
@@ -266,7 +266,7 @@ ai_confidence: 0.2""")
 
 
 # =============================================================================
-# 테스트: answer_source TOP_DOCS / RAGFLOW 구분
+# 테스트: answer_source TOP_DOCS / MILVUS 구분
 # =============================================================================
 
 
@@ -275,7 +275,7 @@ class TestAnswerSource:
 
     @pytest.mark.anyio
     async def test_answer_source_top_docs(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """top_docs 사용 시 answer_source=TOP_DOCS"""
         sample_request.top_docs = sample_top_docs
@@ -291,7 +291,7 @@ answer_markdown: |
 ai_confidence: 0.9""")
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
         )
 
@@ -301,9 +301,9 @@ ai_confidence: 0.9""")
         assert draft.source_doc_id == "doc-001"
 
     @pytest.mark.anyio
-    async def test_answer_source_ragflow(self, mock_search_client, sample_request):
-        """RAGFlow 검색 시 answer_source=RAGFLOW"""
-        mock_search_client.search_chunks = AsyncMock(return_value=[
+    async def test_answer_source_milvus(self, mock_milvus_client, sample_request):
+        """Milvus 검색 시 answer_source=MILVUS"""
+        mock_milvus_client.search = AsyncMock(return_value=[
             {"document_name": "test.pdf", "page_num": 5, "similarity": 0.9, "content": "테스트 내용"}
         ])
 
@@ -317,13 +317,13 @@ answer_markdown: |
 ai_confidence: 0.85""")
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
         )
 
         draft = await service.generate_faq_draft(sample_request)
 
-        assert draft.answer_source == "RAGFLOW"
+        assert draft.answer_source == "MILVUS"
         assert draft.source_doc_id is None
 
 
@@ -337,7 +337,7 @@ class TestSummaryLimit:
 
     @pytest.mark.anyio
     async def test_summary_truncated_to_120_chars(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """120자 초과 summary 잘림"""
         sample_request.top_docs = sample_top_docs
@@ -353,7 +353,7 @@ answer_markdown: |
 ai_confidence: 0.9""")
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
         )
 
@@ -364,7 +364,7 @@ ai_confidence: 0.9""")
 
     @pytest.mark.anyio
     async def test_summary_under_120_not_truncated(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """120자 이하 summary는 그대로"""
         sample_request.top_docs = sample_top_docs
@@ -380,7 +380,7 @@ answer_markdown: |
 ai_confidence: 0.9""")
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
         )
 
@@ -397,7 +397,7 @@ ai_confidence: 0.9""")
 class TestPromptTemplate:
     """프롬프트 템플릿 테스트"""
 
-    def test_system_prompt_contains_key_instructions(self, mock_search_client):
+    def test_system_prompt_contains_key_instructions(self, mock_milvus_client):
         """SYSTEM 프롬프트에 핵심 지침 포함"""
         from app.services.faq_service import SYSTEM_PROMPT
 
@@ -407,11 +407,11 @@ class TestPromptTemplate:
         assert "120자" in SYSTEM_PROMPT
 
     def test_build_llm_messages_structure(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """LLM 메시지 구조 확인"""
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=MagicMock(),
         )
 

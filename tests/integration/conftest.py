@@ -27,7 +27,6 @@ IS_CI = os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "t
 
 REQUIRED_ENV_VARS = {
     "LLM_BASE_URL": "LLM 서비스 URL",
-    "RAGFLOW_BASE_URL": "RAGFlow 서비스 URL",
 }
 
 OPTIONAL_ENV_VARS = {
@@ -104,11 +103,9 @@ def reset_singletons():
     """각 테스트 후 싱글톤 인스턴스를 정리합니다."""
     yield
     from app.clients.llm_client import clear_llm_client
-    from app.clients.ragflow_client import clear_ragflow_client
     from app.services.pii_service import clear_pii_service
 
     clear_llm_client()
-    clear_ragflow_client()
     clear_pii_service()
 
 
@@ -152,22 +149,3 @@ async def check_llm_health():
 
     return True
 
-
-@pytest.fixture(scope="session")
-async def check_ragflow_health():
-    """RAGFlow 서비스 헬스체크."""
-    import httpx
-
-    base_url = os.environ.get("RAGFLOW_BASE_URL")
-    if not base_url:
-        pytest.skip("RAGFLOW_BASE_URL not set")
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(f"{base_url}/api/health", timeout=10.0)
-            if response.status_code >= 500:
-                pytest.fail(f"RAGFlow service unhealthy: {response.status_code}")
-        except httpx.ConnectError as e:
-            pytest.fail(f"Cannot connect to RAGFlow service: {e}")
-
-    return True

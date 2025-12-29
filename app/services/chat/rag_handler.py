@@ -31,7 +31,6 @@ Phase 48: Low-relevance Gate
 import re
 from typing import List, Literal, Optional, Tuple
 
-from app.clients.ragflow_client import RagflowClient
 
 
 # =============================================================================
@@ -444,41 +443,41 @@ class RagHandler:
     - retriever_used 필드로 실제 사용된 검색 엔진 추적
 
     Attributes:
-        _ragflow: RAGFlow 검색 클라이언트
-        _milvus: Milvus 검색 클라이언트 (Optional)
+        _milvus: Milvus 검색 클라이언트
         _use_milvus: Milvus 사용 여부
+    
+    Note:
+        RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
     """
 
     def __init__(
         self,
-        ragflow_client: RagflowClient,
         milvus_client: Optional[MilvusSearchClient] = None,
     ) -> None:
         """
         RagHandler 초기화.
 
         Args:
-            ragflow_client: RAGFlow 검색 클라이언트
             milvus_client: Milvus 검색 클라이언트 (선택, None이면 자동 생성)
+        
+        Note:
+            RAGFlow 클라이언트는 제거되었습니다 (재개발 예정).
+            MILVUS_ENABLED=True 필수.
         """
-        self._ragflow = ragflow_client
         self._settings = get_settings()
 
-        # Milvus 클라이언트 초기화 (CHAT_RETRIEVER_BACKEND=milvus 시)
-        self._use_milvus = (
-            self._settings.chat_retriever_backend == "milvus"
-            and self._settings.MILVUS_ENABLED
-        )
+        # Milvus 클라이언트 초기화
+        self._use_milvus = self._settings.MILVUS_ENABLED
 
         if self._use_milvus:
             self._milvus = milvus_client or get_milvus_client()
             logger.info(
-                f"RagHandler initialized with Milvus (CHAT_RETRIEVER_BACKEND={self._settings.chat_retriever_backend})"
+                f"RagHandler initialized with Milvus"
             )
         else:
             self._milvus = None
-            logger.info(
-                f"RagHandler initialized with RAGFlow only (CHAT_RETRIEVER_BACKEND={self._settings.chat_retriever_backend})"
+            logger.warning(
+                "RagHandler: MILVUS_ENABLED=False, RAG search unavailable (RAGFlow removed)"
             )
 
     async def perform_search(
@@ -667,91 +666,21 @@ class RagHandler:
         request_id: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
-        RAGFlow만 사용하여 검색합니다.
+        RAGFlow 검색 (제거됨).
 
-        Phase 44: 2nd-chance retrieval 적용
-        Phase 45: Similarity 분포 로깅
+        RAGFlow 클라이언트가 제거되었으므로 항상 에러를 발생시킵니다.
+        MILVUS_ENABLED=True로 설정하여 Milvus를 사용하세요.
 
-        Returns:
-            Tuple[List[ChatSource], bool, RetrieverUsed]
+        Raises:
+            RagSearchUnavailableError: 항상 발생
         """
-        settings = self._settings
-
-        try:
-            # Phase 44: 1차 검색 (top_k=5)
-            sources = await self._ragflow.search_as_sources(
-                query=query,
-                domain=domain,
-                user_role=req.user_role,
-                department=req.department,
-                top_k=DEFAULT_TOP_K,
-            )
-
-            logger.info(f"RAGFlow 1st search returned {len(sources)} sources (top_k={DEFAULT_TOP_K})")
-
-            # Phase 45: 1차 검색 similarity 분포 로깅
-            log_similarity_distribution(
-                sources=sources,
-                search_stage="1st_search",
-                query_preview=query,
-                domain=domain,
-            )
-
-            # Phase 44: 2nd-chance retrieval - 0건이면 top_k 올려서 재시도
-            if not sources:
-                logger.info(
-                    f"2nd-chance retrieval: 0 results, retrying with top_k={RETRY_TOP_K}"
-                )
-                sources = await self._ragflow.search_as_sources(
-                    query=query,
-                    domain=domain,
-                    user_role=req.user_role,
-                    department=req.department,
-                    top_k=RETRY_TOP_K,
-                )
-                logger.info(
-                    f"RAGFlow 2nd-chance search returned {len(sources)} sources (top_k={RETRY_TOP_K})"
-                )
-
-                # Phase 45: 2nd-chance 검색 similarity 분포 로깅
-                log_similarity_distribution(
-                    sources=sources,
-                    search_stage="2nd_chance",
-                    query_preview=query,
-                    domain=domain,
-                )
-
-                if not sources:
-                    logger.warning(
-                        f"RAGFlow 2nd-chance also returned no results for query: {query[:50]}..."
-                    )
-
-            # 컨텍스트 길이 제한 적용
-            sources = self._truncate_context(sources)
-
-            logger.info(
-                f"RAGFlow search returned {len(sources)} sources (retriever_used=RAGFLOW)"
-            )
-
-            # 디버그 로그: retrieval_top5
-            if request_id:
-                self._log_retrieval_top5(request_id, sources)
-
-            return sources, False, "RAGFLOW"
-
-        except UpstreamServiceError as e:
-            logger.error(f"RAGFlow search failed with UpstreamServiceError: {e}")
-            metrics.increment_error(LOG_TAG_RAG_ERROR)
-            raise RagSearchUnavailableError(
-                f"RAG 검색 서비스 장애: {e.message}"
-            ) from e
-
-        except Exception as e:
-            logger.exception(f"RAGFlow search failed: {e}")
-            metrics.increment_error(LOG_TAG_RAG_ERROR)
-            raise RagSearchUnavailableError(
-                f"RAG 검색 서비스 장애: {type(e).__name__}"
-            ) from e
+        logger.error(
+            "RAGFlow search called but RAGFlow client has been removed. "
+            "Please enable Milvus (MILVUS_ENABLED=True)."
+        )
+        raise RagSearchUnavailableError(
+            "RAGFlow 클라이언트가 제거되었습니다. MILVUS_ENABLED=True로 설정하세요."
+        )
 
     def _truncate_context(self, sources: List[ChatSource]) -> List[ChatSource]:
         """

@@ -28,17 +28,40 @@ from app.models.chat import ChatSource
 
 @pytest.fixture
 def mock_settings():
-    """테스트용 Settings 모킹."""
+    """테스트용 Settings 모킹 (vLLM 사용 시나리오)."""
     with patch("app.clients.milvus_client.get_settings") as mock:
         settings = MagicMock()
         settings.MILVUS_HOST = "localhost"
         settings.MILVUS_PORT = 19530
         settings.MILVUS_COLLECTION_NAME = "test_collection"
         settings.llm_base_url = "http://localhost:8001"
+        settings.embedding_base_url = "http://localhost:8001"
         settings.EMBEDDING_MODEL_NAME = "test-embedding-model"
         settings.EMBEDDING_DIMENSION = 1024
         settings.MILVUS_TOP_K = 5
         settings.MILVUS_SEARCH_PARAMS = '{"metric_type": "COSINE", "params": {"nprobe": 10}}'
+        # OpenAI API 미사용 (vLLM 서버 사용)
+        settings.OPENAI_API_KEY = None
+        settings.OPENAI_EMBED_MODEL = None
+        settings.OPENAI_EMBED_DIM = None
+        mock.return_value = settings
+        yield settings
+
+
+@pytest.fixture
+def mock_settings_openai():
+    """테스트용 Settings 모킹 (OpenAI 사용 시나리오)."""
+    with patch("app.clients.milvus_client.get_settings") as mock:
+        settings = MagicMock()
+        settings.MILVUS_HOST = "localhost"
+        settings.MILVUS_PORT = 19530
+        settings.MILVUS_COLLECTION_NAME = "test_collection"
+        settings.MILVUS_TOP_K = 5
+        settings.MILVUS_SEARCH_PARAMS = '{"metric_type": "COSINE", "params": {"nprobe": 10}}'
+        # OpenAI API 사용 (실제 .env 설정 반영)
+        settings.OPENAI_API_KEY = "sk-test-key"
+        settings.OPENAI_EMBED_MODEL = "text-embedding-3-large"
+        settings.OPENAI_EMBED_DIM = 3072
         mock.return_value = settings
         yield settings
 
@@ -75,19 +98,33 @@ def mock_embedding_response():
 class TestMilvusSearchClientInit:
     """MilvusSearchClient 초기화 테스트."""
 
-    def test_init_with_defaults(self, mock_settings):
-        """기본 설정으로 초기화 테스트."""
+    def test_init_with_defaults_vllm(self, mock_settings):
+        """vLLM 기본 설정으로 초기화 테스트 (OPENAI_API_KEY=None)."""
         client = MilvusSearchClient()
 
         assert client._host == "localhost"
         assert client._port == 19530
         assert client._collection_name == "test_collection"
         assert client._embedding_model == "test-embedding-model"
+        assert client._llm_base_url == "http://localhost:8001"
         assert client._connected is False
         assert client._collection is None
 
+    def test_init_with_defaults_openai(self, mock_settings_openai):
+        """OpenAI 기본 설정으로 초기화 테스트 (OPENAI_API_KEY 설정됨)."""
+        client = MilvusSearchClient()
+
+        assert client._host == "localhost"
+        assert client._port == 19530
+        assert client._collection_name == "test_collection"
+        # OpenAI 사용 시 설정 반영
+        assert client._embedding_model == "text-embedding-3-large"
+        assert client._llm_base_url == "https://api.openai.com"
+        assert client._embedding_dim == 3072
+        assert client._connected is False
+
     def test_init_with_custom_values(self, mock_settings):
-        """커스텀 값으로 초기화 테스트."""
+        """커스텀 값으로 초기화 테스트 (vLLM 모드에서만 커스텀 가능)."""
         client = MilvusSearchClient(
             host="custom-host",
             port=19999,

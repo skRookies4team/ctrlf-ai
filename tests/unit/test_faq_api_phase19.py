@@ -2,8 +2,8 @@
 Phase 19 FAQ API 통합 테스트
 
 Phase 19-AI-5 요구사항에 따른 API 레벨 테스트:
-1. top_docs 제공 시: RagflowSearchClient 호출 없이 성공 응답
-2. top_docs 미제공 시: search_chunks 호출, answer_source="RAGFLOW"
+1. top_docs 제공 시: MilvusSearchClient 호출 없이 성공 응답
+2. top_docs 미제공 시: search 호출, answer_source="MILVUS"
 3. top_docs 미제공 + search 결과 0개: status="FAILED", error_message="NO_DOCS_FOUND"
 4. 입력에 PII 포함: status="FAILED", error_message="PII_DETECTED"
 5. 출력에 PII 포함: status="FAILED", error_message="PII_DETECTED_OUTPUT"
@@ -20,7 +20,7 @@ from app.main import app
 from app.models.faq import FaqDraft, FaqDraftGenerateRequest, FaqSourceDoc
 from app.models.intent import MaskingStage, PiiMaskResult, PiiTag
 from app.services.faq_service import FaqDraftService, FaqGenerationError
-from app.clients.ragflow_search_client import RagflowSearchError, RagflowConfigError
+from app.clients.milvus_client import MilvusSearchError
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def test_client() -> TestClient:
 
 
 # =============================================================================
-# 1. top_docs 제공 시: RagflowSearchClient 호출 없이 성공 응답
+# 1. top_docs 제공 시: MilvusSearchClient 호출 없이 성공 응답
 # =============================================================================
 
 
@@ -38,7 +38,7 @@ class TestTopDocsProvided:
     """top_docs 제공 시 테스트"""
 
     def test_api_with_top_docs_success(self, test_client: TestClient):
-        """top_docs 제공 시 RAGFlow 호출 없이 성공"""
+        """top_docs 제공 시 Milvus 호출 없이 성공"""
         from app.api.v1 import faq as faq_module
 
         # Mock: 성공적인 FAQ Draft 반환
@@ -90,10 +90,10 @@ class TestTopDocsProvided:
             faq_module._faq_service = None
 
     @pytest.mark.anyio
-    async def test_service_with_top_docs_no_ragflow_call(self):
-        """top_docs 제공 시 RagflowSearchClient가 호출되지 않음"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock()  # 호출되면 안됨
+    async def test_service_with_top_docs_no_milvus_call(self):
+        """top_docs 제공 시 MilvusSearchClient가 호출되지 않음"""
+        mock_milvus = MagicMock()
+        mock_milvus.search = AsyncMock()  # 호출되면 안됨
 
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(return_value="""status: SUCCESS
@@ -109,7 +109,7 @@ ai_confidence: 0.9""")
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -125,13 +125,13 @@ ai_confidence: 0.9""")
 
         draft = await service.generate_faq_draft(request)
 
-        # RagflowSearchClient가 호출되지 않아야 함
-        mock_search.search_chunks.assert_not_called()
+        # MilvusSearchClient가 호출되지 않아야 함
+        mock_milvus.search.assert_not_called()
         assert draft.answer_source == "TOP_DOCS"
 
 
 # =============================================================================
-# 2. top_docs 미제공 시: search_chunks 호출, answer_source="RAGFLOW"
+# 2. top_docs 미제공 시: search 호출, answer_source="MILVUS"
 # =============================================================================
 
 
@@ -139,10 +139,10 @@ class TestTopDocsNotProvided:
     """top_docs 미제공 시 테스트"""
 
     @pytest.mark.anyio
-    async def test_ragflow_search_called_and_answer_source_ragflow(self):
-        """top_docs 없을 때 RAGFlow 검색 호출, answer_source=RAGFLOW"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock(return_value=[
+    async def test_milvus_search_called_and_answer_source_milvus(self):
+        """top_docs 없을 때 Milvus 검색 호출, answer_source=MILVUS"""
+        mock_milvus = MagicMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {"document_name": "test.pdf", "page_num": 5, "similarity": 0.9, "content": "테스트 내용"}
         ])
 
@@ -160,7 +160,7 @@ ai_confidence: 0.85""")
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -174,10 +174,10 @@ ai_confidence: 0.85""")
 
         draft = await service.generate_faq_draft(request)
 
-        # RagflowSearchClient.search_chunks가 호출되어야 함
-        mock_search.search_chunks.assert_called_once()
-        # answer_source가 RAGFLOW여야 함
-        assert draft.answer_source == "RAGFLOW"
+        # MilvusSearchClient.search가 호출되어야 함
+        mock_milvus.search.assert_called_once()
+        # answer_source가 MILVUS여야 함
+        assert draft.answer_source == "MILVUS"
         # source_doc_id는 null
         assert draft.source_doc_id is None
 
@@ -226,8 +226,8 @@ class TestNoDocsFound:
     @pytest.mark.anyio
     async def test_service_no_docs_found_raises_error(self):
         """검색 결과 0개 시 FaqGenerationError 발생"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock(return_value=[])  # 빈 결과
+        mock_milvus = MagicMock()
+        mock_milvus.search = AsyncMock(return_value=[])  # 빈 결과
 
         mock_llm = MagicMock()
         mock_pii = MagicMock()
@@ -236,7 +236,7 @@ class TestNoDocsFound:
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -298,7 +298,7 @@ class TestInputPiiDetected:
     @pytest.mark.anyio
     async def test_service_pii_detected_in_input(self):
         """입력 PII 검출 시 FaqGenerationError 발생"""
-        mock_search = MagicMock()
+        mock_milvus = MagicMock()
         mock_llm = MagicMock()
 
         # PII 검출 mock
@@ -311,7 +311,7 @@ class TestInputPiiDetected:
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -375,8 +375,8 @@ class TestOutputPiiDetected:
     @pytest.mark.anyio
     async def test_service_pii_detected_in_output(self):
         """출력 PII 검출 시 FaqGenerationError 발생"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock(return_value=[
+        mock_milvus = MagicMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {"document_name": "test.pdf", "similarity": 0.9, "content": "테스트"}
         ])
 
@@ -406,7 +406,7 @@ ai_confidence: 0.9""")
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -425,20 +425,20 @@ ai_confidence: 0.9""")
 
 
 # =============================================================================
-# 6. timeout/5xx 발생 시: RAGFlow 에러
+# 6. timeout/5xx 발생 시: Milvus 에러
 # =============================================================================
 
 
-class TestRagflowErrors:
-    """RAGFlow 에러 테스트"""
+class TestMilvusErrors:
+    """Milvus 에러 테스트"""
 
-    def test_api_ragflow_timeout_error(self, test_client: TestClient):
-        """RAGFlow 타임아웃 시 API 응답"""
+    def test_api_milvus_timeout_error(self, test_client: TestClient):
+        """Milvus 타임아웃 시 API 응답"""
         from app.api.v1 import faq as faq_module
 
         mock_service = MagicMock()
         mock_service.generate_faq_draft = AsyncMock(
-            side_effect=FaqGenerationError("RAGFlow 검색 실패: timeout")
+            side_effect=FaqGenerationError("Milvus 검색 실패: timeout")
         )
 
         original_fn = faq_module.get_faq_service
@@ -458,7 +458,7 @@ class TestRagflowErrors:
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "FAILED"
-            assert "RAGFlow" in data["error_message"] or "검색 실패" in data["error_message"]
+            assert "Milvus" in data["error_message"] or "검색 실패" in data["error_message"]
             assert data["faq_draft"] is None
 
         finally:
@@ -466,11 +466,11 @@ class TestRagflowErrors:
             faq_module._faq_service = None
 
     @pytest.mark.anyio
-    async def test_service_ragflow_5xx_error(self):
-        """RAGFlow 5xx 에러 시 FaqGenerationError 발생"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock(
-            side_effect=RagflowSearchError("Internal Server Error", 500)
+    async def test_service_milvus_5xx_error(self):
+        """Milvus 5xx 에러 시 FaqGenerationError 발생"""
+        mock_milvus = MagicMock()
+        mock_milvus.search = AsyncMock(
+            side_effect=MilvusSearchError("Internal Server Error")
         )
 
         mock_llm = MagicMock()
@@ -480,7 +480,7 @@ class TestRagflowErrors:
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -497,38 +497,6 @@ class TestRagflowErrors:
 
         assert "검색 실패" in str(exc_info.value)
 
-    @pytest.mark.anyio
-    async def test_service_ragflow_config_error(self):
-        """RAGFlow 설정 오류 시 FaqGenerationError 발생"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock(
-            side_effect=RagflowConfigError("Missing API key")
-        )
-
-        mock_llm = MagicMock()
-        mock_pii = MagicMock()
-        mock_pii.detect_and_mask = AsyncMock(return_value=PiiMaskResult(
-            original_text="", masked_text="", has_pii=False, tags=[]
-        ))
-
-        service = FaqDraftService(
-            search_client=mock_search,
-            llm_client=mock_llm,
-            pii_service=mock_pii,
-        )
-
-        request = FaqDraftGenerateRequest(
-            cluster_id="cluster-001",
-            domain="POLICY",
-            canonical_question="테스트 질문",
-            top_docs=[],
-        )
-
-        with pytest.raises(FaqGenerationError) as exc_info:
-            await service.generate_faq_draft(request)
-
-        assert "설정 오류" in str(exc_info.value)
-
 
 # =============================================================================
 # Phase 19 전체 플로우 테스트
@@ -541,7 +509,7 @@ class TestPhase19FullFlow:
     @pytest.mark.anyio
     async def test_full_flow_with_top_docs(self):
         """top_docs 제공 시 전체 플로우"""
-        mock_search = MagicMock()
+        mock_milvus = MagicMock()
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(return_value="""status: SUCCESS
 question: USB 반출 시 절차는?
@@ -563,7 +531,7 @@ ai_confidence: 0.92""")
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -595,14 +563,14 @@ ai_confidence: 0.92""")
         assert draft.ai_confidence == 0.92
         assert "정보보호팀" in draft.answer_markdown
 
-        # RAGFlow 호출 안됨
-        mock_search.search_chunks.assert_not_called()
+        # Milvus 호출 안됨
+        mock_milvus.search.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_full_flow_with_ragflow_search(self):
-        """RAGFlow 검색 사용 시 전체 플로우"""
-        mock_search = MagicMock()
-        mock_search.search_chunks = AsyncMock(return_value=[
+    async def test_full_flow_with_milvus_search(self):
+        """Milvus 검색 사용 시 전체 플로우"""
+        mock_milvus = MagicMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {
                 "document_name": "연차휴가규정.pdf",
                 "page_num": 10,
@@ -632,7 +600,7 @@ ai_confidence: 0.95""")
         ))
 
         service = FaqDraftService(
-            search_client=mock_search,
+            milvus_client=mock_milvus,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -642,7 +610,7 @@ ai_confidence: 0.95""")
             domain="POLICY",
             canonical_question="연차휴가는 이월 가능한가요?",
             sample_questions=["연차 이월 되나요?", "작년 연차 올해 사용 가능?"],
-            top_docs=[],  # 빈 리스트 → RAGFlow 검색
+            top_docs=[],  # 빈 리스트 → Milvus 검색
         )
 
         draft = await service.generate_faq_draft(request)
@@ -650,9 +618,9 @@ ai_confidence: 0.95""")
         # 검증
         assert draft.faq_draft_id is not None
         assert draft.domain == "POLICY"
-        assert draft.answer_source == "RAGFLOW"
-        assert draft.source_doc_id is None  # RAGFlow 검색은 source_doc_id 없음
+        assert draft.answer_source == "MILVUS"
+        assert draft.source_doc_id is None  # Milvus 검색은 source_doc_id 없음
         assert draft.ai_confidence == 0.95
 
-        # RAGFlow 호출됨
-        mock_search.search_chunks.assert_called_once()
+        # Milvus 호출됨
+        mock_milvus.search.assert_called_once()
