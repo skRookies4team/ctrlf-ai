@@ -187,9 +187,9 @@ class TestGetContextDocs:
             llm_client=mock_llm_client,
         )
 
-        context_docs, used_top_docs = await service._get_context_docs(sample_request)
+        context_docs, answer_source = await service._get_context_docs(sample_request)
 
-        assert used_top_docs is True
+        assert answer_source == "TOP_DOCS"
         assert context_docs == sample_top_docs
         mock_search_client.search_chunks.assert_not_called()
 
@@ -204,9 +204,9 @@ class TestGetContextDocs:
             llm_client=mock_llm_client,
         )
 
-        context_docs, used_top_docs = await service._get_context_docs(sample_request)
+        context_docs, answer_source = await service._get_context_docs(sample_request)
 
-        assert used_top_docs is False
+        assert answer_source == "RAGFLOW"
         assert len(context_docs) == 2
         assert isinstance(context_docs[0], RagSearchResult)
         mock_search_client.search_chunks.assert_called_once_with(
@@ -283,7 +283,7 @@ class TestFormatDocsForPrompt:
             llm_client=mock_llm_client,
         )
 
-        result = service._format_docs_for_prompt(sample_top_docs, used_top_docs=True)
+        result = service._format_docs_for_prompt(sample_top_docs, answer_source="TOP_DOCS")
 
         assert "### 문서 1:" in result
         assert "연차휴가 규정" in result
@@ -298,11 +298,11 @@ class TestFormatDocsForPrompt:
             llm_client=mock_llm_client,
         )
 
-        result = service._format_docs_for_prompt(context_docs, used_top_docs=False)
+        result = service._format_docs_for_prompt(context_docs, answer_source="RAGFLOW")
 
         assert "### 문서 1:" in result
         assert "인사규정.pdf" in result
-        assert "(p.15)" in result
+        assert "(chunk #15)" in result
         assert "[유사도: 0.92]" in result
 
     def test_format_empty_docs(self, mock_search_client, mock_llm_client):
@@ -312,7 +312,7 @@ class TestFormatDocsForPrompt:
             llm_client=mock_llm_client,
         )
 
-        result = service._format_docs_for_prompt([], used_top_docs=True)
+        result = service._format_docs_for_prompt([], answer_source="TOP_DOCS")
 
         assert "컨텍스트 문서 없음" in result
 
@@ -342,7 +342,7 @@ class TestCreateFaqDraft:
         }
 
         draft = service._create_faq_draft(
-            sample_request, parsed, sample_top_docs, used_top_docs=True
+            sample_request, parsed, sample_top_docs, answer_source="TOP_DOCS"
         )
 
         assert draft.source_doc_id == "doc-001"
@@ -368,7 +368,7 @@ class TestCreateFaqDraft:
         }
 
         draft = service._create_faq_draft(
-            sample_request, parsed, context_docs, used_top_docs=False
+            sample_request, parsed, context_docs, answer_source="RAGFLOW"
         )
 
         assert draft.source_doc_id is None
