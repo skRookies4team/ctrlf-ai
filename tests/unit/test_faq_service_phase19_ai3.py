@@ -378,7 +378,7 @@ class TestPromptTemplate:
         )
 
         messages = service._build_llm_messages(
-            sample_request, sample_top_docs, used_top_docs=True
+            sample_request, sample_top_docs, answer_source="TOP_DOCS"
         )
 
         assert len(messages) == 2
