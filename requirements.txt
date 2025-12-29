@@ -31,3 +31,6 @@ gTTS>=2.5.0
 
 # Image Generation (Phase 37)
 Pillow>=10.0.0
+
+# Vector Database
+pymilvus==2.4.6
