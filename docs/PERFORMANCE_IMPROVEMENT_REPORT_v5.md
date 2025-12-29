@@ -21,7 +21,8 @@
 | v3 | 2025-12-23 | Phase 45: 8차 테스트, 소프트 가드레일 & 언어 강제 |
 | v4 | 2025-12-24 | Phase 46: 소프트 가드레일 강화, 지표 분리 정의 |
 | v5 | 2025-12-26 | Phase 47: GPT 피드백 반영 (3개 필수 수정) |
-| **v5.1** | **2025-12-28** | **Phase 48: Low-relevance Gate + dataset_id 필터** |
+| v5.1 | 2025-12-28 | Phase 48: Low-relevance Gate + dataset_id 필터 |
+| **v5.2** | **2025-12-29** | **Phase 49: RuleRouter 라우팅 개선 + config 분리 + 요약 인텐트** |
 
 ### 1.3 Phase 47 피드백 요약
 
@@ -515,15 +516,203 @@ Phase 48:    RAG 품질 개선 - 저관련 검색 결과 강등
              (Low-relevance Gate + dataset 필터)
 ```
 
-### 7.4 다음 단계 (Phase 49 권장)
+### 7.4 Phase 49 권장 작업 → 구현 완료
 
-1. **실제 운영 로그 분석**: Low-relevance Gate 강등 비율 모니터링
-2. **임계값 튜닝**: RAG_MIN_MAX_SCORE 값을 운영 데이터 기반으로 조정
-3. **하이브리드 검색**: sparse(BM25) + dense 하이브리드 검색 도입 검토
-4. **리랭킹**: 검색 결과 정렬 품질 향상을 위한 reranker 도입 검토
+1. ✅ **RuleRouter 도메인 라우팅 개선**: POLICY 우선 분류 강화
+2. ✅ **EDUCATION dataset_id allowlist**: config로 분리하여 운영 유연성 확보
+3. ✅ **요약 인텐트 분리**: 피처 플래그로 보호된 확장 기반 마련
 
 ---
 
-**작성일**: 2025-12-28
-**버전**: v5.1
+## 8. Phase 49: 도메인 라우팅 및 Config 분리
+
+### 8.1 개요
+
+Phase 49는 도메인 라우팅 정확도 향상과 운영 유연성을 위한 개선 작업입니다.
+
+| 항목 | 구현 내용 | 효과 |
+|------|----------|------|
+| Phase 49-1 | RuleRouter 도메인 라우팅 개선 | 연차/휴가/근태 → POLICY, 교육 → EDU 분류 정확도 향상 |
+| Phase 49-2 | EDUCATION dataset_id allowlist config 분리 | 재배포 없이 allowlist 변경 가능 |
+| Phase 49-3 | 요약 인텐트 분리 (기본 OFF) | 향후 요약 전용 파이프라인 확장 기반 |
+
+### 8.2 Phase 49-1: RuleRouter 도메인 라우팅 개선
+
+#### 8.2.1 문제점
+
+기존 키워드 우선순위로 인해 일부 쿼리가 잘못 분류되는 문제:
+
+| 쿼리 | 기대 결과 | 기존 결과 | 원인 |
+|------|----------|----------|------|
+| "연차 규정 알려줘" | POLICY | HR (UNKNOWN) | 경계 B에서 애매함으로 판정 |
+| "근태 관련 규정" | POLICY | HR | "근태"가 HR_PERSONAL에 있음 |
+| "정보보호교육 내용" | EDU | POLICY | "정보보호"가 POLICY에 있음 |
+
+#### 8.2.2 해결책
+
+**1. 경계 B 체크 개선**
+
+"규정", "정책" 등 명확한 정책 관련 단어가 있으면 애매함으로 판정하지 않음:
+
+```python
+# _is_boundary_b_ambiguous() 수정
+policy_clarifiers = {"규정", "정책", "규칙", "지침", "제도"}
+if self._contains_any(query_lower, policy_clarifiers):
+    return False  # 명확히 정책 질문
+```
+
+**2. 복합 조건 우선 체크**
+
+```python
+# _classify_by_keywords() 맨 앞에 추가
+
+# "교육" 포함 시 EDU 우선 체크
+if "교육" in query_lower:
+    if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
+        return EDU 분류
+
+# "규정/정책" 포함 시 POLICY 우선 체크
+if self._contains_any(query_lower, policy_clarifiers):
+    if POLICY_KEYWORDS 또는 LEAVE_AMBIGUOUS_KEYWORDS 매칭:
+        return POLICY 분류
+```
+
+**3. 교육 특화 키워드 확장**
+
+```python
+EDU_CONTENT_KEYWORDS += [
+    "성희롱예방교육", "성희롱교육",
+    "장애인식개선교육", "장애인식교육",
+    "직장내괴롭힘예방교육", "괴롭힘예방교육",
+    "개인정보보호교육", "개인정보교육",
+]
+```
+
+**4. ASCII-safe 로깅**
+
+Git Bash 파이프 환경에서 한글 깨짐(mojibake) 방지:
+
+```python
+def ascii_safe_preview(text: str, max_len: int = 50) -> str:
+    truncated = text[:max_len]
+    return truncated.encode("unicode_escape").decode("ascii")
+    # "연차 규정" → "\\uc5f0\\ucc28 \\uaddc\\uc815"
+```
+
+### 8.3 Phase 49-2: EDUCATION dataset_id allowlist Config 분리
+
+#### 8.3.1 변경 전 (하드코딩)
+
+```python
+# milvus_client.py
+DOMAIN_DATASET_MAPPING = {
+    "EDUCATION": [
+        "정보보안교육",
+        "장애인인식개선교육",
+        # ... 하드코딩된 목록
+    ],
+}
+```
+
+#### 8.3.2 변경 후 (config 분리)
+
+```python
+# config.py
+RAG_EDUCATION_DATASET_IDS: str = (
+    "정보보안교육,성희롱예방교육,장애인식개선교육,직장내괴롭힘예방교육,개인정보보호교육"
+)
+
+# milvus_client.py
+def get_education_dataset_ids() -> List[str]:
+    settings = get_settings()
+    raw = getattr(settings, "RAG_EDUCATION_DATASET_IDS", "")
+    return [ds_id.strip() for ds_id in raw.split(",") if ds_id.strip()]
+```
+
+**효과**: 환경변수 변경만으로 allowlist 수정 가능 (재배포 불필요)
+
+### 8.4 Phase 49-3: 요약 인텐트 분리
+
+#### 8.4.1 피처 플래그
+
+```python
+# config.py
+SUMMARY_INTENT_ENABLED: bool = False  # 기본 OFF
+```
+
+#### 8.4.2 요약 키워드 정의
+
+```python
+SUMMARY_KEYWORDS = frozenset([
+    "요약", "요약해", "요약해줘", "요약해주세요",
+    "정리", "정리해", "정리해줘", "정리해주세요",
+    "줄여", "줄여줘", "간단히", "핵심만",
+    "한줄로", "한 줄로", "짧게",
+])
+```
+
+#### 8.4.3 동작 (플래그 OFF 상태)
+
+- 요약 키워드 감지 시 `debug_info.rule_hits`에 "SUMMARY_DETECTED" 기록
+- 기존 POLICY_QA/EDUCATION_QA 분류 로직 그대로 진행
+- 향후 `SUMMARY_INTENT_ENABLED=True` 시 별도 파이프라인으로 분기 가능
+
+### 8.5 테스트 결과
+
+```
+============================================================
+Phase 49 RuleRouter & Config Test
+============================================================
+
+=== Test 2: RuleRouter POLICY Priority ===
+  [PASS] '연차 규정 알려줘' -> domain=POLICY, intent=POLICY_QA
+  [PASS] '휴가 정책 설명해줘' -> domain=POLICY, intent=POLICY_QA
+  [PASS] '복무 규정 뭐야' -> domain=POLICY, intent=POLICY_QA
+  [PASS] '근태 관련 규정' -> domain=POLICY, intent=POLICY_QA
+  [PASS] '정보보호교육 내용 알려줘' -> domain=EDU, intent=EDUCATION_QA
+  [PASS] '보안교육 뭐야' -> domain=EDU, intent=EDUCATION_QA
+  [PASS] '성희롱예방교육 설명해줘' -> domain=EDU, intent=EDUCATION_QA
+
+=== Test 3: EDUCATION Dataset ID Allowlist ===
+  [PASS] get_education_dataset_ids() returns list: 5 items
+  [PASS] EDUCATION filter expr: dataset_id in [...]
+  [PASS] POLICY filter expr: dataset_id == "사내규정"
+
+Total: 5/5 tests passed
+[OK] All Phase 49 tests passed!
+```
+
+### 8.6 수정 파일 목록
+
+| 파일 | 수정 내용 |
+|------|----------|
+| `app/core/config.py` | RAG_EDUCATION_DATASET_IDS, SUMMARY_INTENT_ENABLED 추가 |
+| `app/services/rule_router.py` | 복합 조건 체크, 교육 키워드 확장, ASCII-safe 로깅 |
+| `app/clients/milvus_client.py` | get_education_dataset_ids() 추가, EDUCATION 동적 로드 |
+| `scripts/test_phase49_changes.py` | Phase 49 테스트 스크립트 신규 작성 |
+
+---
+
+## 9. 결론 (업데이트)
+
+### 9.1 Phase 흐름 정리
+
+```
+Phase 43~46: 기능 구현 + 버그 수정
+Phase 47:    코드 안정성 + 엣지 케이스 처리 + 구조 개선
+Phase 48:    RAG 품질 개선 - 저관련 검색 결과 강등
+Phase 49:    도메인 라우팅 정확도 + 운영 유연성 강화
+```
+
+### 9.2 다음 단계 (Phase 50 권장)
+
+1. **요약 인텐트 파이프라인**: SUMMARY_INTENT_ENABLED=True 시 별도 처리 로직
+2. **리랭킹**: Cohere reranker 등으로 검색 결과 품질 향상
+3. **하이브리드 검색**: BM25 + dense 병합으로 recall 개선
+4. **운영 로그 분석**: Low-relevance Gate 강등 비율 및 라우팅 정확도 모니터링
+
+---
+
+**작성일**: 2025-12-29
+**버전**: v5.2
 **작성자**: Claude Code

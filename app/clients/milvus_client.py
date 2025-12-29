@@ -15,7 +15,11 @@ Option 3 (B안) 통합:
 Phase 48: domain → dataset_id 필터 강제 적용
 - RAG_DATASET_FILTER_ENABLED=True 시 검색에 dataset_id 필터 적용
 - POLICY → dataset_id="사내규정"
-- EDUCATION → dataset_id="정보보안교육"
+- EDUCATION → dataset_id IN [...] (config에서 읽음)
+
+Phase 49: EDUCATION allowlist를 config로 분리
+- RAG_EDUCATION_DATASET_IDS 환경변수에서 쉼표 구분 목록 파싱
+- 운영 환경에서 재배포 없이 allowlist 변경 가능
 
 주요 개선사항:
 1. 임베딩 계약 검증 (Fail-fast): 앱 시작 시 dim 불일치 감지
@@ -103,27 +107,39 @@ def escape_milvus_string(value: str) -> str:
 
 # =============================================================================
 # Phase 48: Domain → Dataset ID Mapping
+# Phase 49: EDUCATION allowlist를 config로 분리
 # =============================================================================
 
 # domain → dataset_id 매핑 (Milvus 검색 시 필터 적용)
 # 이 매핑은 Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
-# 단일 값은 str, 다중 값은 List[str]로 정의
+# POLICY는 단일 값, EDUCATION은 config에서 동적으로 로드
 DOMAIN_DATASET_MAPPING: Dict[str, Any] = {
     "POLICY": "사내규정",
-    "EDUCATION": [
-        "정보보안교육",
-        "장애인인식개선교육",
-        "직무교육",
-        "직장내괴롭힘교육",
-        "직장내성희롱교육",
-    ],
-    # 추가 도메인은 필요 시 확장
+    # EDUCATION은 get_education_dataset_ids()에서 config 기반 로드
 }
+
+
+def get_education_dataset_ids() -> List[str]:
+    """
+    Phase 49: config에서 EDUCATION dataset_id allowlist를 파싱합니다.
+
+    RAG_EDUCATION_DATASET_IDS 환경변수 (쉼표 구분 문자열)를 파싱하여
+    리스트로 반환합니다.
+
+    Returns:
+        List[str]: EDUCATION 도메인에 허용된 dataset_id 목록
+    """
+    settings = get_settings()
+    raw = getattr(settings, "RAG_EDUCATION_DATASET_IDS", "")
+    if not raw:
+        return []
+    return [ds_id.strip() for ds_id in raw.split(",") if ds_id.strip()]
 
 
 def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
     """
     Phase 48: domain에 해당하는 dataset_id 필터 표현식을 반환합니다.
+    Phase 49: EDUCATION은 config에서 동적으로 allowlist 로드
 
     Args:
         domain: 도메인 (POLICY, EDUCATION 등)
@@ -135,6 +151,16 @@ def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
         return None
 
     domain_upper = domain.upper()
+
+    # Phase 49: EDUCATION은 config에서 동적 로드
+    if domain_upper == "EDUCATION":
+        dataset_ids = get_education_dataset_ids()
+        if dataset_ids:
+            safe_ids = [f'"{escape_milvus_string(ds_id)}"' for ds_id in dataset_ids]
+            return f'dataset_id in [{", ".join(safe_ids)}]'
+        return None
+
+    # 그 외 도메인은 DOMAIN_DATASET_MAPPING에서 조회
     dataset_ids = DOMAIN_DATASET_MAPPING.get(domain_upper)
 
     if not dataset_ids:
