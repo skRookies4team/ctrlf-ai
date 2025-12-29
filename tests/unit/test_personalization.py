@@ -222,44 +222,60 @@ class TestPersonalizationClient:
         from app.clients.personalization_client import PersonalizationClient
 
         # 백엔드 URL 없이 mock 모드
-        client = PersonalizationClient(base_url=None)
-        facts = await client.resolve_facts("Q11")
+        with patch("app.clients.personalization_client.settings") as mock_settings:
+            mock_settings.backend_base_url = None
+            mock_settings.BACKEND_API_TOKEN = None
 
-        assert facts.sub_intent_id == "Q11"
-        assert "remaining_days" in facts.metrics
+            client = PersonalizationClient(base_url=None)
+            facts = await client.resolve_facts("Q11")
+
+            assert facts.sub_intent_id == "Q11"
+            assert "remaining_days" in facts.metrics
 
     @pytest.mark.asyncio
     async def test_resolve_facts_not_implemented(self):
         """구현되지 않은 인텐트 테스트."""
         from app.clients.personalization_client import PersonalizationClient
 
-        client = PersonalizationClient(base_url=None)
-        # Q2는 우선순위가 아님
-        facts = await client.resolve_facts("Q2")
+        with patch("app.clients.personalization_client.settings") as mock_settings:
+            mock_settings.backend_base_url = None
+            mock_settings.BACKEND_API_TOKEN = None
 
-        assert facts.error is not None
-        assert facts.error.type == "NOT_IMPLEMENTED"
+            client = PersonalizationClient(base_url=None)
+            # Q2는 우선순위가 아님
+            facts = await client.resolve_facts("Q2")
+
+            assert facts.error is not None
+            assert facts.error.type == "NOT_IMPLEMENTED"
 
     @pytest.mark.asyncio
     async def test_search_departments_mock(self):
         """Mock 부서 검색 테스트."""
         from app.clients.personalization_client import PersonalizationClient
 
-        client = PersonalizationClient(base_url=None)
-        result = await client.search_departments("개발")
+        with patch("app.clients.personalization_client.settings") as mock_settings:
+            mock_settings.backend_base_url = None
+            mock_settings.BACKEND_API_TOKEN = None
 
-        assert len(result.items) > 0
-        assert any("개발" in item.dept_name for item in result.items)
+            client = PersonalizationClient(base_url=None)
+            result = await client.search_departments("개발")
+
+            assert len(result.items) > 0
+            assert any("개발" in item.dept_name for item in result.items)
 
     @pytest.mark.asyncio
     async def test_search_departments_no_match(self):
         """부서 검색 결과 없음."""
         from app.clients.personalization_client import PersonalizationClient
 
-        client = PersonalizationClient(base_url=None)
-        result = await client.search_departments("없는부서123")
+        with patch("app.clients.personalization_client.settings") as mock_settings:
+            mock_settings.backend_base_url = None
+            mock_settings.BACKEND_API_TOKEN = None
 
-        assert len(result.items) == 0
+            client = PersonalizationClient(base_url=None)
+            result = await client.search_departments("없는부서123")
+
+            assert len(result.items) == 0
 
 
 # =============================================================================

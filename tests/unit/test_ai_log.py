@@ -9,6 +9,7 @@ Phase 10 업데이트:
 """
 
 import json
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -235,25 +236,28 @@ class TestAILogService:
     @pytest.mark.anyio
     async def test_send_log_without_backend(self, chat_request: ChatRequest, chat_response: ChatResponse):
         """백엔드 URL 미설정 시 로컬 로그만 기록."""
-        service = AILogService()
-        # BACKEND_BASE_URL이 설정되지 않은 경우
+        # Settings mock: BACKEND_BASE_URL이 설정되지 않은 경우
+        with patch("app.services.ai_log_service.settings") as mock_settings:
+            mock_settings.backend_base_url = None
 
-        log_entry = service.create_log_entry(
-            request=chat_request,
-            response=chat_response,
-            intent="POLICY_QA",
-            domain="POLICY",
-            route="ROUTE_RAG_INTERNAL",
-            has_pii_input=False,
-            has_pii_output=False,
-            rag_used=True,
-            rag_source_count=3,
-            latency_ms=1200,
-        )
+            service = AILogService()
 
-        # 백엔드 미설정 시에도 에러 없이 동작해야 함
-        result = await service.send_log(log_entry)
-        assert result is True  # 로컬 로그 기록 성공
+            log_entry = service.create_log_entry(
+                request=chat_request,
+                response=chat_response,
+                intent="POLICY_QA",
+                domain="POLICY",
+                route="ROUTE_RAG_INTERNAL",
+                has_pii_input=False,
+                has_pii_output=False,
+                rag_used=True,
+                rag_source_count=3,
+                latency_ms=1200,
+            )
+
+            # 백엔드 미설정 시에도 에러 없이 동작해야 함
+            result = await service.send_log(log_entry)
+            assert result is True  # 로컬 로그 기록 성공
 
     @pytest.mark.anyio
     async def test_mask_for_log(self):

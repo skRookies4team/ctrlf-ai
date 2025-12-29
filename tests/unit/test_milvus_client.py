@@ -111,34 +111,34 @@ class TestMilvusSearchClientInit:
 class TestMilvusConnection:
     """Milvus 연결 관리 테스트."""
 
-    def test_ensure_connection_success(self, milvus_client):
-        """연결 성공 테스트."""
+    def test_ensure_connection_sync_success(self, milvus_client):
+        """동기 연결 성공 테스트."""
         with patch("app.clients.milvus_client.connections") as mock_connections:
             mock_connections.connect = MagicMock()
             mock_connections.disconnect = MagicMock()
 
-            milvus_client._ensure_connection()
+            milvus_client._ensure_connection_sync()
 
             assert milvus_client._connected is True
             mock_connections.connect.assert_called_once()
 
-    def test_ensure_connection_already_connected(self, milvus_client):
+    def test_ensure_connection_sync_already_connected(self, milvus_client):
         """이미 연결된 상태에서는 재연결하지 않음."""
         milvus_client._connected = True
 
         with patch("app.clients.milvus_client.connections") as mock_connections:
-            milvus_client._ensure_connection()
+            milvus_client._ensure_connection_sync()
 
             mock_connections.connect.assert_not_called()
 
-    def test_ensure_connection_failure(self, milvus_client):
+    def test_ensure_connection_sync_failure(self, milvus_client):
         """연결 실패 시 MilvusConnectionError 발생."""
         with patch("app.clients.milvus_client.connections") as mock_connections:
             mock_connections.connect.side_effect = Exception("Connection refused")
             mock_connections.disconnect = MagicMock()
 
             with pytest.raises(MilvusConnectionError) as exc_info:
-                milvus_client._ensure_connection()
+                milvus_client._ensure_connection_sync()
 
             assert "Failed to connect to Milvus" in str(exc_info.value)
 
@@ -235,7 +235,7 @@ class TestEmbeddingGeneration:
         with pytest.raises(EmbeddingError) as exc_info:
             await client.generate_embedding("테스트")
 
-        assert "LLM_BASE_URL is not configured" in str(exc_info.value)
+        assert "EMBEDDING_BASE_URL is not configured" in str(exc_info.value)
 
     @pytest.mark.anyio
     async def test_generate_embedding_api_error(self, milvus_client):
@@ -299,47 +299,46 @@ class TestVectorSearch:
         # Mock embedding generation
         milvus_client.generate_embedding = AsyncMock(return_value=[0.1] * 1024)
 
-        # Mock collection (ragflow_chunks 스키마)
-        mock_collection = MagicMock()
-        mock_hit = MagicMock()
-        mock_hit.id = "doc_1"
-        mock_hit.score = 0.95
-        mock_hit.entity = MagicMock()
-        mock_hit.entity.get = MagicMock(side_effect=lambda k, d="": {
-            "text": "테스트 내용",  # ragflow_chunks는 text 필드 사용
-            "doc_id": "doc_1",
-            "dataset_id": "사내규정",
-            "chunk_id": 1,
-        }.get(k, d))
-
-        mock_collection.search.return_value = [[mock_hit]]
-        milvus_client._get_collection = MagicMock(return_value=mock_collection)
+        # Mock _search_sync (sync 메서드 직접 mock - anyio.to_thread.run_sync에서 호출됨)
+        mock_results = [
+            {
+                "id": "doc_1",
+                "content": "테스트 내용",
+                "title": "doc_1",
+                "domain": "POLICY",
+                "doc_id": "doc_1",
+                "score": 0.95,
+                "metadata": {"dataset_id": "사내규정", "chunk_id": 1},
+            }
+        ]
+        milvus_client._search_sync = MagicMock(return_value=mock_results)
 
         results = await milvus_client.search("테스트 쿼리", domain="POLICY", top_k=5)
 
         assert len(results) == 1
         assert results[0]["id"] == "doc_1"
-        assert results[0]["content"] == "테스트 내용"  # text → content로 변환됨
+        assert results[0]["content"] == "테스트 내용"
         assert results[0]["score"] == 0.95
-        assert results[0]["domain"] == "POLICY"  # dataset_id에서 추출
+        assert results[0]["domain"] == "POLICY"
 
     @pytest.mark.anyio
     async def test_search_with_domain_filter(self, milvus_client):
         """도메인 필터 적용 검색 테스트 (ragflow_chunks 스키마는 domain 필드 없음)."""
         milvus_client.generate_embedding = AsyncMock(return_value=[0.1] * 1024)
 
-        mock_collection = MagicMock()
-        mock_collection.search.return_value = [[]]
-        milvus_client._get_collection = MagicMock(return_value=mock_collection)
+        # Mock _search_sync (sync 메서드 직접 mock - anyio.to_thread.run_sync에서 호출됨)
+        # 빈 결과 반환
+        milvus_client._search_sync = MagicMock(return_value=[])
 
-        await milvus_client.search("테스트", domain="EDU")
+        results = await milvus_client.search("테스트", domain="EDU")
 
-        # 검색 호출 확인 - ragflow_chunks는 domain 필드가 없어서 expr=None
-        # (도메인 필터링은 결과에서 후처리로 수행)
-        mock_collection.search.assert_called_once()
-        call_args = mock_collection.search.call_args
-        # expr은 None이어야 함 (domain 필드 없으므로 필터 적용 안함)
-        assert call_args.kwargs.get("expr") is None
+        # _search_sync 호출 확인 - filter_expr은 None이어야 함
+        # (ragflow_chunks는 domain 필드가 없으므로 필터 적용 안함)
+        milvus_client._search_sync.assert_called_once()
+        call_args = milvus_client._search_sync.call_args
+        # 세 번째 인자가 filter_expr (None이어야 함)
+        assert call_args[0][2] is None  # filter_expr
+        assert results == []
 
     @pytest.mark.anyio
     async def test_search_embedding_failure(self, milvus_client):
