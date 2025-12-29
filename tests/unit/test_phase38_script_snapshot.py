@@ -270,15 +270,25 @@ class TestBackendScriptClient:
     @pytest.mark.asyncio
     async def test_get_render_spec_no_base_url(self):
         """BACKEND_BASE_URL 미설정 시 에러."""
-        client = BackendScriptClient(
-            base_url="",
-            token="test-token",
-        )
+        from unittest.mock import patch, MagicMock
 
-        with pytest.raises(ScriptFetchError) as exc_info:
-            await client.get_render_spec("script-001")
+        with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+            mock_settings = MagicMock()
+            mock_settings.backend_base_url = ""
+            mock_settings.BACKEND_API_TOKEN = ""
+            mock_settings.BACKEND_INTERNAL_TOKEN = "test-token"
+            mock_settings.BACKEND_TIMEOUT_SEC = 30
+            mock_get_settings.return_value = mock_settings
 
-        assert exc_info.value.error_code == "BACKEND_NOT_CONFIGURED"
+            client = BackendScriptClient(
+                base_url="",
+                token="test-token",
+            )
+
+            with pytest.raises(ScriptFetchError) as exc_info:
+                await client.get_render_spec("script-001")
+
+            assert exc_info.value.error_code == "BACKEND_NOT_CONFIGURED"
 
 
 # =============================================================================

@@ -10,7 +10,7 @@ FaqDraftService Phase 19-AI-3 테스트
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.faq_service import (
     FaqDraftService,
@@ -202,10 +202,10 @@ class TestLowRelevanceContext:
     """LOW_RELEVANCE_CONTEXT 에러 처리 테스트"""
 
     @pytest.mark.anyio
-    async def test_low_relevance_raises_error(
+    async def test_low_relevance_raises_error_when_block_enabled(
         self, mock_search_client, sample_request, sample_top_docs
     ):
-        """LOW_RELEVANCE status일 때 에러 발생"""
+        """LOW_RELEVANCE status + FAQ_LOW_RELEVANCE_BLOCK=True일 때 에러 발생"""
         sample_request.top_docs = sample_top_docs
 
         mock_llm = MagicMock()
@@ -221,10 +221,48 @@ ai_confidence: 0.2""")
             llm_client=mock_llm,
         )
 
-        with pytest.raises(FaqGenerationError) as exc_info:
-            await service.generate_faq_draft(sample_request)
+        # FAQ_LOW_RELEVANCE_BLOCK=True로 설정하여 에러 발생 테스트
+        with patch("app.services.faq_service.get_settings") as mock_get_settings:
+            mock_settings = MagicMock()
+            mock_settings.FAQ_LOW_RELEVANCE_BLOCK = True
+            mock_get_settings.return_value = mock_settings
 
-        assert "LOW_RELEVANCE_CONTEXT" in str(exc_info.value)
+            with pytest.raises(FaqGenerationError) as exc_info:
+                await service.generate_faq_draft(sample_request)
+
+            assert "LOW_RELEVANCE_CONTEXT" in str(exc_info.value)
+
+    @pytest.mark.anyio
+    async def test_low_relevance_continues_when_block_disabled(
+        self, mock_search_client, sample_request, sample_top_docs
+    ):
+        """LOW_RELEVANCE status + FAQ_LOW_RELEVANCE_BLOCK=False일 때 경고만 출력하고 계속 진행"""
+        sample_request.top_docs = sample_top_docs
+
+        mock_llm = MagicMock()
+        mock_llm.generate_chat_completion = AsyncMock(return_value="""status: LOW_RELEVANCE
+question: 연차휴가 이월 규정은?
+summary: 컨텍스트가 관련 없습니다.
+answer_markdown: |
+  관련 정보 없음
+ai_confidence: 0.2""")
+
+        service = FaqDraftService(
+            search_client=mock_search_client,
+            llm_client=mock_llm,
+        )
+
+        # FAQ_LOW_RELEVANCE_BLOCK=False (기본값)로 설정하여 계속 진행 테스트
+        with patch("app.services.faq_service.get_settings") as mock_get_settings:
+            mock_settings = MagicMock()
+            mock_settings.FAQ_LOW_RELEVANCE_BLOCK = False
+            mock_settings.FAQ_CONFIDENCE_WARN_THRESHOLD = 0.7
+            mock_get_settings.return_value = mock_settings
+
+            # 에러 없이 FAQ 초안 생성됨
+            draft = await service.generate_faq_draft(sample_request)
+            assert draft is not None
+            assert draft.answer_source == "TOP_DOCS"
 
 
 # =============================================================================

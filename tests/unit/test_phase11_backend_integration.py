@@ -48,8 +48,16 @@ def anyio_backend() -> str:
 
 def test_backend_data_client_not_configured() -> None:
     """BackendDataClient URL 미설정 시 is_configured=False."""
-    client = BackendDataClient(base_url="")
-    assert client.is_configured is False
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
+
+        client = BackendDataClient(base_url="")
+        assert client.is_configured is False
 
 
 def test_backend_data_client_configured() -> None:
@@ -61,52 +69,84 @@ def test_backend_data_client_configured() -> None:
 @pytest.mark.anyio
 async def test_backend_data_client_mock_edu_status() -> None:
     """BackendDataClient URL 미설정 시 mock 데이터 반환."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    result = await client.get_employee_edu_status("user-123")
+        client = BackendDataClient(base_url="")
 
-    assert result.success is True
-    assert "user_id" in result.data
-    assert result.data["user_id"] == "user-123"
-    assert "total_required" in result.data
-    assert "courses" in result.data
+        result = await client.get_employee_edu_status("user-123")
+
+        assert result.success is True
+        assert "user_id" in result.data
+        assert result.data["user_id"] == "user-123"
+        assert "total_required" in result.data
+        assert "courses" in result.data
 
 
 @pytest.mark.anyio
 async def test_backend_data_client_mock_dept_stats() -> None:
     """부서 교육 통계 mock 데이터 반환."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    result = await client.get_department_edu_stats("dept-001")
+        client = BackendDataClient(base_url="")
 
-    assert result.success is True
-    assert "completion_rate" in result.data
-    assert "by_course" in result.data
+        result = await client.get_department_edu_stats("dept-001")
+
+        assert result.success is True
+        assert "completion_rate" in result.data
+        assert "by_course" in result.data
 
 
 @pytest.mark.anyio
 async def test_backend_data_client_mock_incident_overview() -> None:
     """사고 현황 mock 데이터 반환."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    result = await client.get_incident_overview()
+        client = BackendDataClient(base_url="")
 
-    assert result.success is True
-    assert "total_incidents" in result.data
-    assert "by_status" in result.data
-    assert "by_type" in result.data
+        result = await client.get_incident_overview()
+
+        assert result.success is True
+        assert "total_incidents" in result.data
+        assert "by_status" in result.data
+        assert "by_type" in result.data
 
 
 @pytest.mark.anyio
 async def test_backend_data_client_mock_report_guide() -> None:
     """신고 안내 mock 데이터 반환."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    result = await client.get_report_guide()
+        client = BackendDataClient(base_url="")
 
-    assert result.success is True
-    assert "steps" in result.data
-    assert "official_channels" in result.data
+        result = await client.get_report_guide()
+
+        assert result.success is True
+        assert "steps" in result.data
+        assert "official_channels" in result.data
 
 
 @pytest.mark.anyio
@@ -539,41 +579,73 @@ async def test_chat_service_mixed_incident_manager() -> None:
 @pytest.mark.anyio
 async def test_backend_mapping_employee_edu_status() -> None:
     """EMPLOYEE × EDU_STATUS → get_employee_edu_status 매핑."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    # mock 데이터 반환 확인
-    response = await client.get_employee_edu_status("user-123")
-    assert response.success is True
-    assert "courses" in response.data
+        client = BackendDataClient(base_url="")
+
+        # mock 데이터 반환 확인
+        response = await client.get_employee_edu_status("user-123")
+        assert response.success is True
+        assert "courses" in response.data
 
 
 @pytest.mark.anyio
 async def test_backend_mapping_admin_edu_stats() -> None:
     """ADMIN × EDU_STATUS → get_department_edu_stats 매핑."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    response = await client.get_department_edu_stats("dept-001")
-    assert response.success is True
-    assert "completion_rate" in response.data
+        client = BackendDataClient(base_url="")
+
+        response = await client.get_department_edu_stats("dept-001")
+        assert response.success is True
+        assert "completion_rate" in response.data
 
 
 @pytest.mark.anyio
 async def test_backend_mapping_admin_incident() -> None:
     """ADMIN × INCIDENT → get_incident_overview 매핑."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    response = await client.get_incident_overview()
-    assert response.success is True
-    assert "by_status" in response.data
+        client = BackendDataClient(base_url="")
+
+        response = await client.get_incident_overview()
+        assert response.success is True
+        assert "by_status" in response.data
 
 
 @pytest.mark.anyio
 async def test_backend_mapping_incident_manager() -> None:
     """INCIDENT_MANAGER × INCIDENT → get_incident_overview 매핑."""
-    client = BackendDataClient(base_url="")
+    with patch("app.clients.backend_client.get_settings") as mock_get_settings:
+        mock_settings = MagicMock()
+        mock_settings.backend_base_url = ""
+        mock_settings.BACKEND_API_TOKEN = ""
+        mock_settings.BACKEND_INTERNAL_TOKEN = ""
+        mock_settings.BACKEND_TIMEOUT_SEC = 30
+        mock_get_settings.return_value = mock_settings
 
-    response = await client.get_incident_overview()
-    assert response.success is True
+        client = BackendDataClient(base_url="")
+
+        response = await client.get_incident_overview()
+        assert response.success is True
 
 
 # =============================================================================
