@@ -178,25 +178,25 @@ def test_low_relevance_gate():
     all_passed = all_passed and passed1
     print(f"  [{'PASS' if passed1 else 'FAIL'}] High score + keyword match -> PASSED: {len(result1)} sources")
 
-    # 테스트 2: 낮은 점수 -> 강등 (score gate)
+    # 테스트 2: 낮은 점수 -> 소프트 강등 (score gate, Phase 50: 최소 1개 유지)
     result2, reason2 = apply_low_relevance_gate(
         sources=low_score_sources,
         query="휴가 규정 알려줘",
         domain="POLICY",
     )
-    passed2 = len(result2) == 0 and reason2 == "max_score_below_threshold"
+    passed2 = len(result2) >= 1 and reason2 == "max_score_below_threshold_soft"
     all_passed = all_passed and passed2
-    print(f"  [{'PASS' if passed2 else 'FAIL'}] Low score -> DEMOTED: reason={reason2}")
+    print(f"  [{'PASS' if passed2 else 'FAIL'}] Low score -> SOFT DEMOTED: reason={reason2}, kept={len(result2)}")
 
-    # 테스트 3: 높은 점수 + 키워드 미매칭 -> 강등 (anchor gate)
+    # 테스트 3: 높은 점수 + 키워드 미매칭 -> 소프트 강등 (anchor gate, Phase 50: 최소 1개 유지)
     result3, reason3 = apply_low_relevance_gate(
         sources=high_score_sources,
         query="연차 규정 알려줘",  # "연차"는 소스에 없음
         domain="POLICY",
     )
-    passed3 = len(result3) == 0 and reason3 == "no_anchor_term_match"
+    passed3 = len(result3) >= 1 and reason3 == "no_anchor_term_match_soft"
     all_passed = all_passed and passed3
-    print(f"  [{'PASS' if passed3 else 'FAIL'}] Keyword mismatch -> DEMOTED: reason={reason3}")
+    print(f"  [{'PASS' if passed3 else 'FAIL'}] Keyword mismatch -> SOFT DEMOTED: reason={reason3}, kept={len(result3)}")
 
     # 테스트 4: 빈 소스 -> 그대로 반환
     result4, reason4 = apply_low_relevance_gate(
@@ -212,25 +212,26 @@ def test_low_relevance_gate():
 
 
 def test_dataset_filter_expr():
-    """domain -> dataset_id 필터 표현식 생성 테스트"""
+    """domain -> dataset_id 필터 표현식 생성 테스트
+
+    Phase 49 변경: EDUCATION은 DOMAIN_DATASET_MAPPING에서 config로 이동됨
+    """
     print("\n=== Test 5: Dataset Filter Expression ===")
 
     from app.clients.milvus_client import get_dataset_filter_expr, DOMAIN_DATASET_MAPPING
 
     all_passed = True
 
-    # 매핑 확인
+    # 매핑 확인 (Phase 49: EDUCATION은 config로 이동됨)
     has_policy = "POLICY" in DOMAIN_DATASET_MAPPING
-    has_edu = "EDUCATION" in DOMAIN_DATASET_MAPPING
-    all_passed = all_passed and has_policy and has_edu
+    all_passed = all_passed and has_policy
     print(f"  [{'PASS' if has_policy else 'FAIL'}] POLICY in mapping: {has_policy}")
-    print(f"  [{'PASS' if has_edu else 'FAIL'}] EDUCATION in mapping: {has_edu}")
+    print(f"  [INFO] EDUCATION mapping moved to config (Phase 49)")
 
-    # 필터 표현식 생성 테스트
+    # 필터 표현식 생성 테스트 (Phase 49 반영)
     test_cases = [
         ("POLICY", True),     # 필터 생성되어야 함
         ("policy", True),     # 소문자도 동작
-        ("EDUCATION", True),  # 필터 생성되어야 함
         ("GENERAL", False),   # 매핑 없음 -> None
         (None, False),        # None -> None
     ]

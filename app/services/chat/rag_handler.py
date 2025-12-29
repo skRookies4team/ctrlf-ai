@@ -87,6 +87,40 @@ RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK"]
 DEFAULT_TOP_K = 5
 RETRY_TOP_K = 15  # 2nd-chance retrieval에서 사용할 top_k
 
+# =============================================================================
+# Phase 50: LowRelevanceGate 개선
+# =============================================================================
+
+# Phase 50: anchor_gate 안전장치 - 최소 보장 개수
+# anchor 미매칭 시에도 최소 1개는 유지 (hard-drop 방지)
+ANCHOR_GATE_MIN_KEEP = 1
+
+# Phase 50: 행동 표현 접미사 패턴 (anchor에서 제거)
+# "요약해줘" → "요약", "알려주세요" → "" (완전 제거)
+ACTION_SUFFIX_PATTERN = re.compile(
+    r'(해줘|해주세요|해줄래|해줄게|할래|하세요|해봐|해라|'
+    r'알려줘|알려주세요|알려줄래|알려주라|'
+    r'설명해|설명해줘|설명해주세요|'
+    r'정리해|정리해줘|정리해주세요|'
+    r'보여줘|보여주세요|찾아줘|찾아주세요|'
+    r'줘|주세요|줄래|주라)$'
+)
+
+# Phase 50: 행동 표현 전체 토큰 (anchor에서 완전 제거할 토큰들)
+# 이 토큰들은 명사가 아닌 요청/행동 표현이므로 anchor에서 제외
+ACTION_TOKENS = frozenset([
+    # 요약/정리 요청
+    "요약해줘", "요약해주세요", "요약해", "요약좀", "요약",
+    "정리해줘", "정리해주세요", "정리해", "정리좀", "정리",
+    # 설명/알려줘 요청
+    "알려줘", "알려주세요", "알려줄래", "알려줘요",
+    "설명해줘", "설명해주세요", "설명해", "설명좀",
+    # 보여줘/찾아줘 요청
+    "보여줘", "보여주세요", "찾아줘", "찾아주세요",
+    # 일반 조동사/요청어
+    "해줘", "해주세요", "해줄래", "좀", "부탁", "뭐야", "뭔가",
+])
+
 # Phase 44: 마스킹 토큰 패턴 (PII 마스킹 후 남은 토큰들)
 MASKING_TOKEN_PATTERN = re.compile(
     r'\[(PERSON|NAME|PHONE|EMAIL|ADDRESS|SSN|CARD|ACCOUNT|DATE|ORG)\]',
@@ -204,16 +238,23 @@ def get_anchor_stopwords() -> set:
 
 def extract_anchor_keywords(query: str) -> set:
     """
-    Phase 48: 쿼리에서 앵커 키워드를 추출합니다.
+    Phase 48/50: 쿼리에서 앵커 키워드를 추출합니다.
 
-    불용어를 제거한 후 남은 토큰들을 반환합니다.
-    형태소 분석기 없이 단순 공백 분리 + 불용어 필터링 방식.
+    Phase 50 개선:
+    - 행동 표현 토큰(요약해줘, 알려줘 등) 완전 제거
+    - 행동 접미사(-해줘, -해주세요 등) 제거 후 명사 부분만 추출
 
     Args:
         query: 원본 쿼리
 
     Returns:
-        set: 앵커 키워드 세트 (소문자)
+        set: 앵커 키워드 세트 (소문자, 명사/핵심어만)
+
+    Examples:
+        >>> extract_anchor_keywords("연차휴가 규정 알려줘")
+        {'연차휴가'}  # '규정'은 stopwords, '알려줘'는 ACTION_TOKENS
+        >>> extract_anchor_keywords("보안 관련 문서 요약해줘")
+        {'보안'}  # '관련', '문서', '요약해줘'는 제거됨
     """
     stopwords = get_anchor_stopwords()
 
@@ -223,11 +264,33 @@ def extract_anchor_keywords(query: str) -> set:
     # 공백 분리 및 소문자 변환
     tokens = cleaned.lower().split()
 
-    # 불용어 및 1글자 토큰 제거
-    anchor_keywords = {
-        token for token in tokens
-        if token not in stopwords and len(token) > 1
-    }
+    anchor_keywords = set()
+    for token in tokens:
+        # Phase 50: 1글자 토큰 제거
+        if len(token) <= 1:
+            continue
+
+        # Phase 50: 행동 표현 전체 토큰 제거
+        if token in ACTION_TOKENS:
+            continue
+
+        # Phase 50: 불용어 제거
+        if token in stopwords:
+            continue
+
+        # Phase 50: 행동 접미사 제거하여 명사 부분 추출
+        # "요약해줘" → "요약", "보안설명해줘" → "보안"
+        stripped = ACTION_SUFFIX_PATTERN.sub('', token)
+        if stripped and len(stripped) > 1:
+            # 접미사 제거 후 남은 부분이 유효하면 추가
+            if stripped not in stopwords and stripped not in ACTION_TOKENS:
+                anchor_keywords.add(stripped)
+        elif stripped and len(stripped) == 1:
+            # 1글자만 남으면 원본 토큰이 모두 접미사였음 → 스킵
+            continue
+        else:
+            # 접미사가 없거나 접미사 제거 후에도 유효 → 원본 사용
+            anchor_keywords.add(token)
 
     return anchor_keywords
 
@@ -237,7 +300,11 @@ def check_anchor_keywords_in_sources(
     sources: List["ChatSource"],
 ) -> bool:
     """
-    Phase 48: 앵커 키워드가 sources 텍스트에 하나라도 있는지 확인합니다.
+    Phase 48/50: 앵커 키워드가 sources 텍스트에 하나라도 있는지 확인합니다.
+
+    Phase 50 개선:
+    - title, snippet뿐만 아니라 article_label, article_path도 검사
+    - 더 넓은 범위에서 키워드 매칭 시도
 
     Args:
         anchor_keywords: 앵커 키워드 세트
@@ -250,13 +317,18 @@ def check_anchor_keywords_in_sources(
         # 앵커 키워드가 없으면 (모두 불용어) → 통과
         return True
 
-    # 모든 sources의 snippet/title을 합쳐서 검색
+    # Phase 50: 모든 sources의 snippet/title/article_label/article_path를 합쳐서 검색
     combined_text = ""
     for source in sources:
         if source.snippet:
             combined_text += source.snippet.lower() + " "
         if source.title:
             combined_text += source.title.lower() + " "
+        # Phase 50: article_label, article_path 추가
+        if source.article_label:
+            combined_text += source.article_label.lower() + " "
+        if source.article_path:
+            combined_text += source.article_path.lower() + " "
 
     # 앵커 키워드 중 하나라도 있으면 통과
     for keyword in anchor_keywords:
@@ -272,11 +344,15 @@ def apply_low_relevance_gate(
     domain: str,
 ) -> Tuple[List["ChatSource"], Optional[str]]:
     """
-    Phase 48: 저관련 검색 결과를 sources=[]로 강등합니다.
+    Phase 48/50: 저관련 검색 결과를 필터링합니다.
+
+    Phase 50 개선:
+    - score_gate: max_score < threshold 시에도 최소 1개는 유지 (soft gate)
+    - anchor_gate: 미매칭 시에도 최소 ANCHOR_GATE_MIN_KEEP개는 유지
 
     두 가지 게이트를 적용:
-    A. score 하드 게이트: max_score < RAG_MIN_MAX_SCORE → []
-    B. 앵커 키워드 게이트: 핵심어가 sources 텍스트에 없으면 → []
+    A. score soft 게이트: max_score < RAG_MIN_MAX_SCORE → 경고만, 최소 1개 유지
+    B. 앵커 키워드 soft 게이트: 핵심어 미매칭 → 경고만, 최소 1개 유지
 
     Args:
         sources: RAG 검색 결과
@@ -285,8 +361,8 @@ def apply_low_relevance_gate(
 
     Returns:
         Tuple[List[ChatSource], Optional[str]]:
-            - 필터링된 sources (강등 시 [])
-            - gate_reason (강등 시 사유, 통과 시 None)
+            - 필터링된 sources (최소 1개 보장)
+            - gate_reason (soft 강등 시 사유, 통과 시 None)
     """
     settings = get_settings()
 
@@ -303,34 +379,40 @@ def apply_low_relevance_gate(
     avg_score = sum(scores) / len(scores)
     min_threshold = settings.RAG_MIN_MAX_SCORE
 
-    # Gate A: score 하드 게이트
+    # Phase 50: 안전장치 - 최소 유지 개수
+    min_keep = ANCHOR_GATE_MIN_KEEP
+
+    # Gate A: score soft 게이트
     if max_score < min_threshold:
-        # Phase 48.1: ASCII-safe query preview (한글 깨짐 방지)
+        # Phase 50: 완전 drop 대신 최소 min_keep개 유지
+        kept_sources = sources[:min_keep]
         query_safe = ascii_safe_preview(query, 50)
         logger.warning(
-            f"[LowRelevanceGate] DEMOTED by score_gate | "
+            f"[LowRelevanceGate] SOFT_DEMOTE by score_gate | "
             f"max_score={max_score:.3f} < threshold={min_threshold} | "
             f"query='{query_safe}' | domain={domain} | "
-            f"avg_score={avg_score:.3f} | top_k={len(sources)} | filtered_count=0"
+            f"avg_score={avg_score:.3f} | top_k={len(sources)} | "
+            f"kept_count={len(kept_sources)} (min_keep={min_keep})"
         )
-        return [], "max_score_below_threshold"
+        return kept_sources, "max_score_below_threshold_soft"
 
-    # Gate B: 앵커 키워드 게이트
+    # Gate B: 앵커 키워드 soft 게이트
     anchor_keywords = extract_anchor_keywords(query)
     has_anchor_match = check_anchor_keywords_in_sources(anchor_keywords, sources)
 
     if not has_anchor_match:
-        # Phase 48.1: ASCII-safe query/keywords preview (한글 깨짐 방지)
+        # Phase 50: 완전 drop 대신 최소 min_keep개 유지
+        kept_sources = sources[:min_keep]
         query_safe = ascii_safe_preview(query, 50)
         keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}
         logger.warning(
-            f"[LowRelevanceGate] DEMOTED by anchor_gate | "
+            f"[LowRelevanceGate] SOFT_DEMOTE by anchor_gate | "
             f"anchor_keywords={keywords_safe} not found in sources | "
             f"query='{query_safe}' | domain={domain} | "
             f"max_score={max_score:.3f} | avg_score={avg_score:.3f} | "
-            f"top_k={len(sources)} | filtered_count=0"
+            f"top_k={len(sources)} | kept_count={len(kept_sources)} (min_keep={min_keep})"
         )
-        return [], "no_anchor_term_match"
+        return kept_sources, "no_anchor_term_match_soft"
 
     # 통과
     query_safe = ascii_safe_preview(query, 30)

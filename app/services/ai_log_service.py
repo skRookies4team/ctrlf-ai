@@ -52,8 +52,10 @@ class AILogService:
 
         # 백엔드 로그 엔드포인트 설정
         # Phase 9: backend_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
+        # Phase 50: trailing slash 제거로 //api/ai-logs 중복 방지
         if settings.backend_base_url:
-            self._backend_log_endpoint = f"{settings.backend_base_url}/api/ai-logs"
+            base_url = settings.backend_base_url.rstrip("/")
+            self._backend_log_endpoint = f"{base_url}/api/ai-logs"
         else:
             self._backend_log_endpoint = None
 
