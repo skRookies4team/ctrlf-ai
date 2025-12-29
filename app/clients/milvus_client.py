@@ -253,11 +253,23 @@ class MilvusSearchClient:
         self._host = host or settings.MILVUS_HOST
         self._port = port or settings.MILVUS_PORT
         self._collection_name = collection_name or settings.MILVUS_COLLECTION_NAME
-        self._llm_base_url = llm_base_url or settings.embedding_base_url
-        self._embedding_model = embedding_model or settings.EMBEDDING_MODEL_NAME
-        self._embedding_dim = settings.EMBEDDING_DIMENSION
         self._top_k = settings.MILVUS_TOP_K
         self._search_params = json.loads(settings.MILVUS_SEARCH_PARAMS)
+
+        # OpenAI API 설정 (우선) vs vLLM 서버 설정 (폴백)
+        self._openai_api_key = settings.OPENAI_API_KEY
+        if self._openai_api_key:
+            # OpenAI API 사용
+            self._llm_base_url = "https://api.openai.com"
+            self._embedding_model = settings.OPENAI_EMBED_MODEL
+            self._embedding_dim = settings.OPENAI_EMBED_DIM
+            logger.info(f"Using OpenAI API for embeddings: model={self._embedding_model}, dim={self._embedding_dim}")
+        else:
+            # 기존 vLLM 서버 사용
+            self._llm_base_url = llm_base_url or settings.embedding_base_url
+            self._embedding_model = embedding_model or settings.EMBEDDING_MODEL_NAME
+            self._embedding_dim = settings.EMBEDDING_DIMENSION
+            logger.info(f"Using vLLM server for embeddings: {self._llm_base_url}")
 
         self._connected = False
         self._collection: Optional[Collection] = None
@@ -467,11 +479,17 @@ class MilvusSearchClient:
             "model": self._embedding_model,
         }
 
+        # OpenAI API 사용 시 Authorization 헤더 추가
+        headers = {}
+        if self._openai_api_key:
+            headers["Authorization"] = f"Bearer {self._openai_api_key}"
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     url,
                     json=payload,
+                    headers=headers,
                     timeout=self.DEFAULT_TIMEOUT,
                 )
 

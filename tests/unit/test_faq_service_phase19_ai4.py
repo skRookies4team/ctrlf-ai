@@ -38,10 +38,10 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def mock_search_client():
-    """테스트용 RagflowSearchClient mock"""
+def mock_milvus_client():
+    """테스트용 MilvusSearchClient mock"""
     client = AsyncMock()
-    client.search_chunks = AsyncMock(return_value=[
+    client.search = AsyncMock(return_value=[
         {"document_name": "test.pdf", "page_num": 1, "similarity": 0.9, "content": "테스트 내용"}
     ])
     return client
@@ -132,7 +132,7 @@ class TestInputPiiDetection:
 
     @pytest.mark.anyio
     async def test_pii_detected_in_canonical_question(
-        self, mock_search_client, mock_llm_client, mock_pii_service_with_pii
+        self, mock_milvus_client, mock_llm_client, mock_pii_service_with_pii
     ):
         """canonical_question에 PII 검출 시 에러"""
         request = FaqDraftGenerateRequest(
@@ -144,7 +144,7 @@ class TestInputPiiDetection:
         )
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service_with_pii,
         )
@@ -158,7 +158,7 @@ class TestInputPiiDetection:
 
     @pytest.mark.anyio
     async def test_pii_detected_in_sample_questions(
-        self, mock_search_client, mock_llm_client, mock_pii_service_with_pii
+        self, mock_milvus_client, mock_llm_client, mock_pii_service_with_pii
     ):
         """sample_questions에 PII 검출 시 에러"""
         request = FaqDraftGenerateRequest(
@@ -189,7 +189,7 @@ class TestInputPiiDetection:
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii,
         )
@@ -201,7 +201,7 @@ class TestInputPiiDetection:
 
     @pytest.mark.anyio
     async def test_pii_detected_in_top_docs_snippet(
-        self, mock_search_client, mock_llm_client
+        self, mock_milvus_client, mock_llm_client
     ):
         """top_docs.snippet에 PII 검출 시 에러"""
         request = FaqDraftGenerateRequest(
@@ -237,7 +237,7 @@ class TestInputPiiDetection:
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii,
         )
@@ -258,7 +258,7 @@ class TestOutputPiiDetection:
 
     @pytest.mark.anyio
     async def test_pii_detected_in_answer_markdown(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """answer_markdown에 PII 검출 시 에러"""
         sample_request.top_docs = sample_top_docs
@@ -295,7 +295,7 @@ ai_confidence: 0.9""")
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -307,7 +307,7 @@ ai_confidence: 0.9""")
 
     @pytest.mark.anyio
     async def test_pii_detected_in_summary(
-        self, mock_search_client, sample_request, sample_top_docs
+        self, mock_milvus_client, sample_request, sample_top_docs
     ):
         """summary에 PII 검출 시 에러"""
         sample_request.top_docs = sample_top_docs
@@ -341,7 +341,7 @@ ai_confidence: 0.9""")
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm,
             pii_service=mock_pii,
         )
@@ -363,7 +363,7 @@ class TestNoPiiDetection:
     @pytest.mark.anyio
     async def test_no_pii_generates_faq_draft(
         self,
-        mock_search_client,
+        mock_milvus_client,
         mock_llm_client,
         mock_pii_service_no_pii,
         sample_request,
@@ -373,7 +373,7 @@ class TestNoPiiDetection:
         sample_request.top_docs = sample_top_docs
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service_no_pii,
         )
@@ -389,7 +389,7 @@ class TestNoPiiDetection:
     @pytest.mark.anyio
     async def test_empty_text_skipped(
         self,
-        mock_search_client,
+        mock_milvus_client,
         mock_llm_client,
         mock_pii_service_no_pii,
     ):
@@ -406,7 +406,7 @@ class TestNoPiiDetection:
         )
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service_no_pii,
         )
@@ -426,7 +426,7 @@ class TestPiiCheckMethods:
 
     @pytest.mark.anyio
     async def test_check_input_pii_all_fields(
-        self, mock_search_client, mock_llm_client
+        self, mock_milvus_client, mock_llm_client
     ):
         """입력 PII 검사가 모든 필드를 확인"""
         checked_texts = []
@@ -444,7 +444,7 @@ class TestPiiCheckMethods:
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii,
         )
@@ -471,7 +471,7 @@ class TestPiiCheckMethods:
 
     @pytest.mark.anyio
     async def test_check_output_pii_all_fields(
-        self, mock_search_client, mock_llm_client
+        self, mock_milvus_client, mock_llm_client
     ):
         """출력 PII 검사가 모든 필드를 확인"""
         checked_texts = []
@@ -489,7 +489,7 @@ class TestPiiCheckMethods:
         mock_pii.detect_and_mask = AsyncMock(side_effect=mock_detect)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus_client,
             llm_client=mock_llm_client,
             pii_service=mock_pii,
         )

@@ -22,7 +22,6 @@ from app.models.intent import (
     RouteType,
 )
 from app.clients.llm_client import LLMClient
-from app.clients.ragflow_client import RagflowClient
 from app.services.chat_service import ChatService
 from app.services.intent_service import IntentService
 from app.services.pii_service import PiiService
@@ -284,50 +283,8 @@ async def test_pii_preserves_text_on_skip() -> None:
 
 
 # --- ChatService Integration Tests ---
-
-
-@pytest.mark.anyio
-async def test_chat_service_with_intent_and_pii() -> None:
-    """
-    Test that ChatService integrates IntentService and PiiService.
-    Phase 10: domain=POLICY 힌트 사용 시 RAG_INTERNAL
-    """
-    # Create services with empty base_url (fallback mode)
-    ragflow_client = RagflowClient(base_url="")
-    llm_client = LLMClient(base_url="")
-    pii_service = PiiService(base_url="", enabled=False)
-    intent_service = IntentService()
-
-    service = ChatService(
-        ragflow_client=ragflow_client,
-        llm_client=llm_client,
-        pii_service=pii_service,
-        intent_service=intent_service,
-    )
-
-    request = ChatRequest(
-        session_id="test-session",
-        user_id="user-123",
-        user_role="EMPLOYEE",
-        domain="POLICY",  # 도메인 힌트 사용
-        messages=[ChatMessage(role="user", content="결재 승인 관련 문의")],
-    )
-
-    response = await service.handle_chat(request)
-
-    # Verify response structure
-    assert isinstance(response, ChatResponse)
-    assert isinstance(response.answer, str)
-    assert len(response.answer) > 0
-    assert response.meta is not None
-
-    # Verify route is set (should be RAG_INTERNAL for policy query)
-    assert response.meta.route is not None
-    assert len(response.meta.route) > 0
-    assert response.meta.route == "RAG_INTERNAL"
-
-    # Verify masked flag is set (should be False since PII disabled)
-    assert response.meta.masked is False
+# Note: RAG_INTERNAL 라우트 테스트는 RAGFlow 제거로 삭제되었습니다.
+# MILVUS_ENABLED=True 환경에서만 RAG 검색이 가능합니다.
 
 
 @pytest.mark.anyio
@@ -336,13 +293,11 @@ async def test_chat_service_general_chat_route() -> None:
     Test that ChatService routes general chat to LLM only.
     Phase 10: GENERAL_CHAT → LLM_ONLY
     """
-    ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
     pii_service = PiiService(base_url="", enabled=False)
     intent_service = IntentService()
 
     service = ChatService(
-        ragflow_client=ragflow_client,
         llm_client=llm_client,
         pii_service=pii_service,
         intent_service=intent_service,
@@ -369,7 +324,6 @@ async def test_chat_service_incident_route() -> None:
     Test that ChatService routes incident report correctly.
     Phase 10: INCIDENT_REPORT → BACKEND_API
     """
-    ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
     pii_service = PiiService(base_url="", enabled=False)
     # Use FakeIntentService to ensure BACKEND_API route without LLM
@@ -381,7 +335,6 @@ async def test_chat_service_incident_route() -> None:
     )
 
     service = ChatService(
-        ragflow_client=ragflow_client,
         llm_client=llm_client,
         pii_service=pii_service,
         intent_service=intent_service,
@@ -399,74 +352,6 @@ async def test_chat_service_incident_route() -> None:
 
     # Verify route is BACKEND_API for incident report
     assert response.meta.route == "BACKEND_API"
-
-
-@pytest.mark.anyio
-async def test_chat_service_education_route() -> None:
-    """
-    Test that ChatService routes education content queries correctly.
-    Phase 10: EDUCATION_QA → RAG_INTERNAL
-    """
-    ragflow_client = RagflowClient(base_url="")
-    llm_client = LLMClient(base_url="")
-    pii_service = PiiService(base_url="", enabled=False)
-    intent_service = IntentService()
-
-    service = ChatService(
-        ragflow_client=ragflow_client,
-        llm_client=llm_client,
-        pii_service=pii_service,
-        intent_service=intent_service,
-    )
-
-    request = ChatRequest(
-        session_id="test-session",
-        user_id="user-123",
-        user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="보안교육 강의 내용 알려줘")],
-    )
-
-    response = await service.handle_chat(request)
-
-    # Verify route is RAG_INTERNAL for education content query
-    assert response.meta.route == "RAG_INTERNAL"
-
-
-@pytest.mark.anyio
-async def test_chat_service_meta_has_required_fields() -> None:
-    """
-    Test that ChatService response meta has all required fields.
-    """
-    ragflow_client = RagflowClient(base_url="")
-    llm_client = LLMClient(base_url="")
-    pii_service = PiiService(base_url="", enabled=False)
-
-    service = ChatService(
-        ragflow_client=ragflow_client,
-        llm_client=llm_client,
-        pii_service=pii_service,
-    )
-
-    request = ChatRequest(
-        session_id="test-session",
-        user_id="user-123",
-        user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="테스트")],
-    )
-
-    response = await service.handle_chat(request)
-
-    # Verify all meta fields are present and have correct types
-    assert response.meta.route is not None
-    assert isinstance(response.meta.route, str)
-    assert len(response.meta.route) > 0
-
-    assert response.meta.masked is not None
-    assert isinstance(response.meta.masked, bool)
-
-    assert response.meta.latency_ms is not None
-    assert isinstance(response.meta.latency_ms, int)
-    assert response.meta.latency_ms >= 0
 
 
 # --- MaskingStage Enum Tests ---

@@ -91,7 +91,6 @@ from app.models.router_types import (
 )
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, get_llm_client
-from app.clients.ragflow_client import RagflowClient, get_ragflow_client
 from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
@@ -280,7 +279,6 @@ class ChatService:
     - meta.rag_used = True only if len(sources) > 0
 
     Attributes:
-        _ragflow: RagflowClient for document search
         _llm: LLMClient for response generation
         _pii: PiiService for PII masking
         _intent: IntentService for intent classification
@@ -293,7 +291,6 @@ class ChatService:
 
     def __init__(
         self,
-        ragflow_client: Optional[RagflowClient] = None,
         llm_client: Optional[LLMClient] = None,
         pii_service: Optional[PiiService] = None,
         intent_service: Optional[IntentService] = None,
@@ -308,7 +305,6 @@ class ChatService:
         Initialize ChatService.
 
         Args:
-            ragflow_client: RagflowClient instance. If None, creates a new instance.
             llm_client: LLMClient instance. If None, creates a new instance.
             pii_service: PiiService instance. If None, creates a new instance.
             intent_service: IntentService instance. If None, creates a new instance.
@@ -320,7 +316,6 @@ class ChatService:
             answer_guard_service: AnswerGuardService instance. If None, creates singleton. (Phase 39)
         """
         # Phase 싱글톤 리팩토링: 클라이언트/서비스 인스턴스 재사용
-        self._ragflow = ragflow_client or get_ragflow_client()
         self._llm = llm_client or get_llm_client()
         self._pii = pii_service or get_pii_service()
         self._intent = intent_service or IntentService()
@@ -342,10 +337,8 @@ class ChatService:
         # Phase 39: 마지막 에러 사유 저장 (불만 빠른 경로용)
         self._last_error_reason: Optional[str] = None
 
-        # Phase 42 (A안 확정): RagHandler 초기화 (RAGFlow 단일 검색)
-        self._rag_handler = RagHandler(
-            ragflow_client=self._ragflow,
-        )
+        # RagHandler 초기화 (Milvus 전용, RAGFlow 제거됨)
+        self._rag_handler = RagHandler()
 
         # Phase 2 리팩토링: BackendHandler 초기화
         self._backend_handler = BackendHandler(

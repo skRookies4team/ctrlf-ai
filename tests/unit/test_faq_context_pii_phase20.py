@@ -1,8 +1,8 @@
 """
 Phase 20-AI-3: 컨텍스트 PII 방어 테스트
 
-RAGFlow 검색 결과 snippet에서 PII가 검출되면 강차단되는지 검증합니다:
-- RAGFlow mock 결과 snippet에 이메일/전화번호 등을 넣고 PII_DETECTED_CONTEXT로 떨어지는지
+Milvus 검색 결과 snippet에서 PII가 검출되면 강차단되는지 검증합니다:
+- Milvus mock 결과 snippet에 이메일/전화번호 등을 넣고 PII_DETECTED_CONTEXT로 떨어지는지
 """
 
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -29,8 +29,8 @@ class TestContextPiiDetection:
     """컨텍스트 PII 검출 테스트."""
 
     @pytest.mark.anyio
-    async def test_pii_in_ragflow_snippet_raises_error(self):
-        """RAGFlow 스니펫에 PII가 포함되면 PII_DETECTED_CONTEXT 에러 발생."""
+    async def test_pii_in_milvus_snippet_raises_error(self):
+        """Milvus 스니펫에 PII가 포함되면 PII_DETECTED_CONTEXT 에러 발생."""
         # PII 서비스 mock: 이메일 검출
         mock_pii_service = AsyncMock()
 
@@ -58,9 +58,9 @@ class TestContextPiiDetection:
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        # RAGFlow 검색 클라이언트 mock: PII가 포함된 스니펫 반환
-        mock_search_client = AsyncMock()
-        mock_search_client.search_chunks = AsyncMock(return_value=[
+        # Milvus 검색 클라이언트 mock: PII가 포함된 스니펫 반환
+        mock_milvus = AsyncMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {
                 "document_name": "내부규정.pdf",
                 "page_num": 1,
@@ -79,7 +79,7 @@ class TestContextPiiDetection:
         mock_llm_client = AsyncMock()
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )
@@ -100,8 +100,8 @@ class TestContextPiiDetection:
         mock_llm_client.generate_chat_completion.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_phone_number_in_ragflow_snippet_raises_error(self):
-        """RAGFlow 스니펫에 전화번호가 포함되면 PII_DETECTED_CONTEXT 에러 발생."""
+    async def test_phone_number_in_milvus_snippet_raises_error(self):
+        """Milvus 스니펫에 전화번호가 포함되면 PII_DETECTED_CONTEXT 에러 발생."""
         mock_pii_service = AsyncMock()
 
         async def mock_detect_and_mask(text, stage):
@@ -128,8 +128,8 @@ class TestContextPiiDetection:
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        mock_search_client = AsyncMock()
-        mock_search_client.search_chunks = AsyncMock(return_value=[
+        mock_milvus = AsyncMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {
                 "document_name": "연락처.pdf",
                 "page_num": 1,
@@ -141,7 +141,7 @@ class TestContextPiiDetection:
         mock_llm_client = AsyncMock()
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )
@@ -158,8 +158,8 @@ class TestContextPiiDetection:
         assert "PII_DETECTED_CONTEXT" in str(exc_info.value)
 
     @pytest.mark.anyio
-    async def test_no_pii_in_ragflow_snippet_proceeds(self):
-        """RAGFlow 스니펫에 PII가 없으면 정상 진행."""
+    async def test_no_pii_in_milvus_snippet_proceeds(self):
+        """Milvus 스니펫에 PII가 없으면 정상 진행."""
         mock_pii_service = AsyncMock()
 
         async def mock_detect_and_mask(text, stage):
@@ -172,8 +172,8 @@ class TestContextPiiDetection:
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        mock_search_client = AsyncMock()
-        mock_search_client.search_chunks = AsyncMock(return_value=[
+        mock_milvus = AsyncMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {
                 "document_name": "휴가규정.pdf",
                 "page_num": 1,
@@ -197,7 +197,7 @@ ai_confidence: 0.85
 """)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )
@@ -233,8 +233,8 @@ ai_confidence: 0.85
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        mock_search_client = AsyncMock()
-        mock_search_client.search_chunks = AsyncMock(return_value=[
+        mock_milvus = AsyncMock()
+        mock_milvus.search = AsyncMock(return_value=[
             {
                 "document_name": "휴가규정.pdf",
                 "page_num": 1,
@@ -266,7 +266,7 @@ ai_confidence: 0.85
 """)
 
         service = FaqDraftService(
-            search_client=mock_search_client,
+            milvus_client=mock_milvus,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )

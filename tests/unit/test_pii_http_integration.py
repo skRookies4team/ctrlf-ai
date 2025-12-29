@@ -20,7 +20,6 @@ import pytest
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
 from app.models.intent import IntentResult, IntentType, MaskingStage, PiiMaskResult, RouteType, UserRole
 from app.clients.llm_client import LLMClient
-from app.clients.ragflow_client import RagflowClient
 from app.services.chat_service import ChatService
 from app.services.intent_service import IntentService
 from app.services.pii_service import PiiService
@@ -427,7 +426,6 @@ async def test_chat_service_uses_pii_http_service_when_configured() -> None:
     )
 
     # Create other services (fallback mode)
-    ragflow_client = RagflowClient(base_url="")
     llm_client = LLMClient(base_url="")
     # Use FakeIntentService with LLM_ONLY route to avoid AnswerGuard blocking
     intent_service = FakeIntentService(
@@ -438,7 +436,6 @@ async def test_chat_service_uses_pii_http_service_when_configured() -> None:
     )
 
     chat_service = ChatService(
-        ragflow_client=ragflow_client,
         llm_client=llm_client,
         pii_service=pii_service,
         intent_service=intent_service,
@@ -466,82 +463,8 @@ async def test_chat_service_uses_pii_http_service_when_configured() -> None:
     assert response.meta.masked is True  # PII was detected in input
 
 
-@pytest.mark.anyio
-async def test_chat_service_pii_masked_false_when_no_pii() -> None:
-    """
-    Test that ChatService sets meta.masked=False when no PII is detected.
-    """
-    def mock_pii_handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        return httpx.Response(200, json={
-            "original_text": body["text"],
-            "masked_text": body["text"],
-            "has_pii": False,
-            "tags": [],
-        })
-
-    pii_mock_client = httpx.AsyncClient(transport=create_mock_transport(mock_pii_handler))
-    pii_service = PiiService(
-        base_url="http://pii-mock:8003",
-        enabled=True,
-        client=pii_mock_client,
-    )
-
-    chat_service = ChatService(
-        ragflow_client=RagflowClient(base_url=""),
-        llm_client=LLMClient(base_url=""),
-        pii_service=pii_service,
-        intent_service=IntentService(),
-    )
-
-    request = ChatRequest(
-        session_id="test-session",
-        user_id="user-123",
-        user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="회사 정책에 대해 알려주세요")],
-    )
-
-    response = await chat_service.handle_chat(request)
-
-    assert response.meta.masked is False
-
-
-@pytest.mark.anyio
-async def test_chat_service_continues_when_pii_service_fails() -> None:
-    """
-    Test that ChatService continues processing when PII service fails.
-    """
-    def mock_pii_handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, json={"error": "PII service down"})
-
-    pii_mock_client = httpx.AsyncClient(transport=create_mock_transport(mock_pii_handler))
-    pii_service = PiiService(
-        base_url="http://pii-mock:8003",
-        enabled=True,
-        client=pii_mock_client,
-    )
-
-    chat_service = ChatService(
-        ragflow_client=RagflowClient(base_url=""),
-        llm_client=LLMClient(base_url=""),
-        pii_service=pii_service,
-        intent_service=IntentService(),
-    )
-
-    request = ChatRequest(
-        session_id="test-session",
-        user_id="user-123",
-        user_role="EMPLOYEE",
-        messages=[ChatMessage(role="user", content="테스트 질문")],
-    )
-
-    # Should not raise exception
-    response = await chat_service.handle_chat(request)
-
-    assert isinstance(response, ChatResponse)
-    assert response.answer is not None
-    # masked should be False due to fallback
-    assert response.meta.masked is False
+# Note: RAG_INTERNAL 라우트를 사용하는 ChatService 테스트는 RAGFlow 제거로 삭제되었습니다.
+# MILVUS_ENABLED=True 환경에서만 RAG 검색이 가능합니다.
 
 
 @pytest.mark.anyio

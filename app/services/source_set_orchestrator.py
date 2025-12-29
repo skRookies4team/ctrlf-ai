@@ -42,7 +42,6 @@ from app.clients.milvus_client import (
     MilvusError,
     get_milvus_client,
 )
-from app.clients.ragflow_client import RagflowClient
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.source_set import (
@@ -123,26 +122,28 @@ class SourceSetOrchestrator:
 
     Attributes:
         _backend_client: 백엔드 API 클라이언트
-        _ragflow_client: RAGFlow API 클라이언트
         _processing_jobs: 진행 중인 작업 상태 (in-memory)
         _running_tasks: 비동기 태스크 관리
+    
+    Note:
+        RAGFlow 클라이언트는 제거되었습니다 (재개발 예정).
     """
 
     def __init__(
         self,
         backend_client: Optional[BackendClient] = None,
-        ragflow_client: Optional[RagflowClient] = None,
         milvus_client: Optional[MilvusSearchClient] = None,
     ):
         """초기화.
 
         Args:
             backend_client: 백엔드 클라이언트 (None이면 싱글톤 사용)
-            ragflow_client: RAGFlow 클라이언트 (None이면 새로 생성)
             milvus_client: Milvus 클라이언트 (None이면 싱글톤 사용, Option 3)
+        
+        Note:
+            RAGFlow 클라이언트는 제거되었습니다 (재개발 예정).
         """
         self._backend_client = backend_client or get_backend_client()
-        self._ragflow_client = ragflow_client or RagflowClient()
         self._processing_jobs: Dict[str, ProcessingJob] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
 
@@ -160,8 +161,8 @@ class SourceSetOrchestrator:
             )
         else:
             self._milvus_client = None
-            logger.info(
-                f"SourceSetOrchestrator initialized with RAGFlow only "
+            logger.warning(
+                f"SourceSetOrchestrator: RAGFlow removed, document processing unavailable "
                 f"(SCRIPT_RETRIEVER_BACKEND={self._settings.script_retriever_backend})"
             )
 
@@ -404,9 +405,22 @@ class SourceSetOrchestrator:
             DocumentProcessingResult: 처리 결과
         """
         from app.core.config import get_settings
-        from app.clients.ragflow_client import RagflowError, RagflowConnectionError
 
         settings = get_settings()
+        
+        # RAGFlow 클라이언트가 제거되었으므로 항상 실패 반환
+        logger.error(
+            f"RAGFlow client removed - document processing unavailable: "
+            f"source_set_id={source_set_id}, doc_id={doc.document_id}"
+        )
+        return DocumentProcessingResult(
+            document_id=doc.document_id,
+            success=False,
+            fail_reason="RAGFLOW_REMOVED: RAGFlow 클라이언트가 제거되었습니다. 재개발 예정.",
+        )
+        
+        # --- 아래 코드는 RAGFlow 재개발 후 활성화 ---
+        _ = settings  # unused
 
         # source_url null 체크
         if not doc.source_url or not doc.source_url.strip():
