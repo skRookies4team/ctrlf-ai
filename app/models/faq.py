@@ -42,6 +42,7 @@ class FaqDraftGenerateRequest(BaseModel):
         canonical_question: 클러스터를 대표하는 질문
         sample_questions: 실제 직원 질문 예시들
         top_docs: 백엔드가 이미 RAG에서 뽑아온 후보 문서들 (선택)
+        avg_intent_confidence: 평균 의도 신뢰도 (0.0~1.0, 선택)
     """
 
     domain: str = Field(
@@ -58,6 +59,12 @@ class FaqDraftGenerateRequest(BaseModel):
     )
     top_docs: List[FaqSourceDoc] = Field(
         default_factory=list, description="RAG에서 뽑아온 후보 문서들"
+    )
+    avg_intent_confidence: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="평균 의도 신뢰도 (0.0~1.0, Chat-Service에서 전달되는 값, null이면 검증 스킵)",
     )
 
 
