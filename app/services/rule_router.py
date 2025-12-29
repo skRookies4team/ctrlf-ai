@@ -19,12 +19,18 @@ Phase 43 업데이트 (인텐트/라우팅 개선):
 - 질문형 어미 감지 추가 (나요/하나요/인가요 등)
 - 기본값 UNKNOWN → POLICY_QA로 변경 (RAG 우선)
 - GENERAL_CHAT 조건 강화 (질문형은 제외)
+
+Phase 49 업데이트 (도메인 라우팅 개선):
+- POLICY 키워드 체크 우선순위를 EDU_CONTENT보다 앞으로 조정
+- 연차/휴가/근태/징계/복무 등은 POLICY로 우선 분류
+- 디버그 로깅에 ASCII-safe preview 적용 (Git Bash 파이프 한글 깨짐 방지)
 """
 
 import random
 import re
 from typing import Optional, Tuple
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.router_types import (
     ClarifyTemplates,
@@ -40,6 +46,29 @@ from app.models.router_types import (
 )
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# Phase 49: ASCII-safe 로깅 유틸 (Git Bash 파이프 한글 깨짐 방지)
+# =============================================================================
+
+
+def ascii_safe_preview(text: str, max_len: int = 50) -> str:
+    """
+    로그 출력용 ASCII-safe 텍스트 미리보기를 생성합니다.
+    Git Bash 파이프, Windows cp949, locale 문제로 인한 한글 깨짐(mojibake) 방지.
+
+    Args:
+        text: 원본 텍스트
+        max_len: 최대 길이 (truncate)
+
+    Returns:
+        str: ASCII-safe 문자열 (예: '\\ud734\\uac00 \\uaddc\\uc815')
+    """
+    if not text:
+        return ""
+    truncated = text[:max_len]
+    return truncated.encode("unicode_escape").decode("ascii")
 
 
 # =============================================================================
@@ -76,19 +105,27 @@ POLICY_KEYWORDS = frozenset([
     "장애인", "장애", "장애인식", "합리적편의", "차별금지",
     "장애인차별", "장애유형", "편견", "고정관념",
     "장애인고용", "장애인채용", "보조기기", "편의제공",
-    # Q세트 도메인: 직무별교육 (JOB)
+    # Q세트 도메인: 직무별교육 (JOB) - Phase 49: 교육 특화 키워드는 EDU로 이동
     "소스코드", "오픈소스", "라이선스", "api", "로그", "데이터",
     "클라우드보안", "인사정보", "민감정보처리", "ai", "외부ai",
     "보안점검", "취약점", "사이버보안", "저작권", "초상권",
-    "github", "코드", "개발자", "보안교육", "정보보호교육",
+    "github", "코드", "개발자",
+    # Note: "보안교육", "정보보호교육"은 EDU_CONTENT_KEYWORDS로 이동 (Phase 49)
 ])
 
 # 교육 내용/규정 관련 키워드 (EDUCATION_QA)
+# Phase 49: 교육 특화 키워드 확장 (POLICY보다 우선 매칭)
 EDU_CONTENT_KEYWORDS = frozenset([
     "교육내용", "교육자료", "교육규정", "학습내용",
     "강의내용", "교육과정", "커리큘럼",
     "4대교육", "법정교육", "의무교육",
+    # 교육 특화 키워드 (Phase 49 확장)
     "정보보호교육", "보안교육", "컴플라이언스교육",
+    "성희롱예방교육", "성희롱교육",
+    "장애인식개선교육", "장애인식교육",
+    "직장내괴롭힘예방교육", "괴롭힘예방교육",
+    "개인정보보호교육", "개인정보교육",
+    # 일반 교육 질문
     "교육이란", "교육이 뭐", "교육 설명",
     "무슨 교육", "어떤 교육",
 ])
@@ -150,6 +187,14 @@ GENERAL_CHAT_KEYWORDS = frozenset([
     "잘가", "반가워", "고마워", "감사", "수고",
     "뭐해", "머해", "하이", "헬로", "바이",
     "ㅇㅇ", "ㄴㄴ", "ㅎㅇ",
+])
+
+# Phase 49: 요약 인텐트 키워드 (SUMMARY_INTENT_ENABLED=True일 때만 사용)
+SUMMARY_KEYWORDS = frozenset([
+    "요약", "요약해", "요약해줘", "요약해주세요",
+    "정리", "정리해", "정리해줘", "정리해주세요",
+    "줄여", "줄여줘", "간단히", "핵심만",
+    "한줄로", "한 줄로", "짧게",
 ])
 
 # 시스템 도움말 키워드 (SYSTEM_HELP)
@@ -230,12 +275,15 @@ class RuleRouter:
         query_lower = user_query.lower()
         debug_info = RouterDebugInfo()
 
+        # Phase 49: ASCII-safe 로깅
+        query_safe = ascii_safe_preview(user_query, 50)
+
         # Step 1: 애매한 경계 체크 (최우선)
         clarify_result = self._check_ambiguous_boundaries(query_lower, debug_info)
         if clarify_result:
             logger.info(
                 f"RuleRouter: Ambiguous boundary detected, needs_clarify=True, "
-                f"query={user_query[:50]}..."
+                f"query='{query_safe}'"
             )
             return clarify_result
 
@@ -245,7 +293,7 @@ class RuleRouter:
             logger.info(
                 f"RuleRouter: Critical action detected, "
                 f"sub_intent_id={critical_result.sub_intent_id}, "
-                f"query={user_query[:50]}..."
+                f"query='{query_safe}'"
             )
             return critical_result
 
@@ -256,7 +304,8 @@ class RuleRouter:
             f"RuleRouter: intent={intent_result.tier0_intent.value}, "
             f"domain={intent_result.domain.value}, "
             f"confidence={intent_result.confidence}, "
-            f"query={user_query[:50]}..."
+            f"rule_hits={debug_info.rule_hits}, "
+            f"query='{query_safe}'"
         )
 
         return intent_result
@@ -341,12 +390,19 @@ class RuleRouter:
         명확하지 않은 패턴:
         - 연차/휴가 키워드 + 애매한 동사
         - 단, LEAVE_POLICY_KEYWORDS나 HR_PERSONAL_KEYWORDS에 명확히 해당하면 제외
+
+        Phase 49: "규정", "정책" 등이 있으면 명확히 정책 질문으로 판단
         """
         # 먼저 명확한 키워드가 있는지 체크
         if self._contains_any(query_lower, LEAVE_POLICY_KEYWORDS):
             return False  # 명확히 정책 질문
         if self._contains_any(query_lower, HR_PERSONAL_KEYWORDS):
             return False  # 명확히 개인화 질문
+
+        # Phase 49: "규정", "정책" 등이 있으면 명확히 정책 질문
+        policy_clarifiers = {"규정", "정책", "규칙", "지침", "제도"}
+        if self._contains_any(query_lower, policy_clarifiers):
+            return False  # 명확히 정책 질문
 
         # 연차/휴가 키워드 + 애매한 동사 조합 체크
         has_leave_keyword = self._contains_any(query_lower, LEAVE_AMBIGUOUS_KEYWORDS)
@@ -456,6 +512,11 @@ class RuleRouter:
         - 기본값을 POLICY_QA로 변경 (RAG 우선)
         - 질문형 문장은 GENERAL_CHAT에서 제외
 
+        Phase 49 업데이트:
+        - POLICY 키워드 체크를 EDU_CONTENT보다 앞으로 이동
+        - 연차/휴가/근태/징계/복무 등은 POLICY로 우선 분류
+        - 요약 인텐트 감지 (SUMMARY_INTENT_ENABLED=True일 때)
+
         Args:
             query_lower: 소문자로 변환된 질문
             query_original: 원본 질문 (질문형 판정용)
@@ -464,7 +525,58 @@ class RuleRouter:
         Returns:
             RouterResult: 분류 결과
         """
+        # Phase 49: 요약 인텐트 감지 (피처 플래그로 보호)
+        settings = get_settings()
+        if getattr(settings, "SUMMARY_INTENT_ENABLED", False):
+            if self._contains_any(query_lower, SUMMARY_KEYWORDS):
+                matched_keywords = [kw for kw in SUMMARY_KEYWORDS if kw in query_lower]
+                debug_info.rule_hits.append("SUMMARY_DETECTED")
+                debug_info.keywords.extend(matched_keywords)
+                query_safe = ascii_safe_preview(query_original, 50)
+                logger.info(
+                    f"RuleRouter: Summary intent detected | "
+                    f"keywords={matched_keywords} | query='{query_safe}'"
+                )
+                # TODO: 향후 별도 SUMMARY_QA 인텐트로 분기 가능
+                # 현재는 기존 로직 계속 진행
+
+        # Phase 49: 복합 조건 - "교육"이 포함되면 EDU 우선 체크
+        # "정보보호교육", "성희롱예방교육" 등은 EDU로 분류해야 함
+        if "교육" in query_lower:
+            if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
+                debug_info.rule_hits.append("EDU_CONTENT_PRIORITY")
+                debug_info.keywords.extend(
+                    [kw for kw in EDU_CONTENT_KEYWORDS if kw in query_lower]
+                )
+                return RouterResult(
+                    tier0_intent=Tier0Intent.EDUCATION_QA,
+                    domain=RouterDomain.EDU,
+                    route_type=RouterRouteType.RAG_INTERNAL,
+                    confidence=0.85,
+                    debug=debug_info,
+                )
+
+        # Phase 49: 복합 조건 - "규정/정책/규칙" 포함 시 POLICY 우선 체크
+        # "연차 규정", "근태 규정" 등은 POLICY로 분류해야 함
+        policy_clarifiers = {"규정", "정책", "규칙", "지침", "제도"}
+        if self._contains_any(query_lower, policy_clarifiers):
+            if self._contains_any(query_lower, POLICY_KEYWORDS) or \
+               self._contains_any(query_lower, LEAVE_POLICY_KEYWORDS) or \
+               self._contains_any(query_lower, LEAVE_AMBIGUOUS_KEYWORDS):
+                debug_info.rule_hits.append("POLICY_PRIORITY")
+                debug_info.keywords.extend(
+                    [kw for kw in policy_clarifiers if kw in query_lower]
+                )
+                return RouterResult(
+                    tier0_intent=Tier0Intent.POLICY_QA,
+                    domain=RouterDomain.POLICY,
+                    route_type=RouterRouteType.RAG_INTERNAL,
+                    confidence=0.85,
+                    debug=debug_info,
+                )
+
         # 우선순위 순서대로 체크
+        # Phase 49: POLICY를 EDU_CONTENT보다 앞으로 이동
 
         # 1. HR 개인화 (가장 명확한 개인화 패턴)
         if self._contains_any(query_lower, HR_PERSONAL_KEYWORDS):
@@ -481,7 +593,7 @@ class RuleRouter:
                 debug=debug_info,
             )
 
-        # 2. 교육 현황 조회
+        # 2. 교육 현황 조회 (개인화)
         if self._contains_any(query_lower, EDU_STATUS_KEYWORDS):
             debug_info.rule_hits.append("EDU_STATUS")
             debug_info.keywords.extend(
@@ -496,21 +608,7 @@ class RuleRouter:
                 debug=debug_info,
             )
 
-        # 3. 교육 내용 질문
-        if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
-            debug_info.rule_hits.append("EDU_CONTENT")
-            debug_info.keywords.extend(
-                [kw for kw in EDU_CONTENT_KEYWORDS if kw in query_lower]
-            )
-            return RouterResult(
-                tier0_intent=Tier0Intent.EDUCATION_QA,
-                domain=RouterDomain.EDU,
-                route_type=RouterRouteType.RAG_INTERNAL,
-                confidence=0.85,
-                debug=debug_info,
-            )
-
-        # 4. 정책/규정 질문
+        # 3. 정책/규정 질문 (Phase 49: EDU_CONTENT보다 먼저 체크)
         if self._contains_any(query_lower, POLICY_KEYWORDS):
             debug_info.rule_hits.append("POLICY")
             debug_info.keywords.extend(
@@ -524,7 +622,7 @@ class RuleRouter:
                 debug=debug_info,
             )
 
-        # 5. 연차/휴가 규정 질문
+        # 4. 연차/휴가 규정 질문
         if self._contains_any(query_lower, LEAVE_POLICY_KEYWORDS):
             debug_info.rule_hits.append("LEAVE_POLICY")
             debug_info.keywords.extend(
@@ -533,6 +631,20 @@ class RuleRouter:
             return RouterResult(
                 tier0_intent=Tier0Intent.POLICY_QA,
                 domain=RouterDomain.POLICY,
+                route_type=RouterRouteType.RAG_INTERNAL,
+                confidence=0.85,
+                debug=debug_info,
+            )
+
+        # 5. 교육 내용 질문 (Phase 49: POLICY보다 뒤로 이동)
+        if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
+            debug_info.rule_hits.append("EDU_CONTENT")
+            debug_info.keywords.extend(
+                [kw for kw in EDU_CONTENT_KEYWORDS if kw in query_lower]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.EDUCATION_QA,
+                domain=RouterDomain.EDU,
                 route_type=RouterRouteType.RAG_INTERNAL,
                 confidence=0.85,
                 debug=debug_info,

@@ -32,6 +32,37 @@ import re
 from typing import List, Literal, Optional, Tuple
 
 from app.clients.ragflow_client import RagflowClient
+
+
+# =============================================================================
+# Phase 48.1: ASCII-safe query preview (로그 한글 깨짐 방지)
+# =============================================================================
+
+def ascii_safe_preview(text: str, max_len: int = 50) -> str:
+    """
+    로그 출력용 ASCII-safe 텍스트 미리보기를 생성합니다.
+
+    Git Bash 파이프, Windows cp949, locale 문제로 인한 한글 깨짐(mojibake) 방지.
+    한글은 \\uXXXX 형태로 escape하여 터미널 환경에 무관하게 안전하게 출력.
+
+    Args:
+        text: 원본 텍스트
+        max_len: 최대 길이 (기본 50자)
+
+    Returns:
+        ASCII-safe 문자열 (한글은 \\uXXXX로 변환)
+
+    Example:
+        >>> ascii_safe_preview("연차 규정 알려줘")
+        '\\uc5f0\\ucc28 \\uaddc\\uc815 \\uc54c\\ub824\\uc918'
+    """
+    if not text:
+        return ""
+    truncated = text[:max_len]
+    # ASCII 문자만 남기고, 나머지는 \\uXXXX로 escape
+    return truncated.encode("unicode_escape").decode("ascii")
+
+
 from app.clients.milvus_client import (
     MilvusSearchClient,
     MilvusSearchError,
@@ -87,9 +118,11 @@ def log_similarity_distribution(
         domain: 검색 도메인
     """
     if not sources:
+        # Phase 48.1: ASCII-safe query preview
+        query_safe = ascii_safe_preview(query_preview, 50)
         logger.info(
             f"[Similarity] {search_stage}: 0 results | "
-            f"domain={domain} | query='{query_preview[:50]}...'"
+            f"domain={domain} | query='{query_safe}'"
         )
         return
 
@@ -272,10 +305,12 @@ def apply_low_relevance_gate(
 
     # Gate A: score 하드 게이트
     if max_score < min_threshold:
+        # Phase 48.1: ASCII-safe query preview (한글 깨짐 방지)
+        query_safe = ascii_safe_preview(query, 50)
         logger.warning(
             f"[LowRelevanceGate] DEMOTED by score_gate | "
             f"max_score={max_score:.3f} < threshold={min_threshold} | "
-            f"query='{query[:50]}...' | domain={domain} | "
+            f"query='{query_safe}' | domain={domain} | "
             f"avg_score={avg_score:.3f} | top_k={len(sources)} | filtered_count=0"
         )
         return [], "max_score_below_threshold"
@@ -285,20 +320,24 @@ def apply_low_relevance_gate(
     has_anchor_match = check_anchor_keywords_in_sources(anchor_keywords, sources)
 
     if not has_anchor_match:
+        # Phase 48.1: ASCII-safe query/keywords preview (한글 깨짐 방지)
+        query_safe = ascii_safe_preview(query, 50)
+        keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}
         logger.warning(
             f"[LowRelevanceGate] DEMOTED by anchor_gate | "
-            f"anchor_keywords={anchor_keywords} not found in sources | "
-            f"query='{query[:50]}...' | domain={domain} | "
+            f"anchor_keywords={keywords_safe} not found in sources | "
+            f"query='{query_safe}' | domain={domain} | "
             f"max_score={max_score:.3f} | avg_score={avg_score:.3f} | "
             f"top_k={len(sources)} | filtered_count=0"
         )
         return [], "no_anchor_term_match"
 
     # 통과
+    query_safe = ascii_safe_preview(query, 30)
     logger.info(
         f"[LowRelevanceGate] PASSED | "
         f"max_score={max_score:.3f} >= threshold={min_threshold} | "
-        f"anchor_match=True | query='{query[:30]}...' | domain={domain}"
+        f"anchor_match=True | query='{query_safe}' | domain={domain}"
     )
     return sources, None
 

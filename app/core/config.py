@@ -218,6 +218,23 @@ class Settings(BaseSettings):
     # domain → dataset_id 매핑 강제 필터 활성화
     RAG_DATASET_FILTER_ENABLED: bool = True
 
+    # =========================================================================
+    # Phase 49: EDUCATION dataset_id allowlist 설정
+    # =========================================================================
+    # EDUCATION 도메인 검색 시 허용할 dataset_id 목록 (쉼표 구분)
+    # Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
+    RAG_EDUCATION_DATASET_IDS: str = (
+        "정보보안교육,성희롱예방교육,장애인식개선교육,직장내괴롭힘예방교육,개인정보보호교육"
+    )
+
+    # =========================================================================
+    # Phase 49: Summary Intent 분리 (요약 인텐트)
+    # =========================================================================
+    # 요약 인텐트 분리 활성화 여부 (기본 OFF)
+    # True: "요약해줘", "정리해줘" 등 패턴을 별도 인텐트로 분류
+    # False: 기존 로직 유지 (POLICY_QA/EDUCATION_QA로 분류)
+    SUMMARY_INTENT_ENABLED: bool = False
+
     # Embedding 모델 설정 (vLLM 서버에서 사용)
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원
