@@ -144,6 +144,11 @@ class Settings(BaseSettings):
     # 품질 모니터링 (Phase 20-AI-4)
     FAQ_CONFIDENCE_WARN_THRESHOLD: float = 0.6  # 경고 임계값
 
+    # FAQ 생성 검증 설정
+    FAQ_INTENT_CONFIDENCE_REQUIRED: bool = False  # 의도 신뢰도 검증 필수 여부 (False면 경고만)
+    FAQ_INTENT_CONFIDENCE_THRESHOLD: float = 0.7  # 의도 신뢰도 최소 임계값
+    FAQ_LOW_RELEVANCE_BLOCK: bool = False  # LOW_RELEVANCE_CONTEXT 차단 여부 (False면 경고만)
+
     # =========================================================================
     # Phase 21: Intent Router 설정
     # =========================================================================
