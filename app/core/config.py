@@ -107,9 +107,10 @@ class Settings(BaseSettings):
 
     # Dataset 슬러그 → dataset_id 매핑
     # 형식: "slug1:dataset_id1,slug2:dataset_id2,..."
-    # 예: "POLICY:사내규정,EDUCATION:정보보안교육"
-    # 실제 값은 .env의 MILVUS_DATASET_MAPPING에서 설정
-    RAGFLOW_DATASET_MAPPING: str = "POLICY:사내규정,EDUCATION:정보보안교육"
+    # 예: "POLICY:사내규정,EDUCATION:정보보안교육,FOUR_MANDATORY:법정의무교육"
+    # 실제 값은 .env의 RAGFLOW_DATASET_MAPPING에서 설정
+    # 주의: 매핑에 없는 domain은 FAILED 처리됨 (fallback 금지)
+    RAGFLOW_DATASET_MAPPING: str = "POLICY:사내규정,EDUCATION:정보보안교육,FOUR_MANDATORY:법정의무교육"
 
     # =========================================================================
     # Phase 19: 개별 KB_ID 설정 (RAGFLOW_DATASET_MAPPING 대신 사용 가능)

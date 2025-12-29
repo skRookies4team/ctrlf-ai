@@ -429,6 +429,18 @@ class SourceSetOrchestrator:
             # dataset_id 결정 (domain → dataset_id 매핑)
             dataset_id = self._ragflow_client._dataset_to_kb_id(doc.domain)
 
+            # domain 매핑 검증 (매핑 없으면 FAILED 처리, fallback 금지)
+            if not dataset_id:
+                logger.error(
+                    f"Invalid domain - no dataset mapping: "
+                    f"doc_id={doc.document_id}, domain={doc.domain}"
+                )
+                return DocumentProcessingResult(
+                    document_id=doc.document_id,
+                    success=False,
+                    fail_reason=f"INVALID_DOMAIN: {doc.domain}",
+                )
+
             # 1. RAGFlow에 문서 업로드
             logger.info(f"Uploading document to RAGFlow: doc_id={doc.document_id}")
             file_name = doc.source_url.split("/")[-1].split("?")[0] or f"{doc.document_id}.pdf"
