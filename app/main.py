@@ -23,6 +23,7 @@ from app.api.v1 import (
     chat,
     chat_stream,
     faq,
+    feedback,
     gap_suggestions,
     health,
     internal_rag,
@@ -35,6 +36,12 @@ from app.api.v1 import (
 from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
+from app.telemetry.middleware import RequestContextMiddleware
+from app.telemetry.publisher import (
+    TelemetryPublisher,
+    get_telemetry_publisher,
+    set_telemetry_publisher,
+)
 
 # 설정 및 로거 초기화
 settings = get_settings()
@@ -81,10 +88,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # - 캐시 연결 (Redis 등)
     # 참고: httpx.AsyncClient는 lazy-init 방식으로 첫 호출 시 생성됨
 
+    # Telemetry Publisher 초기화
+    # BACKEND_BASE_URL과 BACKEND_INTERNAL_TOKEN이 설정된 경우에만 활성화
+    telemetry_enabled = bool(
+        settings.backend_base_url and settings.BACKEND_INTERNAL_TOKEN
+    )
+    if telemetry_enabled:
+        publisher = TelemetryPublisher(
+            backend_base_url=settings.backend_base_url,
+            internal_token=settings.BACKEND_INTERNAL_TOKEN,
+            source="ai-gateway",
+            enabled=True,
+        )
+        set_telemetry_publisher(publisher)
+        await publisher.start()
+        logger.info("TelemetryPublisher initialized and started")
+    else:
+        logger.info(
+            "TelemetryPublisher disabled (BACKEND_BASE_URL or BACKEND_INTERNAL_TOKEN not set)"
+        )
+
     try:
         yield  # 애플리케이션 실행
     finally:
         # 종료 시 실행
+        # Telemetry Publisher 종료
+        publisher = get_telemetry_publisher()
+        if publisher:
+            await publisher.stop()
+            set_telemetry_publisher(None)
+
         await close_async_http_client()
         logger.info(f"Shutting down {settings.APP_NAME}")
 
@@ -137,6 +170,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Request Context 미들웨어 (Telemetry 헤더 전파)
+# X-Trace-Id, X-User-Id, X-Dept-Id, X-Conversation-Id, X-Turn-Id 헤더를 컨텍스트에 저장
+app.add_middleware(RequestContextMiddleware)
 
 # 라우터 등록
 #
@@ -204,3 +241,7 @@ app.include_router(source_sets.router, tags=["SourceSet Orchestration"])
 # - POST /internal/ai/rag-documents/ingest: Backend → AI ingest 요청
 # - POST /internal/ai/callbacks/ragflow/ingest: RAGFlow → AI 콜백
 app.include_router(rag_documents.router, tags=["RAG Documents Ingest"])
+
+# Feedback Internal API (A6)
+# - POST /internal/ai/feedback: Backend → AI 피드백 수신
+app.include_router(feedback.router, tags=["Feedback"])
