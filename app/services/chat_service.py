@@ -95,7 +95,7 @@ from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
 from app.services.intent_service import IntentService
-from app.services.pii_service import PiiService, get_pii_service
+from app.services.pii_service import PiiService, PiiDetectorUnavailableError, get_pii_service
 from app.services.chat.route_mapper import (
     map_tier0_to_intent,
     map_router_route_to_route_type,
@@ -144,6 +144,11 @@ from app.utils.debug_log import (
     generate_request_id,
     is_debug_enabled,
 )
+from app.telemetry.emitters import emit_chat_turn_once, emit_security_event_once
+from app.telemetry.metrics import (
+    set_rag_metrics,
+    rag_metrics_to_rag_info,
+)
 
 logger = get_logger(__name__)
 
@@ -153,6 +158,19 @@ logger = get_logger(__name__)
 # =============================================================================
 # LLM_FALLBACK_MESSAGE, BACKEND_FALLBACK_MESSAGE, RAG_FAIL_NOTICE,
 # MIXED_BACKEND_FAIL_NOTICE는 app.services.chat.response_factory에서 import됨
+
+
+# =============================================================================
+# A7: PII Detector Fail-Closed 메시지
+# =============================================================================
+# PII 검출 서비스 장애 시 안전한 fallback 메시지
+PII_DETECTOR_UNAVAILABLE_MESSAGE = (
+    "보안 검사 중 문제가 발생했습니다. "
+    "잠시 후 다시 시도해 주세요."
+)
+
+# A7: PII Fail-Closed 시 사용할 에러 코드
+PII_DETECTOR_UNAVAILABLE_ERROR_CODE = "PII_DETECTOR_UNAVAILABLE"
 
 
 # =============================================================================
@@ -399,15 +417,54 @@ class ChatService:
         logger.debug(f"User query: {user_query[:100]}...")
 
         # Step 2: PII Masking (INPUT stage)
-        pii_input = await self._pii.detect_and_mask(
-            text=user_query,
-            stage=MaskingStage.INPUT,
-        )
-        masked_query = pii_input.masked_text
+        # A7: Fail-Closed 적용 - PII detector 장애 시 안전한 응답 반환
+        try:
+            pii_input = await self._pii.detect_and_mask(
+                text=user_query,
+                stage=MaskingStage.INPUT,
+            )
+            masked_query = pii_input.masked_text
 
-        if pii_input.has_pii:
-            logger.info(
-                f"PII detected in input: {len(pii_input.tags)} entities masked"
+            if pii_input.has_pii:
+                logger.info(
+                    f"PII detected in input: {len(pii_input.tags)} entities masked"
+                )
+                # A5: SECURITY 이벤트 발행 (PII 입력 검출/마스킹)
+                emit_security_event_once(
+                    block_type="PII_BLOCK",
+                    blocked=True,
+                    rule_id="PII_INPUT_MASK",
+                )
+
+        except PiiDetectorUnavailableError as e:
+            # A7: PII 검출 실패 시 Fail-Closed
+            logger.error(f"PII detector unavailable at INPUT stage: {e.reason}")
+
+            # SECURITY 이벤트 발행
+            emit_security_event_once(
+                block_type="PII_BLOCK",
+                blocked=True,
+                rule_id="PII_DETECTOR_UNAVAILABLE_INPUT",
+            )
+
+            # CHAT_TURN 이벤트 발행 (실패 케이스)
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            emit_chat_turn_once(
+                intent_main="UNKNOWN",
+                route_type="API",
+                domain="UNKNOWN",
+                rag_used=False,
+                latency_ms_total=latency_ms,
+                error_code=PII_DETECTOR_UNAVAILABLE_ERROR_CODE,
+                pii_detected_input=False,
+                pii_detected_output=False,
+            )
+
+            # 안전한 fallback 응답 반환 (원문 전송 금지)
+            return self._create_fallback_response(
+                PII_DETECTOR_UNAVAILABLE_MESSAGE,
+                start_time,
+                has_pii=False,
             )
 
         # =====================================================================
@@ -592,6 +649,18 @@ class ChatService:
             )
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
 
+            # Telemetry: RAG 메트릭 수집
+            if sources:
+                set_rag_metrics(
+                    retriever=retriever_used or "unknown",
+                    top_k=5,  # 기본 TopK
+                    scores=[s.score for s in sources if s.score is not None],
+                    sources=[
+                        {"docId": s.doc_id, "chunkId": 0, "score": s.score or 0.0}
+                        for s in sources
+                    ],
+                )
+
         elif route in mixed_routes:
             # MIXED_BACKEND_RAG: RAG + Backend 병렬 호출
             rag_search_attempted = True
@@ -621,6 +690,18 @@ class ChatService:
                 f"backend_data_fetched={backend_data_fetched}, rag_latency_ms={rag_latency_ms}, "
                 f"retriever_used={retriever_used}"
             )
+
+            # Telemetry: RAG 메트릭 수집
+            if sources:
+                set_rag_metrics(
+                    retriever=retriever_used or "unknown",
+                    top_k=5,
+                    scores=[s.score for s in sources if s.score is not None],
+                    sources=[
+                        {"docId": s.doc_id, "chunkId": 0, "score": s.score or 0.0}
+                        for s in sources
+                    ],
+                )
 
         elif route in backend_api_routes:
             # BACKEND_API: Backend만 사용 (RAG 없음)
@@ -918,15 +999,54 @@ class ChatService:
         self._answer_guard.log_debug_info(debug_info, req.session_id)
 
         # Step 7: PII Masking (OUTPUT stage)
-        pii_output = await self._pii.detect_and_mask(
-            text=raw_answer,
-            stage=MaskingStage.OUTPUT,
-        )
-        masked_answer = pii_output.masked_text
+        # A7: Fail-Closed 적용 - PII detector 장애 시 원본 답변 반환 금지
+        try:
+            pii_output = await self._pii.detect_and_mask(
+                text=raw_answer,
+                stage=MaskingStage.OUTPUT,
+            )
+            masked_answer = pii_output.masked_text
 
-        if pii_output.has_pii:
-            logger.info(
-                f"PII detected in output: {len(pii_output.tags)} entities masked"
+            if pii_output.has_pii:
+                logger.info(
+                    f"PII detected in output: {len(pii_output.tags)} entities masked"
+                )
+                # A5: SECURITY 이벤트 발행 (PII 출력 검출/마스킹)
+                emit_security_event_once(
+                    block_type="PII_BLOCK",
+                    blocked=True,
+                    rule_id="PII_OUTPUT_MASK",
+                )
+
+        except PiiDetectorUnavailableError as e:
+            # A7: 출력 PII 검출 실패 시 Fail-Closed - 원본 답변 반환 금지
+            logger.error(f"PII detector unavailable at OUTPUT stage: {e.reason}")
+
+            # SECURITY 이벤트 발행
+            emit_security_event_once(
+                block_type="PII_BLOCK",
+                blocked=True,
+                rule_id="PII_DETECTOR_UNAVAILABLE_OUTPUT",
+            )
+
+            # CHAT_TURN 이벤트 발행 (이미 결정된 intent/route/domain 사용)
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            emit_chat_turn_once(
+                intent_main=intent.value if intent else "UNKNOWN",
+                route_type=route.value if route else "API",
+                domain=domain if domain else "UNKNOWN",
+                rag_used=len(sources) > 0,
+                latency_ms_total=latency_ms,
+                error_code=PII_DETECTOR_UNAVAILABLE_ERROR_CODE,
+                pii_detected_input=pii_input.has_pii,
+                pii_detected_output=False,  # 검출 실패했으므로 False
+            )
+
+            # 안전한 fallback 응답 반환 (원본 답변 전송 금지)
+            return self._create_fallback_response(
+                PII_DETECTOR_UNAVAILABLE_MESSAGE,
+                start_time,
+                has_pii=pii_input.has_pii,
             )
 
         # Step 7.5: Apply answer prefix guardrails
@@ -1027,6 +1147,24 @@ class ChatService:
             latency_ms=latency_ms,
             model_name="internal-llm",
             rag_gap_candidate=rag_gap_candidate_flag,
+        )
+
+        # Step 9: Emit v1 Telemetry CHAT_TURN event (exactly once per turn)
+        emit_chat_turn_once(
+            intent_main=intent.value,
+            intent_sub=None,  # TODO: 세부 의도 매핑 추가 시 업데이트
+            route_type=final_route.value,
+            domain=domain,
+            model_name="internal-llm",
+            rag_used=rag_used,
+            latency_ms_total=latency_ms,
+            latency_ms_llm=llm_latency_ms,
+            latency_ms_retrieval=rag_latency_ms,
+            error_code=error_type,  # error_type을 error_code로 사용
+            pii_detected_input=pii_input.has_pii,
+            pii_detected_output=pii_output.has_pii,
+            oos=(final_route == RouteType.ERROR),
+            rag_info=rag_metrics_to_rag_info(),
         )
 
         return ChatResponse(

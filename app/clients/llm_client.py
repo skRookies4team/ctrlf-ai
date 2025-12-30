@@ -28,7 +28,8 @@ Phase 12 업데이트:
 
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -41,8 +42,62 @@ from app.core.retry import (
     LLM_RETRY_CONFIG,
     retry_async_operation,
 )
+from app.telemetry.emitters import emit_security_event_once
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# A5: 내부 허용 도메인 (외부 도메인 차단용)
+# =============================================================================
+# 내부 서비스로 간주되는 도메인 패턴 (호스트명 또는 IP)
+# localhost, Docker 내부 네트워크, 내부 IP 대역 등
+INTERNAL_DOMAIN_PATTERNS: Set[str] = {
+    "localhost",
+    "127.0.0.1",
+    "llm-internal",     # Docker Compose 서비스명
+    "llm",              # Docker Compose 서비스명 (짧은 형태)
+    "mock-llm",         # Mock LLM 서비스
+    "host.docker.internal",  # Docker에서 호스트 접근용
+}
+
+# 내부 IP 대역 (CIDR 체크 대신 간단한 prefix 체크)
+INTERNAL_IP_PREFIXES = ("10.", "172.", "192.168.")
+
+
+def _is_internal_domain(url: str) -> bool:
+    """URL이 내부 도메인인지 확인합니다.
+
+    Args:
+        url: 검사할 URL
+
+    Returns:
+        True: 내부 도메인 (허용)
+        False: 외부 도메인 (차단 대상)
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        host_lower = host.lower()
+
+        # 명시적 내부 도메인 패턴
+        if host_lower in INTERNAL_DOMAIN_PATTERNS:
+            return True
+
+        # 내부 IP 대역 체크
+        for prefix in INTERNAL_IP_PREFIXES:
+            if host_lower.startswith(prefix):
+                return True
+
+        # 포트만 있는 localhost 변형 (예: 127.0.0.1:8001)
+        if host_lower.startswith("127."):
+            return True
+
+        return False
+
+    except Exception:
+        # 파싱 실패 시 안전하게 외부로 간주
+        return False
 
 
 class LLMClient:
@@ -195,6 +250,21 @@ class LLMClient:
             return self.FALLBACK_MESSAGE
 
         base = str(self._base_url).rstrip("/")
+
+        # A5: 외부 도메인 차단 체크
+        if not _is_internal_domain(base):
+            logger.warning(
+                f"EXTERNAL_DOMAIN_BLOCK: LLM base_url is not an internal domain: {base}"
+            )
+            # SECURITY 이벤트 발행
+            emit_security_event_once(
+                block_type="EXTERNAL_DOMAIN_BLOCK",
+                blocked=True,
+                rule_id="LLM_EXTERNAL_DOMAIN",
+            )
+            # 외부 도메인 호출 차단 - fallback 반환
+            return self.FALLBACK_MESSAGE
+
         url = f"{base}/v1/chat/completions"
 
         # 모델명이 없으면 설정에서 가져옴
