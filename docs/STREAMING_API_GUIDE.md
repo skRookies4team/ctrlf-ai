@@ -1,6 +1,9 @@
 # 스트리밍 채팅 API 가이드
 
-> HTTP 청크 스트리밍으로 AI 응답을 전송하는 API
+> **최종 수정일**: 2025-12-31
+> **버전**: 2.0 (요청 형식 ChatRequest와 통일)
+
+HTTP 청크 스트리밍으로 AI 응답을 전송하는 API
 
 ## 통신 구조
 
@@ -30,25 +33,50 @@ application/json
 
 ### Request Body
 
+> **중요**: 동기 채팅 API (`/ai/chat/messages`)와 동일한 필드 구조 + `request_id`
+
 ```json
 {
   "request_id": "req-uuid-001",
-  "user_message": "연차휴가 규정이 어떻게 되나요?",
-  "role": "employee",
   "session_id": "sess-uuid-001",
-  "metadata": {
-    "department": "개발팀"
-  }
+  "user_id": "emp-001",
+  "user_role": "EMPLOYEE",
+  "department": "개발팀",
+  "domain": "POLICY",
+  "channel": "WEB",
+  "messages": [
+    {
+      "role": "user",
+      "content": "연차휴가 규정이 어떻게 되나요?"
+    }
+  ]
 }
 ```
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
 | `request_id` | string | **O** | 중복 방지 / 재시도용 고유 키 (Idempotency Key) |
-| `user_message` | string | **O** | 사용자 메시지 |
-| `role` | string | X | 사용자 역할: `employee`, `creator`, `reviewer`, `admin` (기본: `employee`) |
-| `session_id` | string | X | 채팅 세션 ID |
-| `metadata` | object | X | 추가 메타데이터 |
+| `session_id` | string | **O** | 채팅 세션 ID |
+| `user_id` | string | **O** | 사용자 ID (사번 등) |
+| `user_role` | string | **O** | 사용자 역할: `EMPLOYEE`, `MANAGER`, `ADMIN` 등 |
+| `department` | string | X | 사용자 부서 |
+| `domain` | string | X | 질의 도메인: `POLICY`, `INCIDENT`, `EDUCATION` (미지정 시 AI가 판단) |
+| `channel` | string | X | 요청 채널 (기본: `WEB`) |
+| `messages` | array | **O** | 대화 히스토리 (마지막 요소가 최신 메시지) |
+
+### messages 배열 구조
+
+```json
+{
+  "role": "user",
+  "content": "질문 내용"
+}
+```
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| `role` | string | `user` 또는 `assistant` |
+| `content` | string | 메시지 내용 |
 
 ---
 
@@ -82,7 +110,7 @@ chunked
 연결 직후 1회 전송. 침묵 시간을 없애고 연결 상태를 확정합니다.
 
 ```json
-{"type":"meta","request_id":"req-uuid-001","model":"gpt-4o-mini","timestamp":"2025-01-01T10:00:00.000000"}
+{"type":"meta","request_id":"req-uuid-001","model":"qwen2.5-7b","timestamp":"2025-01-01T10:00:00.000000"}
 ```
 
 | 필드 | 설명 |
@@ -170,7 +198,10 @@ curl -X POST http://localhost:8000/ai/chat/stream \
   -H "Content-Type: application/json" \
   -d '{
     "request_id": "test-001",
-    "user_message": "안녕하세요"
+    "session_id": "sess-001",
+    "user_id": "emp-001",
+    "user_role": "EMPLOYEE",
+    "messages": [{"role": "user", "content": "안녕하세요"}]
   }' \
   --no-buffer
 ```
@@ -182,10 +213,15 @@ curl -X POST http://localhost:8000/ai/chat/stream \
   -H "Content-Type: application/json" \
   -d '{
     "request_id": "test-002",
-    "user_message": "연차휴가 규정 알려주세요",
-    "role": "employee",
     "session_id": "sess-001",
-    "metadata": {"department": "개발팀"}
+    "user_id": "emp-001",
+    "user_role": "EMPLOYEE",
+    "department": "개발팀",
+    "domain": "POLICY",
+    "channel": "WEB",
+    "messages": [
+      {"role": "user", "content": "연차휴가 규정 알려주세요"}
+    ]
   }' \
   --no-buffer
 ```
@@ -193,7 +229,7 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 ### 기대 출력 (NDJSON)
 
 ```
-{"type":"meta","request_id":"test-001","model":"gpt-4o-mini","timestamp":"2025-01-01T10:00:00.000000"}
+{"type":"meta","request_id":"test-001","model":"qwen2.5-7b","timestamp":"2025-01-01T10:00:00.000000"}
 {"type":"token","text":"안"}
 {"type":"token","text":"녕"}
 {"type":"token","text":"하"}
@@ -265,7 +301,7 @@ INFO: Stream cancelled (client disconnected): req-uuid-001
 ```json
 {
   "request_id": "req-uuid-001",
-  "model": "gpt-4o-mini",
+  "model": "qwen2.5-7b",
   "ttfb_ms": 200,
   "total_elapsed_ms": 4567,
   "total_tokens": 123,
@@ -358,5 +394,9 @@ Flux<String> stream = webClient.post()
 
 ---
 
-**작성일**: 2025-01-01
-**버전**: 1.0.0
+## 변경 이력
+
+| 날짜 | 버전 | 내용 |
+|------|------|------|
+| 2025-12-31 | 2.0 | 요청 형식을 ChatRequest와 통일 (`session_id`, `user_id`, `user_role`, `messages`) |
+| 2025-01-01 | 1.0 | 초기 작성 |

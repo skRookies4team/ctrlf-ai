@@ -1,162 +1,174 @@
 # API 인벤토리
 
-생성일: 2025-12-19
+> **최종 수정일**: 2025-12-31
+> **버전**: 2.0 (Phase 42 이후 정리)
+
+---
+
+## 개요
+
+이 문서는 ctrlf-ai (FastAPI) 서버에서 **실제로 제공하는 API 엔드포인트** 목록입니다.
+
+> **참고**: 영상 진행률, 관리자, 스크립트 편집 등의 API는 ctrlf-back (Spring 백엔드)에서 제공합니다.
+
+---
 
 ## 분류 기준
 
 | 라벨 | 정의 |
 |------|------|
-| **KEEP** | 현재 플로우에서 실제 호출됨 (테스트/CLI/FE/BE 연동 확인) |
-| **DEPRECATE** | 기능 중복, 대체 API 존재 |
-| **DELETE** | 호출처 없음, 레거시, 테스트만 존재 |
-| **REMOVED** | Phase 42에서 제거됨 (410 Gone 반환) |
+| **ACTIVE** | 현재 사용 중인 API |
+| **DEPRECATED** | 제거됨 (410 Gone 반환) |
+| **INTERNAL** | 내부 시스템 간 통신용 (X-Internal-Token 필요) |
 
 ---
 
-## 1. 헬스체크 (health.py)
+## 1. 헬스체크
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| GET | /health | **KEEP** | - | K8s/LB | 헬스체크 필수 |
-| GET | /health/ready | **KEEP** | - | K8s/LB | Readiness 필수 |
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| GET | `/health` | **ACTIVE** | 서버 상태 확인 (K8s Liveness) |
+| GET | `/health/ready` | **ACTIVE** | 준비 상태 확인 (K8s Readiness) |
 
----
-
-## 2. 채팅 (chat.py, chat_stream.py)
-
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /ai/chat/messages | **KEEP** | ChatService | FE/BE | 핵심 채팅 API, chat_cli.py 사용 |
-| POST | /ai/chat/stream | **KEEP** | ChatStreamService | BE→SSE | 스트리밍 채팅, BE 연동 |
+**파일**: `app/api/v1/health.py`
 
 ---
 
-## 3. RAG/인덱싱 (rag.py, ingest.py, search.py, internal_rag.py)
+## 2. 채팅 API
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /ai/rag/process | **DELETE** | RagService | - | Phase 25 이후 internal_rag로 대체 |
-| POST | /ingest | **DELETE** | IngestService | - | RAGFlow 기반, internal_rag로 대체 |
-| POST | /search | **DELETE** | SearchService | - | RAGFlow 기반, Milvus 직접 검색으로 대체 |
-| POST | /internal/rag/index | **REMOVED** | - | - | Phase 42에서 제거됨 (410 Gone), RAGFlow 경유로 대체 |
-| POST | /internal/rag/delete | **REMOVED** | - | - | Phase 42에서 제거됨 (410 Gone), RAGFlow 경유로 대체 |
-| GET | /internal/jobs/{job_id} | **REMOVED** | - | - | Phase 42에서 제거됨 (410 Gone) |
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| POST | `/ai/chat/messages` | **ACTIVE** | 동기 채팅 응답 생성 |
+| POST | `/ai/chat/stream` | **ACTIVE** | 스트리밍 채팅 응답 (NDJSON) |
 
-**삭제 근거:**
-- `/ai/rag/process`: RagflowClient 사용, MILVUS_ENABLED=true 환경에서 미사용
-- `/ingest`: RAGFlow 파이프라인, internal_rag가 Milvus 직접 처리
-- `/search`: ChatService가 MilvusClient.search_as_sources() 직접 호출
+**파일**: `app/api/v1/chat.py`, `app/api/v1/chat_stream.py`
 
----
+**호출 주체**: Spring 백엔드 (ctrlf-back)
 
-## 4. 영상 진행률 (video.py - Phase 22/26)
-
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /api/video/play/start | **KEEP** | VideoProgressService | FE | 영상 재생 시작 |
-| POST | /api/video/progress | **KEEP** | VideoProgressService | FE | 진행률 업데이트 |
-| POST | /api/video/complete | **KEEP** | VideoProgressService | FE | 완료 처리 |
-| GET | /api/video/status | **KEEP** | VideoProgressService | FE | 상태 조회 |
-| GET | /api/video/quiz/check | **KEEP** | VideoProgressService | FE | 퀴즈 잠금 확인 |
+### 주요 특징
+- RAGFlow 기반 RAG 검색
+- Phase 42: RAGFlow 장애 시 503 반환 (fallback 없음)
+- 스트리밍: NDJSON 형식 (meta → token → done/error)
 
 ---
 
-## 5. 관리자 API (admin.py - Phase 26)
+## 3. 부가 기능 API
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /api/admin/education/reissue | **KEEP** | EducationCatalogService | Admin | 교육 재발행 |
-| GET | /api/admin/education/{id} | **KEEP** | EducationCatalogService | Admin | 메타 조회 |
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| POST | `/ai/gap/policy-edu/suggestions` | **ACTIVE** | RAG Gap 보완 제안 |
+| POST | `/ai/quiz/generate` | **ACTIVE** | 퀴즈 생성 |
+| POST | `/ai/faq/generate` | **ACTIVE** | FAQ 생성 |
 
----
+**파일**: `app/api/v1/gap_suggestions.py`, `app/api/v1/quiz_generate.py`, `app/api/v1/faq.py`
 
-## 6. 영상 생성 V1 (video_render.py - Phase 27/28/31/38)
-
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /api/scripts | **KEEP** | VideoRenderService | BE | 스크립트 생성 |
-| POST | /api/scripts/{id}/approve | **KEEP** | VideoRenderService | Reviewer | 승인 |
-| GET | /api/scripts/{id} | **KEEP** | VideoRenderService | FE/BE | 조회 |
-| POST | /api/videos/{id}/scripts/generate | **KEEP** | ScriptGenerationService | BE | Phase 31 자동생성 |
-| POST | /api/videos/{id}/render-jobs | **DEPRECATE** | VideoRenderService | - | V2로 대체 |
-| GET | /api/render-jobs/{id} | **KEEP** | VideoRenderService | FE/BE | 상태 조회 |
-| POST | /api/render-jobs/{id}/start | **KEEP** | RenderJobRunner | BE | Phase 38 잡 시작 |
-| POST | /api/render-jobs/{id}/retry | **KEEP** | RenderJobRunner | BE | Phase 38 재시도 |
-| POST | /api/render-jobs/{id}/cancel | **DEPRECATE** | VideoRenderService | - | V2로 대체 |
-| GET | /api/videos/{id}/asset | **KEEP** | VideoRenderService | FE | 에셋 조회 |
-| POST | /api/videos/{id}/publish | **KEEP** | VideoRenderService+KB | Reviewer | Phase 28 발행 |
-| GET | /api/videos/{id}/kb-status | **KEEP** | KBIndexService | FE/BE | KB 상태 |
+**호출 주체**: Spring 백엔드 (ctrlf-back)
 
 ---
 
-## 7. 영상 생성 V2 (video_render_phase33.py - Phase 33)
+## 4. Internal API (Backend → AI)
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /api/v2/videos/{id}/render-jobs | **KEEP** | RenderJobRunner | FE/BE | Idempotent 생성 |
-| GET | /api/v2/videos/{id}/render-jobs | **KEEP** | RenderJobRunner | FE | 목록 조회 |
-| GET | /api/v2/videos/{id}/render-jobs/{job_id} | **KEEP** | RenderJobRunner | FE | 상세 조회 |
-| POST | /api/v2/videos/{id}/render-jobs/{job_id}/cancel | **KEEP** | RenderJobRunner | FE | 취소 |
-| GET | /api/v2/videos/{id}/assets/published | **KEEP** | RenderJobRunner | FE | 발행 에셋 |
+> **인증**: `X-Internal-Token` 헤더 필수
 
----
+### 4.1 SourceSet 오케스트레이션
 
-## 8. WebSocket (ws_render_progress.py - Phase 32)
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| POST | `/internal/ai/source-sets/{sourceSetId}/start` | **INTERNAL** | 소스셋 처리 시작 (문서 → 스크립트) |
+| GET | `/internal/ai/source-sets/{sourceSetId}/status` | **INTERNAL** | 처리 상태 조회 |
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| WS | /ws/videos/{id}/render-progress | **KEEP** | ConnectionManager | FE | 실시간 진행률 |
+**파일**: `app/api/v1/source_sets.py`
 
----
+### 4.2 렌더 잡 (영상 생성)
 
-## 9. 스크립트 편집 (script_editor.py - Phase 42)
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| POST | `/internal/ai/render-jobs` | **INTERNAL** | 렌더 잡 생성/시작 |
+| POST | `/ai/video/job/{job_id}/start` | **INTERNAL** | 잡 시작 (레거시 호환) |
+| POST | `/ai/video/job/{job_id}/retry` | **INTERNAL** | 잡 재시도 (레거시 호환) |
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| GET | /api/scripts/{id}/editor | **KEEP** | VideoRenderService | FE | 편집 뷰 |
-| PATCH | /api/scripts/{id}/editor | **KEEP** | VideoRenderService | FE | 씬 편집 |
+**파일**: `app/api/v1/render_jobs.py`
 
----
+### 4.3 RAG 문서 Ingest (사내규정)
 
-## 10. 부가 기능 (gap_suggestions.py, quiz_generate.py, faq.py)
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| POST | `/internal/ai/rag-documents/ingest` | **INTERNAL** | 사내규정 문서 RAGFlow ingest |
+| POST | `/internal/ai/callbacks/ragflow/ingest` | **INTERNAL** | RAGFlow 콜백 수신 |
 
-| Method | Path | 라벨 | 담당 서비스 | 호출 주체 | 근거 |
-|--------|------|------|-------------|-----------|------|
-| POST | /ai/gap/policy-edu/suggestions | **KEEP** | GapSuggestionService | Admin/BE | Gap 분석 |
-| POST | /ai/quiz/generate | **KEEP** | QuizGenerateService | BE | 퀴즈 생성 |
-| POST | /ai/faq/generate | **KEEP** | FaqDraftService | BE | FAQ 단건 |
-| POST | /ai/faq/generate/batch | **KEEP** | FaqDraftService | BE | FAQ 배치 |
+**파일**: `app/api/v1/rag_documents.py`
 
----
+### 4.4 피드백
 
-## 삭제 대상 요약
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| POST | `/internal/ai/feedback` | **INTERNAL** | 사용자 피드백 저장 |
 
-| Path | 파일 | 대체 API | 삭제 근거 |
-|------|------|----------|-----------|
-| POST /ai/rag/process | rag.py | SourceSet Orchestrator | RagflowClient 레거시, Milvus 전환 |
-| POST /ingest | ingest.py | SourceSet Orchestrator | RAGFlow 인덱싱 레거시 |
-| POST /search | search.py | ChatService 내부 | RAGFlow 검색 레거시 |
-
-## REMOVED 대상 요약 (Phase 42)
-
-| Path | 상태 | 대체 경로 |
-|------|------|-----------|
-| POST /internal/rag/index | 410 Gone | SourceSet Orchestrator → RAGFlow |
-| POST /internal/rag/delete | 410 Gone | SourceSet Orchestrator → RAGFlow |
-| GET /internal/jobs/{job_id} | 410 Gone | SourceSet Orchestrator 내부 관리 |
-
-## DEPRECATE 대상 요약
-
-| Path | 대체 API | 처리 방안 |
-|------|----------|-----------|
-| POST /api/videos/{id}/render-jobs (V1) | POST /api/v2/.../render-jobs | 응답에 deprecation 헤더 추가 |
-| POST /api/render-jobs/{id}/cancel (V1) | POST /api/v2/.../cancel | 응답에 deprecation 헤더 추가 |
+**파일**: `app/api/v1/feedback.py`
 
 ---
 
-## 다음 단계
+## 5. WebSocket
 
-1. DELETE 대상 3개 제거: rag.py, ingest.py, search.py
-2. 연관 서비스/모델/테스트 정리
-3. DEPRECATE 대상에 헤더 추가
-4. 스모크 테스트 실행
+| Method | Path | 라벨 | 설명 |
+|--------|------|------|------|
+| WS | `/ws/videos/{video_id}/render-progress` | **ACTIVE** | 렌더링 진행률 실시간 전송 |
+
+**파일**: `app/api/v1/ws_render_progress.py`
+
+---
+
+## 6. Deprecated API (410 Gone)
+
+> Phase 42에서 제거됨. Direct Milvus 인덱싱 → RAGFlow 경유로 대체.
+
+| Method | Path | 상태 | 대체 경로 |
+|--------|------|------|-----------|
+| POST | `/internal/rag/index` | 410 Gone | `/internal/ai/source-sets/{id}/start` |
+| POST | `/internal/rag/delete` | 410 Gone | RAGFlow에서 직접 삭제 |
+| GET | `/internal/jobs/{job_id}` | 410 Gone | `/internal/ai/source-sets/{id}/status` |
+
+**파일**: `app/api/v1/internal_rag.py`
+
+---
+
+## API 라우터 등록 현황
+
+`app/api/v1/__init__.py`에서 등록된 라우터:
+
+```python
+# 활성 라우터
+from app.api.v1.health import router as health_router
+from app.api.v1.chat import router as chat_router
+from app.api.v1.chat_stream import router as chat_stream_router
+from app.api.v1.gap_suggestions import router as gap_suggestions_router
+from app.api.v1.quiz_generate import router as quiz_router
+from app.api.v1.faq import router as faq_router
+from app.api.v1.internal_rag import router as internal_rag_router
+from app.api.v1.render_jobs import internal_router, ai_router
+from app.api.v1.ws_render_progress import router as ws_router
+from app.api.v1.source_sets import router as source_sets_router
+from app.api.v1.rag_documents import router as rag_documents_router
+from app.api.v1.feedback import router as feedback_router
+```
+
+---
+
+## 참고: 백엔드(ctrlf-back)에서 제공하는 API
+
+다음 API들은 AI 서버가 아닌 **Spring 백엔드**에서 제공합니다:
+
+- **영상 진행률**: `/api/video/play/start`, `/api/video/progress`, `/api/video/complete`
+- **관리자 API**: `/api/admin/education/*`
+- **스크립트 관리**: `/api/scripts/*`
+- **영상 관리**: `/api/videos/*`, `/api/v2/videos/*`
+- **렌더 잡 조회**: `/api/render-jobs/*`
+
+---
+
+## 변경 이력
+
+| 날짜 | 버전 | 내용 |
+|------|------|------|
+| 2025-12-31 | 2.0 | 실제 AI 서버 API만 반영, 백엔드 API 분리 |
+| 2025-12-19 | 1.0 | 초기 작성 |
