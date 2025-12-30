@@ -14,6 +14,7 @@ Included routers:
     - render_jobs: 렌더 잡 Internal API endpoints (/internal/ai/render-jobs)
     - ws_render_progress: WebSocket 렌더 진행률 endpoints (/ws/videos/*/render-progress)
     - source_sets: SourceSet 오케스트레이션 endpoints (/internal/ai/source-sets/*)
+    - feedback: 피드백 수신 endpoints (/internal/ai/feedback)
 
 FE용 API는 모두 제거됨 (FE는 백엔드 경유).
 """
@@ -22,6 +23,7 @@ from app.api.v1 import (
     chat,
     chat_stream,
     faq,
+    feedback,
     gap_suggestions,
     health,
     internal_rag,
@@ -38,6 +40,7 @@ __all__ = [
     "gap_suggestions",
     "quiz_generate",
     "faq",
+    "feedback",
     "internal_rag",
     "render_jobs",
     "ws_render_progress",
