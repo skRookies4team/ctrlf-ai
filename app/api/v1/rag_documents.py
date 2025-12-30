@@ -9,7 +9,7 @@ Backend → AI → RAGFlow 문서 ingest 파이프라인을 위한 내부 API입
 
 흐름:
 1. Backend → AI: POST /internal/ai/rag-documents/ingest
-2. AI → RAGFlow: POST {RAGFLOW_BASE_URL}/internal/ragflow/ingest (비동기)
+2. AI → RAGFlow: POST {RAGFLOW_BASE_URL}/v1/internal_ragflow/internal/ragflow/ingest (비동기)
 3. RAGFlow → AI: POST /internal/ai/callbacks/ragflow/ingest (콜백)
 4. AI → Backend: PATCH /internal/rag/documents/{ragDocumentPk}/status
 

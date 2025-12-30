@@ -7,7 +7,7 @@ AI 서버에서 RAGFlow로 문서 ingest를 요청하는 HTTP 클라이언트입
 - POST /internal/ai/rag-documents/ingest 라우트에서 호출
 
 API:
-- POST {RAGFLOW_BASE_URL}/internal/ragflow/ingest
+- POST {RAGFLOW_BASE_URL}/v1/internal_ragflow/internal/ragflow/ingest
 """
 
 from typing import Any, Dict, Optional
@@ -122,7 +122,7 @@ class RAGFlowIngestClient:
         """
         RAGFlow에 문서 ingest를 요청합니다.
 
-        POST {RAGFLOW_BASE_URL}/internal/ragflow/ingest
+        POST {RAGFLOW_BASE_URL}/v1/internal_ragflow/internal/ragflow/ingest
 
         Args:
             dataset_id: RAGFlow dataset 이름 (예: "사내규정")
@@ -144,7 +144,7 @@ class RAGFlowIngestClient:
         if not self._base_url:
             raise RAGFlowUnavailableError("RAGFLOW_BASE_URL not configured")
 
-        url = f"{self._base_url}/internal/ragflow/ingest"
+        url = f"{self._base_url}/v1/internal_ragflow/internal/ragflow/ingest"
         headers = self._get_headers()
 
         payload = {
