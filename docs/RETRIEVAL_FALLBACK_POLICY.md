@@ -1,47 +1,57 @@
 # Retrieval Fallback Policy
 
-> **Version**: 2.1.0
+> **Version**: 3.0.0
 > **Last Updated**: 2025-12-31
 > **Status**: Production
+> **Phase 48 변경**: RAGFlow 클라이언트 제거, Milvus 전용
+
+---
+
+## 주요 변경 사항 (Phase 48)
+
+> **중요**: RAGFlow 클라이언트가 모든 서비스에서 제거되었습니다.
+> - FAQ 서비스: Milvus 전용
+> - 채팅 서비스: Milvus 전용
+> - 스크립트 서비스: Milvus 전용 (RAGFlow 재개발 예정)
 
 ---
 
 ## 1. Overview
 
-이 문서는 ctrlf-ai 서비스의 검색(Retrieval) 백엔드 선택 및 장애 시 Fallback 정책을 정의합니다.
+이 문서는 ctrlf-ai 서비스의 검색(Retrieval) 백엔드 정책을 정의합니다.
 
 ### 1.1 검색 백엔드
 
-| 백엔드 | 설명 | 용도 |
+| 백엔드 | 상태 | 설명 |
 |--------|------|------|
-| **RAGFlow** | RAGFlow 서버의 `/v1/retrieval` API | 기본 검색 (Fallback용) |
-| **Milvus** | Milvus 벡터 DB 직접 검색 | FAQ, 채팅, 스크립트 생성 (Option 3) |
+| **Milvus** | **Active** | 벡터 DB 직접 검색 (모든 서비스) |
+| **RAGFlow** | **Removed** | Phase 48에서 제거됨 (재개발 예정) |
 
 ### 1.2 관련 환경변수
 
 ```bash
-# 기본 검색 백엔드 (모든 서비스 기본값)
-RETRIEVAL_BACKEND=milvus  # ragflow | milvus
-
-# 서비스별 검색 백엔드 (선택적 - 설정하지 않으면 RETRIEVAL_BACKEND 사용)
-FAQ_RETRIEVER_BACKEND=milvus      # ragflow | milvus
-CHAT_RETRIEVER_BACKEND=milvus     # ragflow | milvus
-SCRIPT_RETRIEVER_BACKEND=milvus   # ragflow | milvus
-
 # Milvus 활성화 (필수)
 MILVUS_ENABLED=true
 
-# 임베딩 계약 검증 (strict 모드)
+# Milvus 연결 설정
+MILVUS_HOST=your-milvus-host
+MILVUS_PORT=19530
+
+# 임베딩 설정
 EMBEDDING_CONTRACT_STRICT=true
+EMBEDDING_MODEL=jhgan/ko-sroberta-multitask
+EMBEDDING_OUTPUT_DIM=768
 
 # 채팅 컨텍스트 제한
 CHAT_CONTEXT_MAX_CHARS=8000
 CHAT_CONTEXT_MAX_SOURCES=5
 ```
 
+> **Note**: `RETRIEVAL_BACKEND`, `FAQ_RETRIEVER_BACKEND`, `CHAT_RETRIEVER_BACKEND`, `SCRIPT_RETRIEVER_BACKEND` 환경변수는 레거시 호환성을 위해 존재하지만, RAGFlow가 제거되어 실질적으로 Milvus만 사용됩니다.
+
 ---
 
-## 2. 서비스별 Fallback 정책
+## 2. 서비스별 검색 정책
 
 ### 2.1 FAQ 서비스 (`faq_service.py`)
 
@@ -54,48 +64,49 @@ CHAT_CONTEXT_MAX_SOURCES=5
 |     +-- YES -> top_docs 사용 (answer_source: TOP_DOCS)       |
 |     +-- NO  -> 다음 단계                                      |
 |                                                             |
-|  2. FAQ_RETRIEVER_BACKEND=milvus && MILVUS_ENABLED=true?    |
+|  2. MILVUS_ENABLED=true?                                     |
 |     +-- YES -> Milvus 검색 시도                               |
 |     |         +-- 성공 -> 결과 사용 (answer_source: MILVUS)   |
-|     |         +-- 실패 -> RAGFlow로 Fallback                  |
-|     +-- NO  -> RAGFlow 검색                                   |
-|                                                             |
-|  3. RAGFlow 검색                                             |
-|     +-- 성공 -> 결과 사용 (answer_source: RAGFLOW)            |
-|     +-- 실패 -> FaqGenerationError("NO_DOCS_FOUND")          |
+|     |         +-- 실패 -> FaqGenerationError("NO_DOCS_FOUND")|
+|     +-- NO  -> FaqGenerationError("NO_DOCS_FOUND")           |
 |                                                             |
 +-------------------------------------------------------------+
 ```
 
-**Fallback 조건:**
-- `MilvusSearchError` 발생 시 -> RAGFlow로 자동 Fallback
-- 예기치 않은 Exception 발생 시 -> RAGFlow로 자동 Fallback
+**answer_source 값:**
+| 값 | 설명 |
+|----|------|
+| `TOP_DOCS` | 클라이언트가 제공한 top_docs 사용 |
+| `MILVUS` | Milvus 검색 결과 사용 |
 
-**코드 참조:** `app/services/faq_service.py`
+**Fallback 없음:**
+- RAGFlow가 제거되어 Milvus 실패 시 바로 에러 반환
+- `MilvusSearchError` 발생 → `FaqGenerationError("NO_DOCS_FOUND")`
+
+**코드 참조:** `app/services/faq_service.py:170-175`
+```python
+# RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+logger.info("FaqDraftService: Milvus search enabled (RAGFlow removed)")
+```
 
 ---
 
-### 2.2 채팅 서비스 (`rag_handler.py`) - Option 3 통합
+### 2.2 채팅 서비스 (`rag_handler.py`)
 
 ```
 +-------------------------------------------------------------+
 |                   채팅 서비스 검색 흐름                        |
 +-------------------------------------------------------------+
 |                                                             |
-|  CHAT_RETRIEVER_BACKEND=milvus && MILVUS_ENABLED=true?      |
+|  MILVUS_ENABLED=true?                                        |
 |     +-- YES -> Milvus 검색 시도                               |
 |     |         +-- 성공 + 결과 있음                            |
 |     |         |   -> 결과 사용 (retriever_used: MILVUS)       |
 |     |         +-- 결과 0건                                    |
-|     |         |   -> RAGFlow Fallback                         |
+|     |         |   -> RagSearchUnavailableError (HTTP 503)    |
 |     |         +-- 실패 (MilvusSearchError)                    |
-|     |             -> RAGFlow Fallback                         |
-|     +-- NO  -> RAGFlow 검색                                   |
-|               (retriever_used: RAGFLOW)                      |
-|                                                             |
-|  RAGFlow Fallback:                                           |
-|     +-- 성공 -> 결과 사용 (retriever_used: RAGFLOW_FALLBACK)  |
-|     +-- 실패 -> RagSearchUnavailableError (HTTP 503)         |
+|     |             -> RagSearchUnavailableError (HTTP 503)    |
+|     +-- NO  -> RagSearchUnavailableError (HTTP 503)          |
 |                                                             |
 |  컨텍스트 제한 적용:                                           |
 |     CHAT_CONTEXT_MAX_CHARS (기본 8000)                       |
@@ -108,77 +119,63 @@ CHAT_CONTEXT_MAX_SOURCES=5
 | 값 | 설명 |
 |----|------|
 | `MILVUS` | Milvus 검색 성공 |
-| `RAGFLOW` | RAGFlow 검색 사용 (기본 또는 CHAT_RETRIEVER_BACKEND=ragflow) |
-| `RAGFLOW_FALLBACK` | Milvus 실패/0건으로 RAGFlow fallback |
 
-**코드 참조:** `app/services/chat/rag_handler.py:126-334`
+> **Note**: `RAGFLOW`, `RAGFLOW_FALLBACK` 값은 레거시 호환성을 위해 코드에 정의되어 있지만, RAGFlow가 제거되어 실제로 사용되지 않습니다.
 
+**Fallback 없음:**
+- Phase 48에서 RAGFlow fallback 제거
+- Milvus 실패 시 바로 503 에러 반환
+
+**코드 참조:** `app/services/chat/rag_handler.py:595`
 ```python
-async def perform_search_with_fallback(
-    self, query, domain, req, request_id=None
-) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
-    if self._use_milvus and self._milvus:
-        return await self._search_with_milvus_fallback(...)
-    return await self._search_ragflow_only(...)
+# Phase 48 bugfix: RAGFlow fallback 제거 - Milvus만 사용합니다.
 ```
 
 ---
 
-### 2.3 스크립트 생성 (`source_set_orchestrator.py`) - Option 3 통합
+### 2.3 스크립트 생성 (`source_set_orchestrator.py`)
 
 ```
 +-------------------------------------------------------------+
 |              스크립트 생성 청크 로드 흐름                      |
 +-------------------------------------------------------------+
 |                                                             |
-|  SCRIPT_RETRIEVER_BACKEND=milvus && MILVUS_ENABLED=true?    |
+|  MILVUS_ENABLED=true?                                        |
 |     +-- YES -> Milvus에서 청크 조회 시도                       |
 |     |         +-- 성공 + 청크 있음                            |
 |     |         |   -> Milvus 청크 사용                          |
-|     |         +-- 청크 0건                                    |
-|     |         |   -> RAGFlow 처리 Fallback                    |
-|     |         +-- 실패 (MilvusError)                          |
-|     |             -> RAGFlow 처리 Fallback                    |
-|     +-- NO  -> RAGFlow 처리                                   |
-|               (upload -> parse -> get_chunks)                |
+|     |         +-- 청크 0건 또는 실패                          |
+|     |             -> DOCUMENT_PROCESSING_FAILED              |
+|     +-- NO  -> DOCUMENT_PROCESSING_FAILED                    |
+|               (RAGFlow removed 에러)                         |
 |                                                             |
 +-------------------------------------------------------------+
 ```
 
 **doc_id 매핑:**
 - Milvus: `doc_id` = 파일명 (예: `장애인식관련법령.docx`)
-- Spring: `documentId` = UUID (예: `550e8400-e29b-41d4-a716-446655440000`)
+- Spring: `documentId` = UUID
 - 매핑 방법: source_url에서 파일명 추출 (`_extract_milvus_doc_id`)
 
-**코드 참조:** `app/services/source_set_orchestrator.py:529-646`
+**Fallback 없음:**
+- RAGFlow 클라이언트가 제거됨 (재개발 예정)
+- Milvus에서 청크를 찾지 못하면 실패 처리
 
+**코드 참조:** `app/services/source_set_orchestrator.py:129`
 ```python
-async def _process_document_with_routing(
-    self, source_set_id, doc, job
-) -> DocumentProcessingResult:
-    if self._use_milvus and self._milvus_client:
-        try:
-            result = await self._process_document_milvus(...)
-            if result.success and result.chunks:
-                return result
-        except MilvusError:
-            pass  # fallback to RAGFlow
-    return await self._process_document(...)  # RAGFlow
+# RAGFlow 클라이언트는 제거되었습니다 (재개발 예정).
 ```
 
 ---
 
 ## 3. 설정 조합별 동작
 
-| MILVUS_ENABLED | XXX_RETRIEVER_BACKEND | FAQ 서비스 | 채팅 서비스 | 스크립트 |
-|----------------|----------------------|------------|-------------|----------|
-| `false` | `ragflow` | RAGFlow only | RAGFlow only | RAGFlow only |
-| `true` | `ragflow` | RAGFlow only | RAGFlow only | RAGFlow only |
-| `true` | `milvus` | Milvus -> RAGFlow | Milvus -> RAGFlow | Milvus -> RAGFlow |
-| `false` | `milvus` | RAGFlow only | RAGFlow only | RAGFlow only |
+| MILVUS_ENABLED | FAQ 서비스 | 채팅 서비스 | 스크립트 |
+|----------------|------------|-------------|----------|
+| `true` | Milvus 검색 | Milvus 검색 | Milvus 조회 |
+| `false` | 에러 (NO_DOCS_FOUND) | 에러 (503) | 에러 (RAGFLOW_REMOVED) |
 
-**Note:** `XXX_RETRIEVER_BACKEND`는 각 서비스별 설정 (FAQ/CHAT/SCRIPT)을 의미합니다.
-미설정 시 `RETRIEVAL_BACKEND` 기본값을 사용합니다.
+> **중요**: `MILVUS_ENABLED=true` 설정이 필수입니다. RAGFlow가 제거되어 Milvus 없이는 검색 기능을 사용할 수 없습니다.
 
 ---
 
@@ -188,7 +185,7 @@ async def _process_document_with_routing(
 
 | 에러 코드 | 설명 | HTTP 상태 |
 |-----------|------|-----------|
-| `NO_DOCS_FOUND` | 검색 결과 없음 (Milvus + RAGFlow 모두) | 400 |
+| `NO_DOCS_FOUND` | Milvus 검색 결과 없음 | 400 |
 | `LOW_RELEVANCE_CONTEXT` | 컨텍스트 관련성 낮음 | 400 |
 | `PII_DETECTED` | 입력에 PII 검출 | 400 |
 | `PII_DETECTED_OUTPUT` | 출력에 PII 검출 | 400 |
@@ -198,14 +195,15 @@ async def _process_document_with_routing(
 
 | 에러 코드 | 설명 | HTTP 상태 |
 |-----------|------|-----------|
-| `RagSearchUnavailableError` | Milvus + RAGFlow 모두 장애 | 503 |
+| `RagSearchUnavailableError` | Milvus 검색 불가 | 503 |
 
 ### 4.3 스크립트 생성 에러
 
-| 에러 코드 | 설명 | HTTP 상태 |
-|-----------|------|-----------|
-| `DOCUMENT_PROCESSING_FAILED` | Milvus + RAGFlow 처리 모두 실패 | - |
-| `NO_CHUNKS_GENERATED` | 청크 생성 실패 | - |
+| 에러 코드 | 설명 |
+|-----------|------|
+| `RAGFLOW_REMOVED` | RAGFlow 클라이언트가 제거됨 |
+| `DOCUMENT_PROCESSING_FAILED` | 문서 처리 실패 |
+| `NO_CHUNKS_GENERATED` | 청크 생성 실패 |
 
 ---
 
@@ -214,70 +212,98 @@ async def _process_document_with_routing(
 ### 5.1 Milvus 연결 정보 (서버 시작 시)
 
 ```
-[MILVUS_RUNTIME] host=localhost:19540 | collection=ragflow_chunks_sroberta | collection_dim=768 | embedding_model=jhgan/ko-sroberta-multitask | embedding_output_dim=768
+[MILVUS_RUNTIME] host=localhost:19530 | collection=ragflow_chunks_sroberta | collection_dim=768 | embedding_model=jhgan/ko-sroberta-multitask | embedding_output_dim=768
 ```
 
-### 5.2 RagHandler 초기화
+### 5.2 서비스 초기화 로그
 
 ```
-INFO - RagHandler initialized with Milvus (CHAT_RETRIEVER_BACKEND=milvus)
+# FAQ 서비스
+INFO - FaqDraftService: Milvus search enabled (RAGFlow removed)
+
+# 채팅 서비스
+INFO - RagHandler: MILVUS_ENABLED=True, Milvus search enabled
 # or
-INFO - RagHandler initialized with RAGFlow only (CHAT_RETRIEVER_BACKEND=ragflow)
-```
+WARNING - RagHandler: MILVUS_ENABLED=False, RAG search unavailable (RAGFlow removed)
 
-### 5.3 SourceSetOrchestrator 초기화
-
-```
-INFO - SourceSetOrchestrator initialized with Milvus (SCRIPT_RETRIEVER_BACKEND=milvus)
+# 스크립트 서비스
+INFO - SourceSetOrchestrator: Milvus enabled for chunk retrieval
 # or
-INFO - SourceSetOrchestrator initialized with RAGFlow only (SCRIPT_RETRIEVER_BACKEND=ragflow)
+WARNING - SourceSetOrchestrator: RAGFlow removed, document processing unavailable
 ```
 
-### 5.4 Fallback 발생 시
+### 5.3 에러 발생 시
 
 ```
-# Chat service
-WARNING - Milvus search returned 0 results, falling back to RAGFlow
-INFO - RAGFlow fallback returned 5 sources (retriever_used=RAGFLOW_FALLBACK)
+# FAQ 서비스
+ERROR - Milvus search failed: MilvusSearchError(...)
+ERROR - FaqGenerationError: NO_DOCS_FOUND
 
-# Script generation
-WARNING - Milvus returned no chunks for doc_id=test-doc, falling back to RAGFlow
-INFO - Document processed via RAGFlow: doc_id=test-doc, chunks=15
+# 채팅 서비스
+ERROR - RagSearchUnavailableError: Milvus search failed and no fallback available
+
+# 스크립트 서비스
+ERROR - RAGFlow client removed - document processing unavailable
 ```
 
 ---
 
-## 6. 테스트 스크립트
+## 6. 마이그레이션 가이드 (RAGFlow → Milvus)
 
-### 6.1 Option 3 통합 테스트
-
-```bash
-# 기본 Milvus 클라이언트 테스트
-python scripts/test_option3_integration.py
-
-# 채팅 서비스 Milvus 통합 테스트
-python scripts/test_option3_chat_integration.py
-
-# 스크립트 생성 Milvus 통합 테스트
-python scripts/test_option3_script_integration.py
-```
-
-### 6.2 개별 서비스 테스트
+### 6.1 필수 설정 변경
 
 ```bash
-# FAQ 서비스 테스트
-python scripts/test_faq_milvus.py
+# 이전 설정 (RAGFlow 사용)
+RETRIEVAL_BACKEND=ragflow
+MILVUS_ENABLED=false
 
-# Milvus 연결 테스트
-python scripts/test_milvus_connection.py
+# 현재 설정 (Milvus 전용)
+MILVUS_ENABLED=true
+MILVUS_HOST=your-milvus-host
+MILVUS_PORT=19530
 ```
+
+### 6.2 데이터 마이그레이션
+
+1. RAGFlow의 기존 청크 데이터를 Milvus 컬렉션으로 마이그레이션
+2. 임베딩 모델 일치 확인: `jhgan/ko-sroberta-multitask` (768차원)
+3. 컬렉션명: `ragflow_chunks_sroberta`
+
+### 6.3 클라이언트 코드 변경 불필요
+
+- API 응답 형식은 동일하게 유지됨
+- `answer_source`/`retriever_used` 값만 변경 (RAGFLOW → MILVUS)
 
 ---
 
-## 7. 참고 문서
+## 7. 향후 계획
+
+### RAGFlow 재개발 예정
+
+- 스크립트 서비스의 문서 처리(upload → parse → chunks)를 위해 RAGFlow 재개발 계획
+- 현재는 Milvus에 사전 적재된 청크만 사용 가능
+
+### Fallback 전략 검토
+
+- 현재: Fallback 없음 (Milvus 실패 시 에러)
+- 검토 중: 캐시 기반 fallback, 다중 Milvus 인스턴스
+
+---
+
+## 8. 참고 문서
 
 - [Milvus Client 구현](../app/clients/milvus_client.py)
 - [FAQ Service 구현](../app/services/faq_service.py)
 - [RAG Handler 구현](../app/services/chat/rag_handler.py)
 - [SourceSet Orchestrator 구현](../app/services/source_set_orchestrator.py)
 - [Config 설정](../app/core/config.py)
+
+---
+
+## 변경 이력
+
+| 날짜 | 버전 | 내용 |
+|------|------|------|
+| 2025-12-31 | 3.0.0 | Phase 48: RAGFlow 제거 반영, Milvus 전용으로 변경 |
+| 2025-12-30 | 2.1.0 | RAGFlow fallback 정책 추가 |
+| 2025-12-20 | 1.0.0 | 초기 작성 |

@@ -6,6 +6,22 @@
 
 ---
 
+## ⚠️ DEPRECATED NOTICE
+
+> **이 문서는 더 이상 최신 상태가 아닙니다.**
+>
+> Phase 48 이후 RAGFlow가 제거되고 Milvus 전용으로 변경되었습니다.
+> 최신 FAQ 파이프라인 정보는 다음 문서를 참조하세요:
+>
+> - **[FAQ_PIPELINE_ANALYSIS.md](./FAQ_PIPELINE_ANALYSIS.md)** - 최신 FAQ 파이프라인 분석 (Milvus 전용)
+> - **[RETRIEVAL_FALLBACK_POLICY.md](./RETRIEVAL_FALLBACK_POLICY.md)** - 검색 정책 (RAGFlow 제거됨)
+>
+> 이 문서는 과거 기록용으로만 보관됩니다.
+
+---
+
+---
+
 ## 목차
 
 1. [개요](#1-개요)
