@@ -465,4 +465,92 @@ mock_backend/
 
 ---
 
+## Appendix C: A7 구현 - PII Fail-Closed + Request-Scope Reset
+
+> **추가일**: 2024-12-31
+> **구현 목적**: PII 검출 서비스 장애 시 원문 노출 방지 (Fail-Closed) 및 요청 간 텔레메트리 상태 격리
+
+### C.1 PII Fail-Closed
+
+PII 서비스가 타임아웃/에러/예외 발생 시:
+- **기존**: 원문 그대로 반환 (Fail-Open) → 보안 위험
+- **A7**: `PiiDetectorUnavailableError` 예외 발생 → `chat_service`에서 안전한 fallback 메시지 반환
+
+```python
+# app/services/pii_service.py
+class PiiDetectorUnavailableError(Exception):
+    def __init__(self, stage: MaskingStage, reason: str):
+        self.stage = stage
+        self.reason = reason
+```
+
+### C.2 Request-Scope Reset
+
+`RequestContextMiddleware`에서 요청 시작/종료 시 모든 contextvars 리셋:
+
+```python
+# app/telemetry/middleware.py
+async def dispatch(self, request, call_next):
+    # 요청 시작: clean slate
+    reset_all_metrics()
+    reset_chat_turn_emitted()
+    reset_security_emitted()
+    reset_feedback_emitted()
+
+    try:
+        return await call_next(request)
+    finally:
+        # 요청 종료: 방어적 리셋
+        reset_request_context()
+        reset_all_metrics()
+        # ...
+```
+
+### C.3 샘플 이벤트
+
+**SECURITY 이벤트 (PII Fail-Closed)**:
+```json
+{
+  "eventId": "f157a610-3e75-49eb-a5a4-73c6fe13958b",
+  "eventType": "SECURITY",
+  "traceId": "trace-test-a7-001",
+  "conversationId": "C-TEST-001",
+  "turnId": 1,
+  "userId": "U-TEST-001",
+  "deptId": "D-TEST",
+  "occurredAt": "2025-12-30T15:20:23.087452Z",
+  "payload": {
+    "blockType": "PII_BLOCK",
+    "blocked": true,
+    "ruleId": "PII_DETECTOR_UNAVAILABLE_INPUT"
+  }
+}
+```
+
+**CHAT_TURN 이벤트 (PII Fail-Closed)**:
+```json
+{
+  "eventId": "54586717-ca46-4b70-b924-691824a1fd83",
+  "eventType": "CHAT_TURN",
+  "traceId": "trace-test-a7-001",
+  "conversationId": "C-TEST-001",
+  "turnId": 1,
+  "userId": "U-TEST-001",
+  "deptId": "D-TEST",
+  "occurredAt": "2025-12-30T15:20:23.087452Z",
+  "payload": {
+    "intentMain": "UNKNOWN",
+    "routeType": "API",
+    "domain": "UNKNOWN",
+    "ragUsed": false,
+    "latencyMsTotal": 50,
+    "errorCode": "PII_DETECTOR_UNAVAILABLE",
+    "piiDetectedInput": false,
+    "piiDetectedOutput": false
+  }
+}
+```
+
+---
+
 *문서 끝*
