@@ -2,7 +2,8 @@
 
 > **작성일**: 2025-12-31
 > **분석 대상**: ctrlf-ai FAQ 생성 파이프라인
-> **분석 방법**: 실제 코드 기반 분석 (문서 참조 없음)
+> **분석 방법**: 실제 코드 기반 분석
+> **주의**: RAGFlow는 제거되었습니다. Milvus만 사용합니다.
 
 ---
 
@@ -23,26 +24,28 @@
 
 ## 1. 전체 아키텍처
 
+> **중요**: RAGFlow 클라이언트는 제거되었습니다. Milvus 직접 검색만 사용합니다.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Backend (Spring)                                │
 │                         백엔드가 FAQ 클러스터 정보 전달                        │
-└─────────────────────────────────┬───────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      FastAPI (app/main.py)                                   │
-│                         /api/v2/faq/...                                      │
-└─────────────────────────────────┬───────────────────────────────────────────┘
+│                         /ai/faq/...                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                     app/api/v1/faq.py                                        │
 │  ┌──────────────────────────┐   ┌──────────────────────────────────────┐    │
-│  │ POST /faq/generate       │   │ POST /faq/generate/batch             │    │
+│  │ POST /ai/faq/generate    │   │ POST /ai/faq/generate/batch          │    │
 │  │ (단건 FAQ 생성)          │   │ (배치 FAQ 생성, 동시성 제한)           │    │
 │  └──────────────────────────┘   └──────────────────────────────────────┘    │
-└─────────────────────────────────┬───────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -57,10 +60,10 @@
 │  │         ▼           │                                                  │ │
 │  │  [2] 문서 컨텍스트 확보 ─┬─ top_docs 있음 ──→ 그대로 사용              │ │
 │  │         │               │                                              │ │
-│  │         │               └─ top_docs 없음 ──→ RAGFlow 검색              │ │
+│  │         │               └─ top_docs 없음 ──→ Milvus 검색               │ │
 │  │         │                       │                                      │ │
 │  │         │                       ▼                                      │ │
-│  │         │               RAGFlow /v1/chunk/search                       │ │
+│  │         │               MilvusSearchClient.search()                    │ │
 │  │         │                       │                                      │ │
 │  │         │                       ├── 결과 없음 → "NO_DOCS_FOUND"        │ │
 │  │         │                       │                                      │ │
@@ -111,6 +114,7 @@
 │  canonical_question: str  # 대표 질문                            │
 │  sample_questions: List[str]  # 실제 직원 질문 예시              │
 │  top_docs: List[FaqSourceDoc]  # 백엔드 제공 후보 문서 (선택)    │
+│  avg_intent_confidence: Optional[float]  # 평균 의도 신뢰도      │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -125,7 +129,7 @@
 │  summary: str (≤120자)    # 한 줄 요약                           │
 │  source_doc_id: str       # 근거 문서 ID                         │
 │  source_article_label: str # 근거 조항 라벨                      │
-│  answer_source: Literal   # "TOP_DOCS" | "RAGFLOW"               │
+│  answer_source: Literal   # "TOP_DOCS" | "MILVUS"                │
 │  ai_confidence: float     # AI 신뢰도 (0~1)                      │
 │  created_at: datetime     # 생성 시각                            │
 └─────────────────────────────────────────────────────────────────┘
@@ -140,14 +144,23 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 내부 데이터 모델
+### 2.2 answer_source 값 (현재 사용)
+
+| 값 | 설명 |
+|----|------|
+| `TOP_DOCS` | 백엔드에서 제공한 top_docs 사용 |
+| `MILVUS` | Milvus 직접 검색 결과 사용 |
+
+> **Note**: `RAGFLOW`는 더 이상 사용되지 않습니다. 레거시 호환을 위해 Literal에 남아있습니다.
+
+### 2.3 내부 데이터 모델
 
 ```python
-# RAGFlow 검색 결과 (faq_service.py:62-87)
+# Milvus 검색 결과를 RagSearchResult로 변환 (faq_service.py)
 @dataclass
 class RagSearchResult:
-    title: Optional[str]      # 문서 제목
-    page: Optional[int]       # 페이지 번호
+    title: Optional[str]      # 문서 제목 (doc_id 사용)
+    page: Optional[int]       # chunk_id
     score: float              # 유사도 점수 (0~1)
     snippet: str              # 문서 발췌 (최대 500자)
 
@@ -158,18 +171,13 @@ class PiiMaskResult:
     masked_text: str          # 마스킹된 텍스트
     has_pii: bool             # PII 검출 여부
     tags: List[PiiTag]        # 검출된 PII 태그 목록
-
-@dataclass
-class PiiTag:
-    entity: str               # 검출된 엔티티 텍스트
-    label: str                # PII 유형 (PERSON, PHONE 등)
-    start: Optional[int]      # 시작 위치
-    end: Optional[int]        # 끝 위치
 ```
 
 ---
 
 ## 3. 핵심 의존성 흐름
+
+> **중요**: RAGFlow는 제거되었습니다. Milvus만 사용합니다.
 
 ```
 ┌──────────────────┐
@@ -180,15 +188,15 @@ class PiiTag:
     │         │              │
     ▼         ▼              ▼
 ┌────────┐ ┌────────────┐ ┌────────────┐
-│PiiSvc  │ │RagflowSrch │ │ LLMClient  │
+│PiiSvc  │ │MilvusSearch│ │ LLMClient  │
 │        │ │   Client   │ │            │
 └────┬───┘ └──────┬─────┘ └──────┬─────┘
      │            │              │
      ▼            ▼              ▼
 ┌────────────┐ ┌──────────────┐ ┌─────────────┐
-│PII Service │ │   RAGFlow    │ │ LLM Service │
-│ (GLiNER)   │ │/v1/chunk/srch│ │/v1/chat/cmp │
-│:8003/mask  │ │              │ │             │
+│PII Service │ │   Milvus     │ │ LLM Service │
+│ (GLiNER)   │ │ Vector DB    │ │/v1/chat/cmp │
+│:8003/mask  │ │              │ │(Qwen2.5-7B) │
 └────────────┘ └──────────────┘ └─────────────┘
 ```
 
@@ -200,7 +208,7 @@ class PiiTag:
 | `app/models/faq.py` | 요청/응답 Pydantic 모델 |
 | `app/services/faq_service.py` | 핵심 비즈니스 로직 |
 | `app/services/pii_service.py` | PII 검출/마스킹 서비스 |
-| `app/clients/ragflow_search_client.py` | RAGFlow 검색 클라이언트 |
+| `app/clients/milvus_client.py` | Milvus 벡터 검색 클라이언트 |
 | `app/clients/llm_client.py` | LLM 호출 클라이언트 |
 
 ---
@@ -209,7 +217,7 @@ class PiiTag:
 
 ### 4.1 Step 1: 입력 PII 검사 (`_check_input_pii`)
 
-**코드 위치**: `faq_service.py:606-651`
+**코드 위치**: `faq_service.py:649-694`
 
 ```python
 # 검사 대상:
@@ -223,37 +231,46 @@ await self._pii_service.detect_and_mask(text, MaskingStage.INPUT)
 
 ### 4.2 Step 2: 문서 컨텍스트 확보 (`_get_context_docs`)
 
-**코드 위치**: `faq_service.py:251-303`
+**코드 위치**: `faq_service.py:262-292`
 
 ```python
 # 우선순위:
 # 1. request.top_docs가 있으면 그대로 사용 (answer_source = "TOP_DOCS")
-# 2. 없으면 RAGFlow 검색 (answer_source = "RAGFLOW")
+# 2. 없으면 Milvus 검색 (answer_source = "MILVUS")
 
 if req.top_docs:
-    return req.top_docs, True  # used_top_docs = True
+    return req.top_docs, "TOP_DOCS"
 
-# RAGFlow 검색
-results = await self._search_client.search_chunks(
+# Milvus 검색
+return await self._search_milvus(req)
+```
+
+### 4.3 Step 2-1: Milvus 검색 (`_search_milvus`)
+
+**코드 위치**: `faq_service.py:294-349`
+
+```python
+# Milvus 벡터 검색 (text 포함)
+results = await self._milvus_client.search(
     query=req.canonical_question,
-    dataset=req.domain,  # domain → kb_id 매핑
+    domain=req.domain,
     top_k=5,
 )
 # 결과 없으면 → FaqGenerationError("NO_DOCS_FOUND")
 ```
 
-### 4.3 Step 3: 컨텍스트 PII 검사 (`_check_context_pii`)
+### 4.4 Step 3: 컨텍스트 PII 검사 (`_check_context_pii`)
 
-**코드 위치**: `faq_service.py:699-747`
+**코드 위치**: `faq_service.py:742-790`
 
 ```python
-# RAGFlow 검색 결과의 snippet에서 PII 검사
+# Milvus 검색 결과의 snippet에서 PII 검사
 # PII 발견 시 → FaqGenerationError("PII_DETECTED_CONTEXT")
 ```
 
-### 4.4 Step 4: LLM 메시지 구성 (`_build_llm_messages`)
+### 4.5 Step 4: LLM 메시지 구성 (`_build_llm_messages`)
 
-**코드 위치**: `faq_service.py:309-348`
+**코드 위치**: `faq_service.py:355-394`
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -274,22 +291,22 @@ results = await self._search_client.search_chunks(
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.5 Step 5: LLM 호출 (`LLMClient.generate_chat_completion`)
+### 4.6 Step 5: LLM 호출 (`LLMClient.generate_chat_completion`)
 
-**코드 위치**: `faq_service.py:205-216`, `llm_client.py:138-227`
+**코드 위치**: `faq_service.py:204-215`
 
 ```python
 llm_response = await self._llm.generate_chat_completion(
     messages=messages,
-    model=None,  # 설정에서 LLM_MODEL_NAME 사용
+    model=None,  # 설정에서 LLM_MODEL_NAME 사용 (Qwen2.5-7B)
     temperature=0.3,
     max_tokens=2048,
 )
 ```
 
-### 4.6 Step 6: 응답 파싱 (`_parse_llm_response`)
+### 4.7 Step 6: 응답 파싱 (`_parse_llm_response`)
 
-**코드 위치**: `faq_service.py:464-576`
+**코드 위치**: `faq_service.py:507-538`
 
 ```
 LLM 응답 형식 (필드별 텍스트):
@@ -307,30 +324,34 @@ LLM 응답 형식 (필드별 텍스트):
 └────────────────────────────────────────────┘
 ```
 
-### 4.7 Step 7: 출력 PII 검사 (`_check_output_pii`)
+### 4.8 Step 7: 출력 PII 검사 (`_check_output_pii`)
 
-**코드 위치**: `faq_service.py:653-692`
+**코드 위치**: `faq_service.py:696-736`
 
 ```python
 # 검사 대상: answer_markdown, summary
 # PII 발견 시 → FaqGenerationError("PII_DETECTED_OUTPUT")
 ```
 
-### 4.8 Step 8: LOW_RELEVANCE 체크
+### 4.9 Step 8: LOW_RELEVANCE 체크
 
-**코드 위치**: `faq_service.py:228-232`
+**코드 위치**: `faq_service.py:228-243`
 
 ```python
 if status == "LOW_RELEVANCE":
-    raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
+    if settings.FAQ_LOW_RELEVANCE_BLOCK:
+        raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
+    else:
+        # 경고만 출력하고 계속 진행
+        parsed["status"] = "SUCCESS"
 ```
 
-### 4.9 Step 9-10: FaqDraft 생성 & 품질 로그
+### 4.10 Step 9-10: FaqDraft 생성 & 품질 로그
 
-**코드 위치**: `faq_service.py:396-458`, `faq_service.py:753-806`
+**코드 위치**: `faq_service.py:442-501`, `faq_service.py:796-850`
 
 ```python
-# answer_source 결정: "TOP_DOCS" 또는 "RAGFLOW"
+# answer_source 결정: "TOP_DOCS" 또는 "MILVUS"
 # ai_confidence 정규화 (0.0 ~ 1.0)
 # 품질 모니터링: ai_confidence < threshold → WARN 로그
 ```
@@ -343,7 +364,7 @@ if status == "LOW_RELEVANCE":
 
 #### 입력 (HTTP Request Body)
 ```json
-// POST /api/v2/faq/generate
+// POST /ai/faq/generate
 // Content-Type: application/json
 // 크기: ~500B - 2KB
 
@@ -369,132 +390,36 @@ if status == "LOW_RELEVANCE":
 }
 ```
 
-#### Pydantic 모델 변환
-```python
-# FaqDraftGenerateRequest 객체로 파싱
-request = FaqDraftGenerateRequest(
-    domain="SEC_POLICY",
-    cluster_id="cluster-2024-001",
-    canonical_question="USB 메모리 반출 시 어떤 절차가 필요한가요?",
-    sample_questions=["USB 반출하려면...", ...],
-    top_docs=[FaqSourceDoc(...), ...]
-)
+### 5.2 Stage 2: 문서 컨텍스트 확보 (Milvus 검색)
 
-# 메모리 구조:
-# request.domain            : str (10-20 bytes)
-# request.cluster_id        : str (15-30 bytes)
-# request.canonical_question: str (20-100 bytes)
-# request.sample_questions  : List[str] (0-400 bytes)
-# request.top_docs          : List[FaqSourceDoc] (0-3000 bytes)
-# 총 객체 크기: ~500-3500 bytes
-```
+> **Note**: RAGFlow는 더 이상 사용되지 않습니다.
 
----
+#### top_docs가 없는 경우 → Milvus 검색
 
-### 5.2 Stage 1: 입력 PII 검사
-
-#### 검사 대상 텍스트 수집
-```python
-texts_to_check: List[str] = []
-
-# 1. canonical_question 추가
-texts_to_check.append(req.canonical_question)
-
-# 2. sample_questions 추가
-texts_to_check.extend(req.sample_questions)
-
-# 3. top_docs.snippet 추가
-for doc in req.top_docs:
-    if doc.snippet:
-        texts_to_check.append(doc.snippet)
-
-# 최종: 5개 문자열, ~700자 (~1.4KB)
-```
-
-#### 데이터 변환 흐름
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ texts_to_check (Python List)                                           │
-│ ┌────────────────────────────────────────────────────────────────────┐ │
-│ │ [0] "USB 메모리 반출 시 어떤 절차가 필요한가요?"         (30자)    │ │
-│ │ [1] "USB 반출하려면 어떻게 해요?"                        (15자)    │ │
-│ │ [2] "외부 저장장치 가져가도 되나요?"                     (16자)    │ │
-│ │ [3] "USB 승인 절차 알려주세요"                           (14자)    │ │
-│ │ [4] "제3장 제2조 (외부저장매체 관리) ① 외부저장매체..."  (500자)   │ │
-│ └────────────────────────────────────────────────────────────────────┘ │
-│ 총 크기: ~575자 (~1.1KB UTF-8)                                         │
-└────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ (각각 HTTP POST)
-┌────────────────────────────────────────────────────────────────────────┐
-│ PII Service Request (5회 호출)                                         │
-│ ┌──────────────────────────────────────────────────────────────────┐   │
-│ │ POST http://pii-service:8003/mask                                │   │
-│ │ {"text": "...", "stage": "input"}                                │   │
-│ │ 각 요청 크기: ~100-600 bytes                                     │   │
-│ └──────────────────────────────────────────────────────────────────┘   │
+│ Milvus 검색 요청                                                        │
+│ MilvusSearchClient.search(query, domain, top_k=5)                       │
+├────────────────────────────────────────────────────────────────────────┤
+│ 내부적으로:                                                             │
+│ 1. query를 임베딩 벡터로 변환 (ko-sroberta-multitask)                   │
+│ 2. Milvus에서 유사도 검색                                               │
+│ 3. 결과와 함께 text 필드 반환                                           │
 └────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ PiiMaskResult (5개 생성)                                               │
+│ Milvus 검색 결과                                                        │
 │ ┌──────────────────────────────────────────────────────────────────┐   │
-│ │ result.has_pii = False  (모두 False여야 통과)                    │   │
-│ │ result.tags = []                                                 │   │
-│ └──────────────────────────────────────────────────────────────────┘   │
-│ PII 없으면: 다음 단계로 진행                                           │
-│ PII 있으면: FaqGenerationError("PII_DETECTED") 발생                    │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 5.3 Stage 2: 문서 컨텍스트 확보
-
-#### Case A: top_docs가 있는 경우
-```python
-if req.top_docs:
-    return req.top_docs, True  # used_top_docs = True
-
-# 반환: Tuple[List[FaqSourceDoc], bool]
-# 크기: 5개 × ~600자 = ~3000자 (~6KB)
-```
-
-#### Case B: top_docs가 없는 경우 → RAGFlow 검색
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│ RAGFlow 검색 요청                                                       │
-│ POST {RAGFLOW_BASE_URL}/v1/chunk/search                                │
-│ ┌──────────────────────────────────────────────────────────────────┐   │
-│ │ {                                                                │   │
-│ │   "query": "USB 메모리 반출 시 어떤 절차가 필요한가요?",         │   │
-│ │   "dataset": "kb_sec_policy_001",  // domain→kb_id 변환됨        │   │
-│ │   "top_k": 5                                                     │   │
-│ │ }                                                                │   │
-│ │ 요청 크기: ~150 bytes                                            │   │
-│ └──────────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ RAGFlow 검색 응답                                                       │
-│ ┌──────────────────────────────────────────────────────────────────┐   │
-│ │ {                                                                │   │
-│ │   "data": {                                                      │   │
-│ │     "results": [                                                 │   │
-│ │       {                                                          │   │
-│ │         "id": "chunk-001",                                       │   │
-│ │         "document_name": "정보보안_관리규정.pdf",                │   │
-│ │         "page_num": 15,                                          │   │
-│ │         "content": "제3장 제2조 (외부저장매체 관리)...",         │   │
-│ │         "similarity": 0.92                                       │   │
-│ │       },                                                         │   │
-│ │       // ... 4개 더 (총 5개)                                     │   │
-│ │     ]                                                            │   │
-│ │   }                                                              │   │
-│ │ }                                                                │   │
-│ │ 응답 크기: ~3-5KB (5개 chunk × 500-800자)                        │   │
+│ │ [                                                                │   │
+│ │   {                                                              │   │
+│ │     "doc_id": "정보보안_관리규정",                               │   │
+│ │     "content": "제3장 제2조 (외부저장매체 관리)...",             │   │
+│ │     "score": 0.92,                                               │   │
+│ │     "metadata": {"chunk_id": 15}                                 │   │
+│ │   },                                                             │   │
+│ │   // ... 4개 더 (총 5개)                                         │   │
+│ │ ]                                                                │   │
 │ └──────────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -504,119 +429,28 @@ if req.top_docs:
 │ ┌──────────────────────────────────────────────────────────────────┐   │
 │ │ [                                                                │   │
 │ │   RagSearchResult(                                               │   │
-│ │     title="정보보안_관리규정.pdf",                               │   │
-│ │     page=15,                                                     │   │
+│ │     title="정보보안_관리규정",                                   │   │
+│ │     page=15,  # chunk_id                                         │   │
 │ │     score=0.92,                                                  │   │
 │ │     snippet="제3장 제2조 (외부저장..."  # 최대 500자             │   │
 │ │   ),                                                             │   │
 │ │   // ... 4개 더                                                  │   │
 │ │ ]                                                                │   │
-│ │ 총 크기: 5개 × ~550 bytes = ~2.75KB                              │   │
 │ └──────────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-### 5.4 Stage 3: 컨텍스트 PII 검사
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ context_docs (5개 RagSearchResult)                                      │
-│ ┌─────────────────────────────────────────────────────────────────────┐ │
-│ │ [0].snippet: "제3장 제2조 (외부저장매체 관리) ① 외부저장..."  500자 │ │
-│ │ [1].snippet: "② 반출 신청서를 작성하여 정보보호팀에..."       500자 │ │
-│ │ [2].snippet: "③ 승인된 외부저장매체는 반출 기록대장에..."     500자 │ │
-│ │ [3].snippet: "제3조 (보안사고 발생 시) 보안사고가..."          500자 │ │
-│ │ [4].snippet: "④ 반출된 외부저장매체의 반입 시에도..."         500자 │ │
-│ └─────────────────────────────────────────────────────────────────────┘ │
-│ 총 검사 대상: ~2500자 (~5KB)                                            │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ (5회 PII 서비스 호출)
-┌─────────────────────────────────────────────────────────────────────────┐
-│ PII 검사 결과                                                           │
-│ 모두 has_pii=False → 다음 단계로 진행                                   │
-│ 하나라도 has_pii=True → FaqGenerationError("PII_DETECTED_CONTEXT")      │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 5.5 Stage 4: LLM 메시지 구성
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Stage 4: LLM 메시지 구성 데이터 흐름                                     │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  [입력들]                                                               │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ domain: "SEC_POLICY"                                    ~15자    │  │
-│  │ canonical_question: "USB 메모리 반출 시..."             ~50자    │  │
-│  │ sample_questions: ["...", "...", "..."]                 ~100자   │  │
-│  │ context_docs: [RagSearchResult × 5]                     ~2500자  │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              │                                                          │
-│              ▼                                                          │
-│  [sample_questions_text 생성]                                           │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ "- USB 반출하려면 어떻게 해요?\n"                                 │  │
-│  │ "- 외부 저장장치 가져가도 되나요?\n"                              │  │
-│  │ "- USB 승인 절차 알려주세요"                                      │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              ~100자                                                     │
-│              │                                                          │
-│              ▼                                                          │
-│  [docs_text 생성 - _format_docs_for_prompt]                             │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ "### 문서 1: 정보보안_관리규정.pdf (p.15) [유사도: 0.92]\n"       │  │
-│  │ "제3장 제2조 (외부저장매체 관리) ① ...\n\n"                       │  │
-│  │ "### 문서 2: ...\n"                                               │  │
-│  │ ...                                                               │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              ~2800자 (5개 문서 헤더 + 5개 snippet)                      │
-│              │                                                          │
-│              ▼                                                          │
-│  [USER_PROMPT_TEMPLATE 포맷팅]                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ "## 도메인\nSEC_POLICY\n\n"                                       │  │
-│  │ "## 대표 질문 (canonical_question)\n"                             │  │
-│  │ "USB 메모리 반출 시 어떤 절차가 필요한가요?\n\n"                   │  │
-│  │ "## 실제 직원 질문 예시 (sample_questions)\n"                     │  │
-│  │ "- USB 반출하려면...\n...\n\n"                                    │  │
-│  │ "## 컨텍스트 문서 (context_docs)\n"                               │  │
-│  │ "### 문서 1: ...\n...\n"                                          │  │
-│  │ "\n위 컨텍스트를 바탕으로 FAQ를 작성해 주세요..."                 │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              ~3200자                                                    │
-│              │                                                          │
-│              ▼                                                          │
-│  [최종 messages 배열]                                                   │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ [                                                                 │  │
-│  │   {"role": "system", "content": SYSTEM_PROMPT},    // ~800자     │  │
-│  │   {"role": "user", "content": user_message}        // ~3200자    │  │
-│  │ ]                                                                 │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              총 ~4000자 (~8KB)                                          │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 5.6 Stage 5: LLM 호출
+### 5.3 Stage 5: LLM 호출
 
 #### HTTP 요청
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ LLM HTTP Request                                                         │
-│ POST http://llm-service:8001/v1/chat/completions                        │
+│ POST {LLM_BASE_URL}/v1/chat/completions                                  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ {                                                                        │
-│   "model": "gpt-4-turbo",                                               │
-│   "messages": [                                                         │
+│   "model": "Qwen/Qwen2.5-7B-Instruct",                                   │
+│   "messages": [                                                          │
 │     {                                                                   │
 │       "role": "system",                                                 │
 │       "content": "너는 기업 내부 FAQ 작성 보조자다.\n\n## 핵심 원칙..." │
@@ -631,171 +465,15 @@ if req.top_docs:
 │ }                                                                        │
 │                                                                         │
 │ 요청 크기: ~8-9KB                                                        │
-│ 예상 토큰 수: ~1500-2000 tokens (입력)                                   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### HTTP 응답
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ LLM HTTP Response                                                        │
-├─────────────────────────────────────────────────────────────────────────┤
-│ {                                                                        │
-│   "id": "chatcmpl-abc123",                                              │
-│   "object": "chat.completion",                                          │
-│   "created": 1703123456,                                                │
-│   "model": "gpt-4-turbo",                                               │
-│   "choices": [                                                          │
-│     {                                                                   │
-│       "index": 0,                                                       │
-│       "message": {                                                      │
-│         "role": "assistant",                                            │
-│         "content": "status: SUCCESS\nquestion: USB 메모리를 반출할..."  │
-│       },                                                                │
-│       "finish_reason": "stop"                                           │
-│     }                                                                   │
-│   ],                                                                    │
-│   "usage": {                                                            │
-│     "prompt_tokens": 1823,                                              │
-│     "completion_tokens": 456,                                           │
-│     "total_tokens": 2279                                                │
-│   }                                                                     │
-│ }                                                                        │
-│                                                                         │
-│ 응답 크기: ~2-3KB                                                        │
-│ content 크기: ~500-1500자                                                │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-#### 추출된 content
-```
-llm_response (~800자):
-"""
-status: SUCCESS
-question: USB 메모리를 반출할 때 어떤 절차가 필요한가요?
-summary: 정보보호팀의 사전 승인을 받고 반출 신청서를 제출해야 합니다.
-answer_markdown: |
-  **정보보호팀의 사전 승인이 필요합니다.**
-
-  - 반출 전 정보보호팀에 승인 요청
-  - 반출 신청서 작성 (목적, 기간, 데이터 목록 명시)
-  - 승인 후 반출 기록대장에 서명
-  - 반입 시에도 정보보호팀에 신고 필요
-  - 분실/도난 시 즉시 신고 및 경위서 제출
-
-  **참고**
-  - 정보보안 관리규정 (p.15-18)
-ai_confidence: 0.91
-"""
-```
-
----
-
-### 5.7 Stage 6: 응답 파싱
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Stage 6: 응답 파싱 데이터 흐름                                           │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  [입력] llm_response (str)                                              │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ "status: SUCCESS\n"                                               │  │
-│  │ "question: USB 메모리를 반출할 때 어떤 절차가 필요한가요?\n"       │  │
-│  │ "summary: 정보보호팀의 사전 승인을 받고 반출 신청서를...\n"        │  │
-│  │ "answer_markdown: |\n"                                            │  │
-│  │ "  **정보보호팀의 사전 승인이 필요합니다.**\n"                     │  │
-│  │ "  \n"                                                            │  │
-│  │ "  - 반출 전 정보보호팀에 승인 요청\n"                             │  │
-│  │ "  - 반출 신청서 작성 (목적, 기간, 데이터 목록 명시)\n"            │  │
-│  │ "  ...\n"                                                         │  │
-│  │ "ai_confidence: 0.91"                                             │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              ~800자 (원본 LLM 응답)                                     │
-│              │                                                          │
-│              ▼ (정규식 파싱)                                            │
-│  [출력] parsed (dict)                                                   │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │ {                                                                 │  │
-│  │   "status": "SUCCESS",                              // 7자        │  │
-│  │   "question": "USB 메모리를 반출할 때...",          // 40자       │  │
-│  │   "summary": "정보보호팀의 사전 승인을...",         // 50자       │  │
-│  │   "answer_markdown": "**정보보호팀의 사전...",      // 400자      │  │
-│  │   "ai_confidence": 0.91                             // float      │  │
-│  │ }                                                                 │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
-│              ~500자 (파싱된 dict)                                       │
-│              ※ answer_markdown에서 들여쓰기 제거됨                      │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 5.8 Stage 7: 출력 PII 검사
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ texts_to_check (출력 검사)                                               │
-│ ┌─────────────────────────────────────────────────────────────────────┐ │
-│ │ [0] answer_markdown: "**정보보호팀의 사전 승인이 필요합니다.**..."   │ │
-│ │                       ~400자                                         │ │
-│ │ [1] summary: "정보보호팀의 사전 승인을 받고 반출 신청서를..."        │ │
-│ │                       ~50자                                          │ │
-│ └─────────────────────────────────────────────────────────────────────┘ │
-│ 총 크기: ~450자 (~900 bytes)                                            │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ (2회 PII 서비스 호출)
-┌─────────────────────────────────────────────────────────────────────────┐
-│ PII 검사 결과                                                           │
-│ 모두 has_pii=False → 다음 단계로 진행                                   │
-│ 하나라도 has_pii=True → FaqGenerationError("PII_DETECTED_OUTPUT")       │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 5.9 Stage 9: FaqDraft 생성
-
-```python
-FaqDraft(
-    faq_draft_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890",  # 36자
-    domain="SEC_POLICY",                                   # 10자
-    cluster_id="cluster-2024-001",                         # 16자
-    question="USB 메모리를 반출할 때 어떤 절차가 필요한가요?",  # 40자
-    answer_markdown="""**정보보호팀의 사전 승인이 필요합니다.**
-
-- 반출 전 정보보호팀에 승인 요청
-- 반출 신청서 작성 (목적, 기간, 데이터 목록 명시)
-- 승인 후 반출 기록대장에 서명
-- 반입 시에도 정보보호팀에 신고 필요
-- 분실/도난 시 즉시 신고 및 경위서 제출
-
-**참고**
-- 정보보안 관리규정 (p.15-18)""",                         # ~400자
-    summary="정보보호팀의 사전 승인을 받고 반출 신청서를 제출해야 합니다.",  # ~50자
-    source_doc_id=None,           # RAGFLOW인 경우 None
-    source_doc_version=None,
-    source_article_label=None,
-    source_article_path=None,
-    answer_source="RAGFLOW",       # 8자
-    ai_confidence=0.91,            # float
-    created_at=datetime(2024, 12, 23, 10, 30, 45, tzinfo=timezone.utc),
-)
-
-# 총 객체 크기: ~600자 (~1.2KB)
-```
-
----
-
-### 5.10 Stage 11: API 응답 반환
+### 5.4 최종 API 응답
 
 ```json
 // HTTP Response
 // Status: 200 OK
 // Content-Type: application/json
-// 크기: ~1.5-2KB
 
 {
   "status": "SUCCESS",
@@ -804,15 +482,15 @@ FaqDraft(
     "domain": "SEC_POLICY",
     "cluster_id": "cluster-2024-001",
     "question": "USB 메모리를 반출할 때 어떤 절차가 필요한가요?",
-    "answer_markdown": "**정보보호팀의 사전 승인이 필요합니다.**\n\n- 반출 전 정보보호팀에 승인 요청\n- 반출 신청서 작성 (목적, 기간, 데이터 목록 명시)\n- 승인 후 반출 기록대장에 서명\n- 반입 시에도 정보보호팀에 신고 필요\n- 분실/도난 시 즉시 신고 및 경위서 제출\n\n**참고**\n- 정보보안 관리규정 (p.15-18)",
+    "answer_markdown": "**정보보호팀의 사전 승인이 필요합니다.**\n\n- 반출 전 정보보호팀에 승인 요청\n- 반출 신청서 작성...",
     "summary": "정보보호팀의 사전 승인을 받고 반출 신청서를 제출해야 합니다.",
     "source_doc_id": null,
     "source_doc_version": null,
     "source_article_label": null,
     "source_article_path": null,
-    "answer_source": "RAGFLOW",
+    "answer_source": "MILVUS",
     "ai_confidence": 0.91,
-    "created_at": "2024-12-23T10:30:45Z"
+    "created_at": "2025-12-31T10:30:45Z"
   },
   "error_message": null
 }
@@ -824,33 +502,30 @@ FaqDraft(
 
 ### 6.1 배치 엔드포인트
 
-**코드 위치**: `faq.py:187-283`
+**코드 위치**: `faq.py:242-338`
 
 ```
-POST /api/v2/faq/generate/batch
+POST /ai/faq/generate/batch
 ```
 
 ### 6.2 배치 처리 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 배치 처리 (POST /faq/generate/batch) 데이터 흐름                             │
+│ 배치 처리 (POST /ai/faq/generate/batch) 데이터 흐름                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  [입력] FaqDraftGenerateBatchRequest                                        │
 │  ┌────────────────────────────────────────────────────────────────────┐    │
 │  │ {                                                                  │    │
 │  │   "items": [                                                       │    │
-│  │     { /* FaqDraftGenerateRequest 1 */ },   // ~1KB                 │    │
-│  │     { /* FaqDraftGenerateRequest 2 */ },   // ~1KB                 │    │
-│  │     { /* FaqDraftGenerateRequest 3 */ },   // ~1KB                 │    │
+│  │     { /* FaqDraftGenerateRequest 1 */ },                           │    │
+│  │     { /* FaqDraftGenerateRequest 2 */ },                           │    │
 │  │     ...                                                            │    │
-│  │     { /* FaqDraftGenerateRequest N */ }    // ~1KB                 │    │
 │  │   ],                                                               │    │
 │  │   "concurrency": 3                                                 │    │
 │  │ }                                                                  │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
-│  입력 크기: N × ~1KB = ~NKB                                                 │
 │                                                                             │
 │              │                                                              │
 │              ▼                                                              │
@@ -870,11 +545,6 @@ POST /api/v2/faq/generate/batch
 │  │    │   1     │   │   2     │   │   3     │                        │    │
 │  │    └─────────┘   └─────────┘   └─────────┘                        │    │
 │  │                                                                    │    │
-│  │    ┌─────────┐   ┌─────────┐   ← 세마포어 해제 후 다음 배치        │    │
-│  │    │ Item 4  │   │ Item 5  │                                       │    │
-│  │    │generate │   │generate │                                       │    │
-│  │    └─────────┘   └─────────┘                                       │    │
-│  │         ...                                                        │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
 │              │                                                              │
@@ -882,29 +552,14 @@ POST /api/v2/faq/generate/batch
 │  [출력] FaqDraftGenerateBatchResponse                                       │
 │  ┌────────────────────────────────────────────────────────────────────┐    │
 │  │ {                                                                  │    │
-│  │   "items": [                                                       │    │
-│  │     {"status": "SUCCESS", "faq_draft": {...}, ...},  // ~1.5KB    │    │
-│  │     {"status": "SUCCESS", "faq_draft": {...}, ...},  // ~1.5KB    │    │
-│  │     {"status": "FAILED", "faq_draft": null, ...},    // ~100B     │    │
-│  │     ...                                                            │    │
-│  │   ],                                                               │    │
+│  │   "items": [...],                                                  │    │
 │  │   "total_count": 10,                                               │    │
 │  │   "success_count": 8,                                              │    │
 │  │   "failed_count": 2                                                │    │
 │  │ }                                                                  │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
-│  출력 크기: 성공 N × ~1.5KB + 실패 M × ~100B                                │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 6.3 배치 처리 예시
-
-```
-예시 (10건 배치, 8성공 2실패):
-- 입력: 10 × ~1KB = ~10KB
-- 처리 중 최대 메모리: 3 × ~8KB = ~24KB (동시 LLM 요청)
-- 출력: 8 × ~1.5KB + 2 × ~0.1KB = ~12.2KB
 ```
 
 ---
@@ -915,37 +570,20 @@ POST /api/v2/faq/generate/batch
 
 | 에러 코드 | 발생 Stage | 원인 |
 |-----------|------------|------|
-| `PII_DETECTED` | Stage 1 | 입력(canonical_question, sample_questions, top_docs.snippet)에 PII |
-| `NO_DOCS_FOUND` | Stage 2 | RAGFlow 검색 결과 없음 |
-| `PII_DETECTED_CONTEXT` | Stage 3 | RAGFlow 검색 결과 snippet에 PII |
+| `PII_DETECTED` | Stage 1 | 입력에 PII |
+| `NO_DOCS_FOUND` | Stage 2 | Milvus 검색 결과 없음 |
+| `PII_DETECTED_CONTEXT` | Stage 3 | 검색 결과 snippet에 PII |
 | `LOW_RELEVANCE_CONTEXT` | Stage 8 | LLM이 컨텍스트가 질문과 관련 없다고 판단 |
-| `PII_DETECTED_OUTPUT` | Stage 7 | LLM 출력(answer_markdown, summary)에 PII |
+| `PII_DETECTED_OUTPUT` | Stage 7 | LLM 출력에 PII |
 
 ### 7.2 에러 응답 형식
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 에러 케이스별 중단 시점 및 반환 데이터                                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  에러 코드              중단 Stage    반환 응답 크기                         │
-│  ─────────────────────────────────────────────────────────────────────────  │
-│                                                                             │
-│  PII_DETECTED           Stage 1      ~100 bytes                            │
-│  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │ {                                                                  │    │
-│  │   "status": "FAILED",                                              │    │
-│  │   "faq_draft": null,                                               │    │
-│  │   "error_message": "PII_DETECTED"                                  │    │
-│  │ }                                                                  │    │
-│  └────────────────────────────────────────────────────────────────────┘    │
-│                                                                             │
-│  NO_DOCS_FOUND          Stage 2      ~100 bytes                            │
-│  PII_DETECTED_CONTEXT   Stage 3      ~120 bytes                            │
-│  LOW_RELEVANCE_CONTEXT  Stage 8      ~130 bytes                            │
-│  PII_DETECTED_OUTPUT    Stage 7      ~120 bytes                            │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```json
+{
+  "status": "FAILED",
+  "faq_draft": null,
+  "error_message": "PII_DETECTED"
+}
 ```
 
 ---
@@ -954,11 +592,13 @@ POST /api/v2/faq/generate/batch
 
 ### 8.1 서비스 목록
 
+> **Note**: RAGFlow는 제거되었습니다.
+
 | 서비스 | 클라이언트 | 엔드포인트 | 역할 |
 |--------|-----------|-----------|------|
 | **PII Service** | `PiiService` | `POST {PII_BASE_URL}/mask` | 개인정보 검출/마스킹 |
-| **RAGFlow** | `RagflowSearchClient` | `POST {RAGFLOW_BASE_URL}/v1/chunk/search` | 문서 검색 |
-| **LLM** | `LLMClient` | `POST {LLM_BASE_URL}/v1/chat/completions` | FAQ 생성 |
+| **Milvus** | `MilvusSearchClient` | Milvus gRPC/HTTP | 벡터 검색 |
+| **LLM** | `LLMClient` | `POST {LLM_BASE_URL}/v1/chat/completions` | FAQ 생성 (Qwen2.5-7B) |
 
 ### 8.2 외부 서비스 호출 횟수
 
@@ -973,14 +613,14 @@ POST /api/v2/faq/generate/batch
 │  PII Service        Stage 1      5회                ~100-600B              │
 │  (입력 검사)                     (canonical + samples + snippets)           │
 │                                                                             │
-│  RAGFlow            Stage 2      0~1회              요청 ~150B             │
+│  Milvus             Stage 2      0~1회              요청 ~150B             │
 │  (문서 검색)                     (top_docs 없을 때만)  응답 ~3-5KB          │
 │                                                                             │
 │  PII Service        Stage 3      5회                ~500B/건               │
-│  (컨텍스트 검사)                 (RAGFlow 결과 snippet별)                   │
+│  (컨텍스트 검사)                 (Milvus 결과 snippet별)                    │
 │                                                                             │
 │  LLM Service        Stage 5      1회                요청 ~8-9KB            │
-│  (FAQ 생성)                                         응답 ~2-3KB            │
+│  (FAQ 생성)                      (Qwen2.5-7B)       응답 ~2-3KB            │
 │                                                                             │
 │  PII Service        Stage 7      2회                ~200-450B/건           │
 │  (출력 검사)                     (answer_markdown + summary)               │
@@ -989,10 +629,8 @@ POST /api/v2/faq/generate/batch
 │                                                                             │
 │  총 호출 횟수:                                                              │
 │  - PII Service: 12회 (5 + 5 + 2)                                           │
-│  - RAGFlow: 0~1회                                                          │
+│  - Milvus: 0~1회                                                           │
 │  - LLM: 1회                                                                │
-│                                                                             │
-│  총 네트워크 I/O: ~15-20KB (모든 요청/응답 합계)                             │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -1001,119 +639,73 @@ POST /api/v2/faq/generate/batch
 
 ## 9. 캐시 및 설정
 
-### 9.1 RAGFlow 캐시 설정
-
-**코드 위치**: `ragflow_search_client.py:40-66`
-
-```python
-# 캐시 설정 (app/core/config.py)
-FAQ_RAG_CACHE_ENABLED = True     # RAGFlow 결과 캐시 활성화
-FAQ_RAG_CACHE_TTL_SECONDS = 300  # 5분 TTL
-FAQ_RAG_CACHE_MAXSIZE = 100      # 최대 100개 캐시
-```
-
-### 9.2 배치 및 품질 설정
+### 9.1 설정 값
 
 ```python
 # app/core/config.py
-FAQ_BATCH_CONCURRENCY = 3        # 배치 동시 처리 수
-FAQ_CONFIDENCE_WARN_THRESHOLD = 0.7  # 품질 경고 임계값
+FAQ_BATCH_CONCURRENCY = 3              # 배치 동시 처리 수
+FAQ_CONFIDENCE_WARN_THRESHOLD = 0.7    # 품질 경고 임계값
+FAQ_LOW_RELEVANCE_BLOCK = True         # LOW_RELEVANCE 차단 여부
+FAQ_INTENT_CONFIDENCE_THRESHOLD = 0.7  # 의도 신뢰도 임계값
+FAQ_INTENT_CONFIDENCE_REQUIRED = False # 의도 신뢰도 필수 여부
 ```
 
-### 9.3 환경 변수
+### 9.2 환경 변수
 
 ```bash
 # PII 서비스
 PII_BASE_URL=http://pii-service:8003
 PII_ENABLED=true
 
-# RAGFlow
-RAGFLOW_BASE_URL=http://ragflow-service:8080
-RAGFLOW_API_KEY=xxx
-RAGFLOW_DATASET_MAPPING=policy:kb_001,training:kb_002
+# Milvus
+MILVUS_HOST=milvus-server
+MILVUS_PORT=19530
 
 # LLM
-LLM_BASE_URL=http://llm-service:8001
-LLM_MODEL_NAME=gpt-4-turbo
+LLM_BASE_URL=http://llm-server:8000/v1
+LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
 ```
 
 ---
 
 ## 10. 데이터 크기 변화 요약
 
-### 10.1 전체 데이터 크기 변화
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        데이터 크기 변화 그래프                                │
+│                        데이터 크기 변화 흐름                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  Stage      데이터 형태                              크기                   │
 │  ─────────────────────────────────────────────────────────────────────────  │
 │                                                                             │
 │    0   ───→ HTTP Request (JSON)                      ~1-2KB                 │
-│             FaqDraftGenerateRequest                    │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
+│                      │                                                      │
+│                      ▼                                                      │
 │    1   ───→ texts_to_check (List[str])               ~0.7KB                 │
-│             5개 문자열 (검사용)                        │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
-│    2   ───→ RAGFlow Response                         ~3-5KB ◀── 가장 큼    │
-│             5개 chunks                                 │      (검색 결과)   │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
-│         ───→ context_docs (List[RagSearchResult])    ~2.75KB                │
-│             5개 객체 (snippet 500자 제한)              │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
-│    3   ───→ PII 검사 대상                            ~2.5KB                 │
-│             5개 snippet                                │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
+│                      │                                                      │
+│                      ▼                                                      │
+│    2   ───→ Milvus Search (if no top_docs)           ~3-5KB ◀── 가장 큼    │
+│                      │                                                      │
+│                      ▼                                                      │
 │    4   ───→ LLM messages 배열                        ~4KB                   │
-│             system + user prompt                       │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
-│    5   ───→ LLM Request (JSON)                       ~8-9KB ◀── 최대      │
-│             full payload                               │      (LLM 요청)    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
+│                      │                                                      │
+│                      ▼                                                      │
+│    5   ───→ LLM Request (JSON)                       ~8-9KB ◀── 최대       │
+│                      │                                                      │
+│                      ▼                                                      │
 │         ───→ LLM Response                            ~2-3KB                 │
-│             choices[0].message.content                 │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
-│         ───→ llm_response (str)                      ~0.8KB                 │
-│             content 텍스트                             │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
+│                      │                                                      │
+│                      ▼                                                      │
 │    6   ───→ parsed (dict)                            ~0.5KB                 │
-│             5개 필드                                   │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
-│    7   ───→ 출력 PII 검사 대상                       ~0.45KB                │
-│             2개 문자열                                 │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
+│                      │                                                      │
+│                      ▼                                                      │
 │    9   ───→ FaqDraft 객체                            ~0.6KB                 │
-│             Pydantic 모델                              │                    │
-│                      │                                 │                    │
-│                      ▼                                 │                    │
+│                      │                                                      │
+│                      ▼                                                      │
 │   11   ───→ HTTP Response (JSON)                     ~1.5-2KB               │
-│             FaqDraftGenerateResponse                   │                    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
-
-### 10.2 요약 통계
-
-| 구분 | 크기 |
-|------|------|
-| 입력 (HTTP Request) | ~1-2KB |
-| 중간 최대 (LLM 요청) | ~8-9KB |
-| 출력 (HTTP Response) | ~1.5-2KB |
-| 압축률 | 입력 대비 약 1:1 |
-| 팽창률 | 입력 → LLM 요청 약 5-8배 |
 
 ---
 
@@ -1121,21 +713,30 @@ LLM_MODEL_NAME=gpt-4-turbo
 
 | 기능 | 파일 | 라인 |
 |------|------|------|
-| API 엔드포인트 (단건) | `app/api/v1/faq.py` | 44-141 |
-| API 엔드포인트 (배치) | `app/api/v1/faq.py` | 187-283 |
+| API 엔드포인트 (단건) | `app/api/v1/faq.py` | 44-169 |
+| API 엔드포인트 (배치) | `app/api/v1/faq.py` | 242-338 |
 | 데이터 모델 | `app/models/faq.py` | 전체 |
-| 메인 서비스 로직 | `app/services/faq_service.py` | 176-245 |
-| 입력 PII 검사 | `app/services/faq_service.py` | 606-651 |
-| 컨텍스트 확보 | `app/services/faq_service.py` | 251-303 |
-| 컨텍스트 PII 검사 | `app/services/faq_service.py` | 699-747 |
-| LLM 메시지 구성 | `app/services/faq_service.py` | 309-348 |
-| 응답 파싱 | `app/services/faq_service.py` | 464-576 |
-| 출력 PII 검사 | `app/services/faq_service.py` | 653-692 |
-| FaqDraft 생성 | `app/services/faq_service.py` | 396-458 |
-| 품질 로그 | `app/services/faq_service.py` | 753-806 |
+| 메인 서비스 로직 | `app/services/faq_service.py` | 176-256 |
+| 입력 PII 검사 | `app/services/faq_service.py` | 649-694 |
+| Milvus 검색 | `app/services/faq_service.py` | 294-349 |
+| 컨텍스트 PII 검사 | `app/services/faq_service.py` | 742-790 |
+| LLM 메시지 구성 | `app/services/faq_service.py` | 355-394 |
+| 응답 파싱 | `app/services/faq_service.py` | 507-619 |
+| 출력 PII 검사 | `app/services/faq_service.py` | 696-736 |
+| FaqDraft 생성 | `app/services/faq_service.py` | 442-501 |
+| 품질 로그 | `app/services/faq_service.py` | 796-890 |
 | PII 서비스 | `app/services/pii_service.py` | 전체 |
-| RAGFlow 클라이언트 | `app/clients/ragflow_search_client.py` | 전체 |
+| Milvus 클라이언트 | `app/clients/milvus_client.py` | 전체 |
 | LLM 클라이언트 | `app/clients/llm_client.py` | 전체 |
+
+---
+
+## 변경 이력
+
+| 날짜 | 내용 |
+|------|------|
+| 2025-12-31 | RAGFlow 제거 반영, Milvus 직접 검색으로 변경, API 경로 수정 (`/ai/faq/*`), LLM 모델명 수정 (Qwen2.5-7B) |
+| 2024-12-23 | 초기 작성 |
 
 ---
 
