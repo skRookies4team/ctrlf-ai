@@ -22,7 +22,7 @@ from app.models.intent import IntentResult, IntentType, MaskingStage, PiiMaskRes
 from app.clients.llm_client import LLMClient
 from app.services.chat_service import ChatService
 from app.services.intent_service import IntentService
-from app.services.pii_service import PiiService
+from app.services.pii_service import PiiService, PiiDetectorUnavailableError
 
 
 # =============================================================================
@@ -214,9 +214,10 @@ async def test_pii_service_calls_http_mask_endpoint_with_log_stage() -> None:
 
 
 @pytest.mark.anyio
-async def test_pii_service_http_500_error_falls_back_to_original() -> None:
+async def test_pii_service_http_500_error_raises_exception() -> None:
     """
-    Test that PiiService returns original text on HTTP 500 error.
+    Test that PiiService raises PiiDetectorUnavailableError on HTTP 500 error.
+    (A7 Fail-Closed: 에러 시 예외 발생, 호출자가 안전하게 처리)
     """
     def mock_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "Internal Server Error"})
@@ -229,19 +230,20 @@ async def test_pii_service_http_500_error_falls_back_to_original() -> None:
     )
 
     original_text = "010-1234-5678"
-    result = await service.detect_and_mask(original_text, MaskingStage.INPUT)
 
-    # Verify fallback behavior
-    assert result.original_text == original_text
-    assert result.masked_text == original_text
-    assert result.has_pii is False
-    assert result.tags == []
+    # A7 Fail-Closed: 예외 발생 검증
+    with pytest.raises(PiiDetectorUnavailableError) as exc_info:
+        await service.detect_and_mask(original_text, MaskingStage.INPUT)
+
+    assert exc_info.value.stage == MaskingStage.INPUT
+    assert "HTTP 500" in exc_info.value.reason
 
 
 @pytest.mark.anyio
-async def test_pii_service_http_400_error_falls_back_to_original() -> None:
+async def test_pii_service_http_400_error_raises_exception() -> None:
     """
-    Test that PiiService returns original text on HTTP 400 error.
+    Test that PiiService raises PiiDetectorUnavailableError on HTTP 400 error.
+    (A7 Fail-Closed: 에러 시 예외 발생)
     """
     def mock_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "Bad Request"})
@@ -254,16 +256,19 @@ async def test_pii_service_http_400_error_falls_back_to_original() -> None:
     )
 
     original_text = "홍길동"
-    result = await service.detect_and_mask(original_text, MaskingStage.INPUT)
 
-    assert result.masked_text == original_text
-    assert result.has_pii is False
+    with pytest.raises(PiiDetectorUnavailableError) as exc_info:
+        await service.detect_and_mask(original_text, MaskingStage.INPUT)
+
+    assert exc_info.value.stage == MaskingStage.INPUT
+    assert "HTTP 400" in exc_info.value.reason
 
 
 @pytest.mark.anyio
-async def test_pii_service_connection_error_falls_back_to_original() -> None:
+async def test_pii_service_connection_error_raises_exception() -> None:
     """
-    Test that PiiService returns original text on connection error.
+    Test that PiiService raises PiiDetectorUnavailableError on connection error.
+    (A7 Fail-Closed: 네트워크 에러 시 예외 발생)
     """
     def mock_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Connection refused")
@@ -276,16 +281,19 @@ async def test_pii_service_connection_error_falls_back_to_original() -> None:
     )
 
     original_text = "민감한 정보"
-    result = await service.detect_and_mask(original_text, MaskingStage.INPUT)
 
-    assert result.masked_text == original_text
-    assert result.has_pii is False
+    with pytest.raises(PiiDetectorUnavailableError) as exc_info:
+        await service.detect_and_mask(original_text, MaskingStage.INPUT)
+
+    assert exc_info.value.stage == MaskingStage.INPUT
+    assert "network error" in exc_info.value.reason
 
 
 @pytest.mark.anyio
-async def test_pii_service_invalid_json_response_falls_back() -> None:
+async def test_pii_service_invalid_json_response_raises_exception() -> None:
     """
-    Test that PiiService returns original text on invalid JSON response.
+    Test that PiiService raises PiiDetectorUnavailableError on invalid JSON response.
+    (A7 Fail-Closed: JSON 파싱 에러 시 예외 발생)
     """
     def mock_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not valid json")
@@ -298,10 +306,12 @@ async def test_pii_service_invalid_json_response_falls_back() -> None:
     )
 
     original_text = "테스트 데이터"
-    result = await service.detect_and_mask(original_text, MaskingStage.INPUT)
 
-    assert result.masked_text == original_text
-    assert result.has_pii is False
+    with pytest.raises(PiiDetectorUnavailableError) as exc_info:
+        await service.detect_and_mask(original_text, MaskingStage.INPUT)
+
+    assert exc_info.value.stage == MaskingStage.INPUT
+    assert "JSON parsing error" in exc_info.value.reason
 
 
 @pytest.mark.anyio
