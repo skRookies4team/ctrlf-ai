@@ -20,10 +20,11 @@ PII HTTP 서비스 API 스펙 (게이트웨이 관점):
       "tags": [{"entity": "...", "label": "...", "start": N, "end": N}]
     }
 
-Fallback 전략:
-  - PII_ENABLED=False 또는 PII_BASE_URL 미설정: 원문 그대로 반환
-  - HTTP 에러/타임아웃: 원문 그대로 반환 (시스템 가용성 우선)
-  - 빈 문자열/공백: HTTP 호출 없이 원문 그대로 반환
+A7 Fail-Closed 전략:
+  - PII_ENABLED=False 또는 PII_BASE_URL 미설정: 원문 그대로 반환 (정상 케이스)
+  - 빈 문자열/공백: HTTP 호출 없이 원문 그대로 반환 (정상 케이스)
+  - HTTP 에러/타임아웃/예외 발생 시: PiiDetectorUnavailableError 예외 발생 (Fail-Closed)
+    → 호출자(chat_service)에서 안전한 fallback 메시지로 대응
 """
 
 from typing import Optional
@@ -39,6 +40,32 @@ logger = get_logger(__name__)
 
 # HTTP 요청 타임아웃 (초)
 PII_SERVICE_TIMEOUT = 10.0
+
+
+# =============================================================================
+# A7: Fail-Closed Exception
+# =============================================================================
+
+
+class PiiDetectorUnavailableError(Exception):
+    """PII 검출 서비스 장애 예외.
+
+    A7 Fail-Closed: PII detector가 타임아웃, 네트워크 에러, 예외 등으로
+    정상 응답을 반환하지 못할 때 발생합니다.
+
+    호출자(chat_service)는 이 예외를 캐치하여:
+    1. 원문 데이터를 외부로 전송하지 않고
+    2. 안전한 fallback 메시지를 반환해야 합니다.
+
+    Attributes:
+        stage: 실패한 마스킹 단계 (INPUT, OUTPUT, LOG)
+        reason: 실패 원인 설명
+    """
+
+    def __init__(self, stage: MaskingStage, reason: str) -> None:
+        self.stage = stage
+        self.reason = reason
+        super().__init__(f"PII detector unavailable at {stage.value} stage: {reason}")
 
 
 class PiiService:
@@ -230,44 +257,59 @@ class PiiService:
             return result
 
         except httpx.HTTPStatusError as e:
-            # HTTP 4xx/5xx 에러
+            # HTTP 4xx/5xx 에러 → A7 Fail-Closed
             logger.error(
                 f"PII service HTTP error (stage={stage.value}): "
                 f"status={e.response.status_code}, url={e.request.url}"
             )
-            return self._create_fallback_result(text)
+            raise PiiDetectorUnavailableError(
+                stage=stage,
+                reason=f"HTTP {e.response.status_code}",
+            )
 
         except httpx.TimeoutException as e:
-            # 타임아웃 에러
+            # 타임아웃 에러 → A7 Fail-Closed
             logger.error(
                 f"PII service timeout (stage={stage.value}): "
                 f"timeout={PII_SERVICE_TIMEOUT}s"
             )
-            return self._create_fallback_result(text)
+            raise PiiDetectorUnavailableError(
+                stage=stage,
+                reason="timeout",
+            )
 
         except httpx.RequestError as e:
-            # 네트워크/연결 에러
+            # 네트워크/연결 에러 → A7 Fail-Closed
             logger.error(
                 f"PII service request error (stage={stage.value}): "
                 f"{type(e).__name__}: {str(e)}"
             )
-            return self._create_fallback_result(text)
+            raise PiiDetectorUnavailableError(
+                stage=stage,
+                reason=f"network error: {type(e).__name__}",
+            )
 
         except ValueError as e:
-            # JSON 파싱 에러
+            # JSON 파싱 에러 → A7 Fail-Closed
             logger.error(
                 f"PII service JSON parsing error (stage={stage.value}): "
                 f"{type(e).__name__}: {str(e)}"
             )
-            return self._create_fallback_result(text)
+            raise PiiDetectorUnavailableError(
+                stage=stage,
+                reason=f"JSON parsing error: {str(e)}",
+            )
 
         except Exception as e:
-            # 기타 예외
+            # 기타 예외 → A7 Fail-Closed
             logger.exception(
                 f"Unexpected error in PII service (stage={stage.value}): "
                 f"{type(e).__name__}: {str(e)}"
             )
-            return self._create_fallback_result(text)
+            raise PiiDetectorUnavailableError(
+                stage=stage,
+                reason=f"unexpected error: {type(e).__name__}",
+            )
 
         finally:
             # 내부에서 생성한 클라이언트만 닫음
