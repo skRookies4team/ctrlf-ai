@@ -437,7 +437,7 @@ class ChatService:
             )
 
         user_query = req.messages[-1].content
-        logger.debug(f"User query: {user_query[:100]}...")
+        logger.debug(f"User query received: len={len(user_query)}")
 
         # Step 2: PII Masking (INPUT stage)
         # A7: Fail-Closed 적용 - PII detector 장애 시 안전한 응답 반환
@@ -1541,6 +1541,7 @@ class ChatService:
             # period가 None이면 클라이언트에서 DEFAULT_PERIOD_FOR_INTENT 사용
             facts = await self._personalization_client.resolve_facts(
                 sub_intent_id=q,
+                user_id=req.user_id,
                 period=period,
                 target_dept_id=None,  # TODO: 부서 비교(Q5) 시 dept 파싱 필요
             )

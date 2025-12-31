@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     # 로깅 설정
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"  # "json" (ELK용) 또는 "text" (개발용)
 
     # =========================================================================
     # Phase 9: AI 환경 모드 설정 (mock / real)
