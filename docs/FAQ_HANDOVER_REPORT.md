@@ -46,14 +46,14 @@ FAQ 초안 생성 기능은 백엔드에서 전달받은 FAQ 후보 클러스터
 
 ### 1.2 주요 기능
 
-| 기능 | 설명 | Phase |
-|------|------|-------|
-| 단건 FAQ 생성 | 하나의 FAQ 클러스터에 대한 초안 생성 | Phase 18 |
-| 배치 FAQ 생성 | 다수의 FAQ 클러스터를 동시에 생성 (동시성 제한) | Phase 20-AI-2 |
-| PII 강차단 | 입력/출력/컨텍스트에서 PII 검출 시 즉시 실패 | Phase 19-AI-4, Phase 20-AI-3 |
-| RAGFlow 연동 | top_docs 없을 시 RAGFlow 검색으로 문서 확보 | Phase 19-AI-2 |
-| 품질 모니터링 | ai_confidence 기반 경고 로그 | Phase 20-AI-4 |
-| RAG 캐시 | RAGFlow 검색 결과 캐싱 (TTL 300초) | Phase 20-AI-1 |
+| 기능          | 설명                                            | Phase                        |
+| ------------- | ----------------------------------------------- | ---------------------------- |
+| 단건 FAQ 생성 | 하나의 FAQ 클러스터에 대한 초안 생성            | Phase 18                     |
+| 배치 FAQ 생성 | 다수의 FAQ 클러스터를 동시에 생성 (동시성 제한) | Phase 20-AI-2                |
+| PII 강차단    | 입력/출력/컨텍스트에서 PII 검출 시 즉시 실패    | Phase 19-AI-4, Phase 20-AI-3 |
+| RAGFlow 연동  | top_docs 없을 시 RAGFlow 검색으로 문서 확보     | Phase 19-AI-2                |
+| 품질 모니터링 | ai_confidence 기반 경고 로그                    | Phase 20-AI-4                |
+| RAG 캐시      | RAGFlow 검색 결과 캐싱 (TTL 300초)              | Phase 20-AI-1                |
 
 ### 1.3 전체 아키텍처 요약
 
@@ -130,15 +130,15 @@ ctrlf-ai/
 
 ### 2.2 파일별 역할 상세
 
-| 파일 | 라인 수 | 역할 |
-|------|---------|------|
-| `app/api/v1/faq.py` | 284줄 | API 엔드포인트 (단건/배치), 에러 핸들링 |
-| `app/models/faq.py` | 149줄 | Request/Response DTO, FaqDraft 모델 |
-| `app/services/faq_service.py` | 873줄 | 핵심 비즈니스 로직, PII 검사, LLM 호출 |
-| `app/services/pii_service.py` | 328줄 | PII 마스킹 서비스 (GLiNER 연동) |
-| `app/clients/ragflow_search_client.py` | 378줄 | RAGFlow /v1/chunk/search 클라이언트 |
-| `app/clients/llm_client.py` | 424줄 | LLM /v1/chat/completions 클라이언트 |
-| `app/models/intent.py` | 203줄 | MaskingStage, PiiMaskResult, PiiTag 모델 |
+| 파일                                   | 라인 수 | 역할                                     |
+| -------------------------------------- | ------- | ---------------------------------------- |
+| `app/api/v1/faq.py`                    | 284줄   | API 엔드포인트 (단건/배치), 에러 핸들링  |
+| `app/models/faq.py`                    | 149줄   | Request/Response DTO, FaqDraft 모델      |
+| `app/services/faq_service.py`          | 873줄   | 핵심 비즈니스 로직, PII 검사, LLM 호출   |
+| `app/services/pii_service.py`          | 328줄   | PII 마스킹 서비스 (GLiNER 연동)          |
+| `app/clients/ragflow_search_client.py` | 378줄   | RAGFlow /v1/chunk/search 클라이언트      |
+| `app/clients/llm_client.py`            | 424줄   | LLM /v1/chat/completions 클라이언트      |
+| `app/models/intent.py`                 | 203줄   | MaskingStage, PiiMaskResult, PiiTag 모델 |
 
 ---
 
@@ -178,24 +178,24 @@ POST /ai/faq/generate
 
 #### Request 필드 상세
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `domain` | string | O | 도메인 (예: SEC_POLICY, PII_PRIVACY, TRAINING_QUIZ) |
-| `cluster_id` | string | O | FAQ 후보 클러스터 ID (백엔드에서 발급) |
-| `canonical_question` | string | O | 클러스터를 대표하는 질문 |
-| `sample_questions` | array[string] | X | 실제 직원 질문 예시들 (최대 5개 사용) |
-| `top_docs` | array[FaqSourceDoc] | X | 백엔드가 이미 RAG에서 뽑아온 후보 문서들 |
+| 필드                 | 타입                | 필수 | 설명                                                |
+| -------------------- | ------------------- | ---- | --------------------------------------------------- |
+| `domain`             | string              | O    | 도메인 (예: SEC_POLICY, PII_PRIVACY, TRAINING_QUIZ) |
+| `cluster_id`         | string              | O    | FAQ 후보 클러스터 ID (백엔드에서 발급)              |
+| `canonical_question` | string              | O    | 클러스터를 대표하는 질문                            |
+| `sample_questions`   | array[string]       | X    | 실제 직원 질문 예시들 (최대 5개 사용)               |
+| `top_docs`           | array[FaqSourceDoc] | X    | 백엔드가 이미 RAG에서 뽑아온 후보 문서들            |
 
 #### FaqSourceDoc 필드
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `doc_id` | string | O | 문서 ID |
-| `doc_version` | string | X | 문서 버전 |
-| `title` | string | X | 문서 제목 |
-| `snippet` | string | X | 문서 발췌 내용 (최대 500자 권장) |
-| `article_label` | string | X | 조항 라벨 (예: '제3장 제2조 제1항') |
-| `article_path` | string | X | 조항 경로 (예: '제3장 > 제2조 > 제1항') |
+| 필드            | 타입   | 필수 | 설명                                    |
+| --------------- | ------ | ---- | --------------------------------------- |
+| `doc_id`        | string | O    | 문서 ID                                 |
+| `doc_version`   | string | X    | 문서 버전                               |
+| `title`         | string | X    | 문서 제목                               |
+| `snippet`       | string | X    | 문서 발췌 내용 (최대 500자 권장)        |
+| `article_label` | string | X    | 조항 라벨 (예: '제3장 제2조 제1항')     |
+| `article_path`  | string | X    | 조항 경로 (예: '제3장 > 제2조 > 제1항') |
 
 #### Response (성공 시)
 
@@ -233,21 +233,21 @@ POST /ai/faq/generate
 
 #### FaqDraft 필드 상세
 
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `faq_draft_id` | string | UUID 형식의 FAQ 초안 ID |
-| `domain` | string | 도메인 |
-| `cluster_id` | string | 클러스터 ID |
-| `question` | string | LLM이 다듬은 최종 FAQ 질문 |
-| `answer_markdown` | string | FAQ 답변 (마크다운 형식) |
-| `summary` | string | 한 줄 요약 (최대 120자) |
-| `source_doc_id` | string | 근거 문서 ID (RAGFLOW인 경우 null) |
-| `source_doc_version` | string | 근거 문서 버전 |
-| `source_article_label` | string | 근거 조항 라벨 |
-| `source_article_path` | string | 근거 조항 경로 |
-| `answer_source` | enum | 답변 출처: "TOP_DOCS" 또는 "RAGFLOW" |
-| `ai_confidence` | float | AI 신뢰도 (0.0 ~ 1.0) |
-| `created_at` | datetime | 생성 시각 (UTC) |
+| 필드                   | 타입     | 설명                                 |
+| ---------------------- | -------- | ------------------------------------ |
+| `faq_draft_id`         | string   | UUID 형식의 FAQ 초안 ID              |
+| `domain`               | string   | 도메인                               |
+| `cluster_id`           | string   | 클러스터 ID                          |
+| `question`             | string   | LLM이 다듬은 최종 FAQ 질문           |
+| `answer_markdown`      | string   | FAQ 답변 (마크다운 형식)             |
+| `summary`              | string   | 한 줄 요약 (최대 120자)              |
+| `source_doc_id`        | string   | 근거 문서 ID (RAGFLOW인 경우 null)   |
+| `source_doc_version`   | string   | 근거 문서 버전                       |
+| `source_article_label` | string   | 근거 조항 라벨                       |
+| `source_article_path`  | string   | 근거 조항 경로                       |
+| `answer_source`        | enum     | 답변 출처: "TOP_DOCS" 또는 "RAGFLOW" |
+| `ai_confidence`        | float    | AI 신뢰도 (0.0 ~ 1.0)                |
+| `created_at`           | datetime | 생성 시각 (UTC)                      |
 
 ---
 
@@ -279,10 +279,10 @@ POST /ai/faq/generate/batch
 }
 ```
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `items` | array[FaqDraftGenerateRequest] | O | FAQ 생성 요청 리스트 (최소 1개) |
-| `concurrency` | int | X | 동시 처리 수 (1-10, 기본값: 서버 설정 FAQ_BATCH_CONCURRENCY) |
+| 필드          | 타입                           | 필수 | 설명                                                         |
+| ------------- | ------------------------------ | ---- | ------------------------------------------------------------ |
+| `items`       | array[FaqDraftGenerateRequest] | O    | FAQ 생성 요청 리스트 (최소 1개)                              |
+| `concurrency` | int                            | X    | 동시 처리 수 (1-10, 기본값: 서버 설정 FAQ_BATCH_CONCURRENCY) |
 
 #### Response
 
@@ -372,13 +372,13 @@ POST /ai/faq/generate/batch
 
 ### 4.3 answer_source 값 정의
 
-| 값 | 설명 |
-|---|------|
-| `TOP_DOCS` | 백엔드에서 제공한 top_docs를 사용하여 생성 |
-| `RAGFLOW` | AI 서버에서 RAGFlow 검색으로 문서를 확보하여 생성 |
-| `AI_RAG` | (레거시) 내부 RAG 사용 |
-| `LOG_REUSE` | (레거시) 로그 재사용 |
-| `MIXED` | (레거시) 혼합 |
+| 값          | 설명                                              |
+| ----------- | ------------------------------------------------- |
+| `TOP_DOCS`  | 백엔드에서 제공한 top_docs를 사용하여 생성        |
+| `RAGFLOW`   | AI 서버에서 RAGFlow 검색으로 문서를 확보하여 생성 |
+| `AI_RAG`    | (레거시) 내부 RAG 사용                            |
+| `LOG_REUSE` | (레거시) 로그 재사용                              |
+| `MIXED`     | (레거시) 혼합                                     |
 
 ---
 
@@ -516,6 +516,7 @@ ai_confidence: [0.00~1.00, 컨텍스트 적합도가 높을수록 높게]
 LLM 응답은 두 가지 형식을 지원합니다:
 
 1. **필드별 텍스트 형식** (권장)
+
 ```
 status: SUCCESS
 question: USB 메모리를 반출할 때 어떤 절차가 필요한가요?
@@ -529,6 +530,7 @@ ai_confidence: 0.91
 ```
 
 2. **JSON 형식** (하위 호환)
+
 ```json
 {
   "status": "SUCCESS",
@@ -548,16 +550,17 @@ ai_confidence: 0.91
 **파일 위치**: `app/services/pii_service.py`
 
 #### 역할
+
 - 개인식별정보(PII) 검출 및 마스킹
 - GLiNER-PII 기반 HTTP 서비스와 통신
 
 #### 호출 시점 (FAQ 파이프라인 내)
 
-| 단계 | 검사 대상 | 에러 코드 |
-|------|----------|----------|
-| 입력 검사 | canonical_question, sample_questions, top_docs.snippet | PII_DETECTED |
-| 컨텍스트 검사 | RAGFlow 검색 결과 snippet | PII_DETECTED_CONTEXT |
-| 출력 검사 | answer_markdown, summary | PII_DETECTED_OUTPUT |
+| 단계          | 검사 대상                                              | 에러 코드            |
+| ------------- | ------------------------------------------------------ | -------------------- |
+| 입력 검사     | canonical_question, sample_questions, top_docs.snippet | PII_DETECTED         |
+| 컨텍스트 검사 | RAGFlow 검색 결과 snippet                              | PII_DETECTED_CONTEXT |
+| 출력 검사     | answer_markdown, summary                               | PII_DETECTED_OUTPUT  |
 
 #### API 스펙
 
@@ -590,6 +593,7 @@ Response:
 **파일 위치**: `app/clients/ragflow_search_client.py`
 
 #### 역할
+
 - top_docs가 없을 때 RAGFlow에서 관련 문서 검색
 - domain -> kb_id 매핑 처리
 - 검색 결과 캐싱 (TTL 300초)
@@ -627,11 +631,13 @@ Response:
 #### Domain -> KB_ID 매핑
 
 환경변수로 설정:
+
 ```
 RAGFLOW_DATASET_MAPPING=policy:kb_policy_001,training:kb_training_001,incident:kb_incident_001
 ```
 
 또는 개별 변수:
+
 ```
 RAGFLOW_KB_ID_POLICY=kb_policy_001
 RAGFLOW_KB_ID_TRAINING=kb_training_001
@@ -644,6 +650,7 @@ RAGFLOW_KB_ID_TRAINING=kb_training_001
 **파일 위치**: `app/clients/llm_client.py`
 
 #### 역할
+
 - FAQ 생성을 위한 LLM 호출
 - OpenAI 호환 API 사용
 
@@ -655,7 +662,7 @@ Content-Type: application/json
 
 Request:
 {
-  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "model": "meta-llama/Meta-Llama-3-8B-Instruct",
   "messages": [
     {"role": "system", "content": "너는 기업 내부 FAQ 작성 보조자다..."},
     {"role": "user", "content": "## 도메인\nSEC_POLICY\n\n## 대표 질문..."}
@@ -679,11 +686,11 @@ Response:
 
 #### FAQ 생성 시 LLM 호출 파라미터
 
-| 파라미터 | 값 | 설명 |
-|----------|---|------|
-| temperature | 0.3 | 낮은 temperature로 일관성 있는 응답 |
-| max_tokens | 2048 | 충분한 답변 길이 확보 |
-| model | 설정값 또는 LLM_MODEL_NAME | 사용할 모델 |
+| 파라미터    | 값                         | 설명                                |
+| ----------- | -------------------------- | ----------------------------------- |
+| temperature | 0.3                        | 낮은 temperature로 일관성 있는 응답 |
+| max_tokens  | 2048                       | 충분한 답변 길이 확보               |
+| model       | 설정값 또는 LLM_MODEL_NAME | 사용할 모델                         |
 
 ---
 
@@ -693,36 +700,36 @@ Response:
 
 **파일 위치**: `app/core/config.py:132-143`
 
-| 환경변수 | 기본값 | 설명 |
-|----------|--------|------|
-| `FAQ_RAG_CACHE_ENABLED` | `True` | RAGFlow 검색 결과 캐시 활성화 |
-| `FAQ_RAG_CACHE_TTL_SECONDS` | `300` | 캐시 TTL (초) |
-| `FAQ_RAG_CACHE_MAXSIZE` | `2048` | 최대 캐시 항목 수 |
-| `FAQ_BATCH_CONCURRENCY` | `4` | 배치 동시 처리 수 |
-| `FAQ_CONFIDENCE_WARN_THRESHOLD` | `0.6` | 품질 경고 임계값 |
+| 환경변수                        | 기본값 | 설명                          |
+| ------------------------------- | ------ | ----------------------------- |
+| `FAQ_RAG_CACHE_ENABLED`         | `True` | RAGFlow 검색 결과 캐시 활성화 |
+| `FAQ_RAG_CACHE_TTL_SECONDS`     | `300`  | 캐시 TTL (초)                 |
+| `FAQ_RAG_CACHE_MAXSIZE`         | `2048` | 최대 캐시 항목 수             |
+| `FAQ_BATCH_CONCURRENCY`         | `4`    | 배치 동시 처리 수             |
+| `FAQ_CONFIDENCE_WARN_THRESHOLD` | `0.6`  | 품질 경고 임계값              |
 
 ### 7.2 PII 서비스 설정
 
-| 환경변수 | 기본값 | 설명 |
-|----------|--------|------|
+| 환경변수       | 기본값 | 설명                                                |
+| -------------- | ------ | --------------------------------------------------- |
 | `PII_BASE_URL` | (필수) | PII 마스킹 서비스 URL (예: http://pii-service:8003) |
-| `PII_ENABLED` | `True` | PII 마스킹 활성화 여부 |
+| `PII_ENABLED`  | `True` | PII 마스킹 활성화 여부                              |
 
 ### 7.3 RAGFlow 설정
 
-| 환경변수 | 기본값 | 설명 |
-|----------|--------|------|
-| `RAGFLOW_BASE_URL` | (필수) | RAGFlow 서비스 URL |
-| `RAGFLOW_API_KEY` | (선택) | RAGFlow API Key |
-| `RAGFLOW_TIMEOUT_SEC` | `10.0` | HTTP 요청 타임아웃 |
+| 환경변수                  | 기본값                     | 설명                 |
+| ------------------------- | -------------------------- | -------------------- |
+| `RAGFLOW_BASE_URL`        | (필수)                     | RAGFlow 서비스 URL   |
+| `RAGFLOW_API_KEY`         | (선택)                     | RAGFlow API Key      |
+| `RAGFLOW_TIMEOUT_SEC`     | `10.0`                     | HTTP 요청 타임아웃   |
 | `RAGFLOW_DATASET_MAPPING` | `policy:kb_policy_001,...` | Domain -> KB_ID 매핑 |
 
 ### 7.4 LLM 설정
 
-| 환경변수 | 기본값 | 설명 |
-|----------|--------|------|
-| `LLM_BASE_URL` | (필수) | LLM 서비스 URL |
-| `LLM_MODEL_NAME` | `Qwen/Qwen2.5-7B-Instruct` | 사용할 LLM 모델명 |
+| 환경변수         | 기본값                                | 설명              |
+| ---------------- | ------------------------------------- | ----------------- |
+| `LLM_BASE_URL`   | (필수)                                | LLM 서비스 URL    |
+| `LLM_MODEL_NAME` | `meta-llama/Meta-Llama-3-8B-Instruct` | 사용할 LLM 모델명 |
 
 ### 7.5 .env 파일 예시
 
@@ -738,7 +745,7 @@ RAGFLOW_DATASET_MAPPING=policy:kb_policy_001,training:kb_training_001
 
 # LLM
 LLM_BASE_URL=http://llm-service:8001
-LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
 
 # FAQ 설정
 FAQ_BATCH_CONCURRENCY=4
@@ -753,17 +760,17 @@ FAQ_RAG_CACHE_TTL_SECONDS=300
 
 ### 8.1 에러 코드 목록
 
-| 에러 코드 | 발생 단계 | 원인 | 대응 방안 |
-|-----------|----------|------|----------|
-| `PII_DETECTED` | 입력 검사 | canonical_question, sample_questions, top_docs.snippet에 PII 포함 | 백엔드에서 PII 제거 후 재요청 |
-| `PII_DETECTED_CONTEXT` | 컨텍스트 검사 | RAGFlow 검색 결과 snippet에 PII 포함 | RAGFlow 문서 정제 필요 |
-| `PII_DETECTED_OUTPUT` | 출력 검사 | LLM 응답(answer_markdown, summary)에 PII 포함 | LLM 프롬프트 강화 또는 재시도 |
-| `NO_DOCS_FOUND` | 컨텍스트 확보 | RAGFlow 검색 결과가 0개 | domain 매핑 확인, RAGFlow 인덱싱 확인 |
-| `LOW_RELEVANCE_CONTEXT` | LLM 응답 파싱 | LLM이 컨텍스트가 질문과 무관하다고 판단 | 더 적절한 문서 제공 필요 |
-| `LLM 호출 실패: ...` | LLM 호출 | LLM 서비스 장애 또는 타임아웃 | LLM 서비스 상태 확인 |
-| `LLM 응답 파싱 실패` | 응답 파싱 | LLM 응답이 예상 형식과 다름 | LLM 프롬프트 조정 필요 |
-| `RAGFlow 설정 오류: ...` | 컨텍스트 확보 | domain에 대한 kb_id 매핑 없음 | RAGFLOW_DATASET_MAPPING 설정 확인 |
-| `RAGFlow 검색 실패: ...` | 컨텍스트 확보 | RAGFlow 서비스 장애 | RAGFlow 서비스 상태 확인 |
+| 에러 코드                | 발생 단계     | 원인                                                              | 대응 방안                             |
+| ------------------------ | ------------- | ----------------------------------------------------------------- | ------------------------------------- |
+| `PII_DETECTED`           | 입력 검사     | canonical_question, sample_questions, top_docs.snippet에 PII 포함 | 백엔드에서 PII 제거 후 재요청         |
+| `PII_DETECTED_CONTEXT`   | 컨텍스트 검사 | RAGFlow 검색 결과 snippet에 PII 포함                              | RAGFlow 문서 정제 필요                |
+| `PII_DETECTED_OUTPUT`    | 출력 검사     | LLM 응답(answer_markdown, summary)에 PII 포함                     | LLM 프롬프트 강화 또는 재시도         |
+| `NO_DOCS_FOUND`          | 컨텍스트 확보 | RAGFlow 검색 결과가 0개                                           | domain 매핑 확인, RAGFlow 인덱싱 확인 |
+| `LOW_RELEVANCE_CONTEXT`  | LLM 응답 파싱 | LLM이 컨텍스트가 질문과 무관하다고 판단                           | 더 적절한 문서 제공 필요              |
+| `LLM 호출 실패: ...`     | LLM 호출      | LLM 서비스 장애 또는 타임아웃                                     | LLM 서비스 상태 확인                  |
+| `LLM 응답 파싱 실패`     | 응답 파싱     | LLM 응답이 예상 형식과 다름                                       | LLM 프롬프트 조정 필요                |
+| `RAGFlow 설정 오류: ...` | 컨텍스트 확보 | domain에 대한 kb_id 매핑 없음                                     | RAGFLOW_DATASET_MAPPING 설정 확인     |
+| `RAGFlow 검색 실패: ...` | 컨텍스트 확보 | RAGFlow 서비스 장애                                               | RAGFlow 서비스 상태 확인              |
 
 ### 8.2 에러 응답 형식
 
@@ -809,16 +816,16 @@ except Exception as e:
 
 ### 9.1 테스트 파일 목록
 
-| 파일 | 테스트 수 | 설명 |
-|------|----------|------|
-| `test_phase18_faq_generate.py` | 기본 테스트 | Phase 18 기본 FAQ 생성 테스트 |
-| `test_faq_api_phase19.py` | 12개 | Phase 19 API 통합 테스트 |
-| `test_faq_service_phase19.py` | 서비스 테스트 | Phase 19 서비스 단위 테스트 |
-| `test_faq_service_phase19_ai3.py` | AI-3 테스트 | 프롬프트/파싱 테스트 |
-| `test_faq_service_phase19_ai4.py` | AI-4 테스트 | PII 강차단 테스트 |
-| `test_faq_batch_phase20.py` | 4개 | 배치 처리 테스트 |
-| `test_faq_cache_phase20.py` | 캐시 테스트 | RAG 캐시 테스트 |
-| `test_faq_context_pii_phase20.py` | PII 테스트 | 컨텍스트 PII 검사 테스트 |
+| 파일                              | 테스트 수     | 설명                          |
+| --------------------------------- | ------------- | ----------------------------- |
+| `test_phase18_faq_generate.py`    | 기본 테스트   | Phase 18 기본 FAQ 생성 테스트 |
+| `test_faq_api_phase19.py`         | 12개          | Phase 19 API 통합 테스트      |
+| `test_faq_service_phase19.py`     | 서비스 테스트 | Phase 19 서비스 단위 테스트   |
+| `test_faq_service_phase19_ai3.py` | AI-3 테스트   | 프롬프트/파싱 테스트          |
+| `test_faq_service_phase19_ai4.py` | AI-4 테스트   | PII 강차단 테스트             |
+| `test_faq_batch_phase20.py`       | 4개           | 배치 처리 테스트              |
+| `test_faq_cache_phase20.py`       | 캐시 테스트   | RAG 캐시 테스트               |
+| `test_faq_context_pii_phase20.py` | PII 테스트    | 컨텍스트 PII 검사 테스트      |
 
 ### 9.2 테스트 실행 방법
 
@@ -887,10 +894,10 @@ python -m pytest tests/unit/test_faq_batch_phase20.py -v
 
 ### 10.2 권장 타임아웃
 
-| 엔드포인트 | 권장 타임아웃 | 이유 |
-|-----------|--------------|------|
-| `/ai/faq/generate` | 60초 | LLM 호출 포함 |
-| `/ai/faq/generate/batch` | 180초 | 다수 항목 처리 |
+| 엔드포인트               | 권장 타임아웃 | 이유           |
+| ------------------------ | ------------- | -------------- |
+| `/ai/faq/generate`       | 60초          | LLM 호출 포함  |
+| `/ai/faq/generate/batch` | 180초         | 다수 항목 처리 |
 
 ### 10.3 에러 핸들링 권장사항
 
@@ -938,21 +945,23 @@ if ("FAILED".equals(response.getStatus())) {
 
 ### 11.1 현재 알려진 제한사항
 
-| 항목 | 설명 | 영향 |
-|------|------|------|
-| PII Fallback | PII 서비스 장애 시 원문 그대로 반환 | 민감정보 노출 가능성 |
-| 캐시 무효화 | 문서 업데이트 시 캐시 수동 무효화 필요 | 최신 문서 미반영 가능 |
-| LLM 응답 파싱 | LLM 출력 형식이 다를 경우 파싱 실패 | 재시도 필요 |
-| Domain 매핑 | 새 도메인 추가 시 환경변수 설정 필요 | 설정 누락 시 에러 |
+| 항목          | 설명                                   | 영향                  |
+| ------------- | -------------------------------------- | --------------------- |
+| PII Fallback  | PII 서비스 장애 시 원문 그대로 반환    | 민감정보 노출 가능성  |
+| 캐시 무효화   | 문서 업데이트 시 캐시 수동 무효화 필요 | 최신 문서 미반영 가능 |
+| LLM 응답 파싱 | LLM 출력 형식이 다를 경우 파싱 실패    | 재시도 필요           |
+| Domain 매핑   | 새 도메인 추가 시 환경변수 설정 필요   | 설정 누락 시 에러     |
 
 ### 11.2 백엔드 수정 시 주의사항
 
 1. **API 스펙 변경 시**:
+
    - `app/models/faq.py`의 Pydantic 모델 수정
    - `docs/API_SPECIFICATION_FOR_BACKEND.md` 문서 업데이트
    - 관련 테스트 케이스 수정
 
 2. **새 에러 코드 추가 시**:
+
    - `app/services/faq_service.py`에서 `FaqGenerationError` 발생
    - 백엔드에 에러 코드 문서 전달
 
@@ -962,27 +971,30 @@ if ("FAILED".equals(response.getStatus())) {
 
 ### 11.3 향후 개선 포인트
 
-| 우선순위 | 개선 항목 | 설명 |
-|----------|----------|------|
-| 높음 | PII 강제 차단 모드 | PII 서비스 장애 시에도 에러 반환 옵션 |
-| 중간 | 캐시 자동 무효화 | RAGFlow 문서 업데이트 시 캐시 무효화 훅 |
-| 중간 | 재시도 로직 강화 | LLM 응답 파싱 실패 시 프롬프트 변경 후 재시도 |
-| 낮음 | 스트리밍 응답 | 긴 FAQ 생성 시 진행률 표시 |
+| 우선순위 | 개선 항목          | 설명                                          |
+| -------- | ------------------ | --------------------------------------------- |
+| 높음     | PII 강제 차단 모드 | PII 서비스 장애 시에도 에러 반환 옵션         |
+| 중간     | 캐시 자동 무효화   | RAGFlow 문서 업데이트 시 캐시 무효화 훅       |
+| 중간     | 재시도 로직 강화   | LLM 응답 파싱 실패 시 프롬프트 변경 후 재시도 |
+| 낮음     | 스트리밍 응답      | 긴 FAQ 생성 시 진행률 표시                    |
 
 ### 11.4 디버깅 팁
 
 1. **로그 확인**:
+
    ```bash
    # FAQ 관련 로그만 필터링
    grep "FAQ\|faq" logs/app.log
    ```
 
 2. **PII 검사 바이패스 (개발 환경에서만)**:
+
    ```env
    PII_ENABLED=false
    ```
 
 3. **캐시 비활성화 (디버깅용)**:
+
    ```env
    FAQ_RAG_CACHE_ENABLED=false
    ```
@@ -995,29 +1007,29 @@ if ("FAILED".equals(response.getStatus())) {
 
 ## 부록: 코드 위치 참조 테이블
 
-| 기능 | 파일 | 라인 |
-|------|------|------|
-| API 엔드포인트 (단건) | `app/api/v1/faq.py` | 44-141 |
-| API 엔드포인트 (배치) | `app/api/v1/faq.py` | 187-283 |
-| 요청/응답 모델 | `app/models/faq.py` | 전체 |
-| FaqDraftService 클래스 | `app/services/faq_service.py` | 153-873 |
-| generate_faq_draft() | `app/services/faq_service.py` | 176-245 |
-| 입력 PII 검사 | `app/services/faq_service.py` | 606-651 |
-| 컨텍스트 확보 | `app/services/faq_service.py` | 251-303 |
-| 컨텍스트 PII 검사 | `app/services/faq_service.py` | 699-747 |
-| LLM 메시지 구성 | `app/services/faq_service.py` | 309-348 |
-| LLM 프롬프트 템플릿 | `app/services/faq_service.py` | 94-141 |
-| 응답 파싱 | `app/services/faq_service.py` | 464-576 |
-| 출력 PII 검사 | `app/services/faq_service.py` | 653-692 |
-| FaqDraft 생성 | `app/services/faq_service.py` | 396-458 |
-| 품질 로그 | `app/services/faq_service.py` | 753-806 |
-| PII 서비스 | `app/services/pii_service.py` | 전체 |
-| RAGFlow 클라이언트 | `app/clients/ragflow_search_client.py` | 전체 |
-| LLM 클라이언트 | `app/clients/llm_client.py` | 전체 |
-| FAQ 설정 | `app/core/config.py` | 132-143 |
-| 라우터 등록 | `app/main.py` | 161 |
+| 기능                   | 파일                                   | 라인    |
+| ---------------------- | -------------------------------------- | ------- |
+| API 엔드포인트 (단건)  | `app/api/v1/faq.py`                    | 44-141  |
+| API 엔드포인트 (배치)  | `app/api/v1/faq.py`                    | 187-283 |
+| 요청/응답 모델         | `app/models/faq.py`                    | 전체    |
+| FaqDraftService 클래스 | `app/services/faq_service.py`          | 153-873 |
+| generate_faq_draft()   | `app/services/faq_service.py`          | 176-245 |
+| 입력 PII 검사          | `app/services/faq_service.py`          | 606-651 |
+| 컨텍스트 확보          | `app/services/faq_service.py`          | 251-303 |
+| 컨텍스트 PII 검사      | `app/services/faq_service.py`          | 699-747 |
+| LLM 메시지 구성        | `app/services/faq_service.py`          | 309-348 |
+| LLM 프롬프트 템플릿    | `app/services/faq_service.py`          | 94-141  |
+| 응답 파싱              | `app/services/faq_service.py`          | 464-576 |
+| 출력 PII 검사          | `app/services/faq_service.py`          | 653-692 |
+| FaqDraft 생성          | `app/services/faq_service.py`          | 396-458 |
+| 품질 로그              | `app/services/faq_service.py`          | 753-806 |
+| PII 서비스             | `app/services/pii_service.py`          | 전체    |
+| RAGFlow 클라이언트     | `app/clients/ragflow_search_client.py` | 전체    |
+| LLM 클라이언트         | `app/clients/llm_client.py`            | 전체    |
+| FAQ 설정               | `app/core/config.py`                   | 132-143 |
+| 라우터 등록            | `app/main.py`                          | 161     |
 
 ---
 
-*이 문서는 실제 코드 분석을 기반으로 작성되었습니다.*
-*최종 수정: 2025-12-29*
+_이 문서는 실제 코드 분석을 기반으로 작성되었습니다._
+_최종 수정: 2025-12-29_

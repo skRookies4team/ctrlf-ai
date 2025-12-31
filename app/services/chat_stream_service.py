@@ -32,6 +32,8 @@ from app.models.chat_stream import (
     StreamMetrics,
     StreamTokenEvent,
 )
+from app.telemetry.emitters import emit_chat_turn_once
+from app.telemetry.metrics import set_latency_metrics
 
 logger = get_logger(__name__)
 
@@ -220,6 +222,8 @@ class ChatStreamService:
         2. token 이벤트 (여러 번)
         3. done 또는 error 이벤트 (종료)
 
+        A8: 스트리밍 완료/예외/취소 시 CHAT_TURN 이벤트 1회 발행.
+
         Args:
             request: 스트리밍 채팅 요청
 
@@ -237,6 +241,9 @@ class ChatStreamService:
         start_time = time.perf_counter()
         ttfb_recorded = False
         accumulated_response = ""
+
+        # A8: 텔레메트리용 상태 추적
+        telemetry_emitted = False
 
         try:
             # 1. 중복 체크
@@ -308,6 +315,14 @@ class ChatStreamService:
             # 메트릭 로깅 (PII 제외)
             self._log_metrics(metrics)
 
+            # A8: 텔레메트리 이벤트 발행 (정상 완료)
+            self._emit_telemetry_event(
+                request=request,
+                metrics=metrics,
+                error_code=None,
+            )
+            telemetry_emitted = True
+
         except asyncio.CancelledError:
             # 클라이언트 연결 끊김
             logger.info(f"Stream cancelled (client disconnected): {request_id}")
@@ -315,6 +330,16 @@ class ChatStreamService:
             metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             self._tracker.cancel_request(request_id)
             self._log_metrics(metrics)
+
+            # A8: 텔레메트리 이벤트 발행 (취소)
+            if not telemetry_emitted:
+                self._emit_telemetry_event(
+                    request=request,
+                    metrics=metrics,
+                    error_code="CLIENT_DISCONNECTED",
+                )
+                telemetry_emitted = True
+
             raise
 
         except Exception as e:
@@ -332,6 +357,15 @@ class ChatStreamService:
 
             self._tracker.cancel_request(request_id)
             self._log_metrics(metrics)
+
+            # A8: 텔레메트리 이벤트 발행 (에러)
+            if not telemetry_emitted:
+                self._emit_telemetry_event(
+                    request=request,
+                    metrics=metrics,
+                    error_code=metrics.error_code,
+                )
+                telemetry_emitted = True
 
     async def _stream_llm_response(
         self,
@@ -504,3 +538,38 @@ class ChatStreamService:
             logger.warning(f"Stream metrics (error): {log_data}")
         else:
             logger.info(f"Stream metrics: {log_data}")
+
+    def _emit_telemetry_event(
+        self,
+        request: ChatStreamRequest,
+        metrics: StreamMetrics,
+        error_code: Optional[str],
+    ) -> None:
+        """
+        A8: 스트리밍 완료/예외/취소 시 CHAT_TURN 이벤트를 발행합니다.
+
+        emit_chat_turn_once를 사용하여 턴당 1회만 발행되도록 보장합니다.
+
+        Args:
+            request: 채팅 요청
+            metrics: 스트림 메트릭
+            error_code: 에러 코드 (정상 완료 시 None)
+        """
+        # latency 메트릭 설정
+        set_latency_metrics(
+            total_ms=metrics.total_elapsed_ms or 0,
+            llm_ms=metrics.total_elapsed_ms or 0,  # 스트리밍은 대부분 LLM 시간
+            retrieval_ms=0,  # 스트리밍 경로에서는 별도 RAG 없음
+        )
+
+        # CHAT_TURN 이벤트 발행 (1회만)
+        emit_chat_turn_once(
+            intent_main="STREAMING",
+            route_type="LLM_ONLY",
+            domain="GENERAL",  # 스트리밍 경로 기본 도메인
+            rag_used=False,  # 스트리밍 경로에서는 RAG 미사용
+            latency_ms_total=metrics.total_elapsed_ms or 0,
+            latency_ms_llm=metrics.total_elapsed_ms or 0,
+            latency_ms_retrieval=0,
+            error_code=error_code,
+        )
