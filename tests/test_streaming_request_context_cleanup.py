@@ -125,7 +125,7 @@ class TestStreamingContextRetention:
             emit_chat_turn_once(
                 intent_main="STREAMING",
                 route_type="LLM_ONLY",
-                domain="CHAT",
+                domain="GENERAL",
                 rag_used=False,
                 latency_ms_total=100,
                 error_code=None,
@@ -139,7 +139,7 @@ class TestStreamingContextRetention:
             emit_chat_turn_once(
                 intent_main="STREAMING",
                 route_type="LLM_ONLY",
-                domain="CHAT",
+                domain="GENERAL",
                 rag_used=False,
                 latency_ms_total=100,
                 error_code=None,
@@ -330,7 +330,7 @@ class TestStreamingExceptionHandling:
         result = emit_chat_turn_once(
             intent_main="STREAMING",
             route_type="LLM_ONLY",
-            domain="CHAT",
+            domain="GENERAL",
             rag_used=False,
             latency_ms_total=100,
             error_code=None,

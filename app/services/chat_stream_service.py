@@ -566,7 +566,7 @@ class ChatStreamService:
         emit_chat_turn_once(
             intent_main="STREAMING",
             route_type="LLM_ONLY",
-            domain="CHAT",  # 스트리밍 경로 기본 도메인
+            domain="GENERAL",  # 스트리밍 경로 기본 도메인
             rag_used=False,  # 스트리밍 경로에서는 RAG 미사용
             latency_ms_total=metrics.total_elapsed_ms or 0,
             latency_ms_llm=metrics.total_elapsed_ms or 0,
