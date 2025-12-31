@@ -229,6 +229,11 @@ class ChatAnswerMeta(BaseModel):
         default=False,
         description="Whether this is a RAG gap candidate (POLICY/EDU domain with no/low-score RAG results)",
     )
+    # Personalization: 개인화 Q ID
+    personalization_q: Optional[str] = Field(
+        default=None,
+        description="Personalization sub-intent ID (Q1-Q20) if this is a personalization request",
+    )
 
 
 class ChatResponse(BaseModel):

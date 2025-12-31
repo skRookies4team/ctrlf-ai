@@ -350,8 +350,9 @@ async def test_chat_service_incident_route() -> None:
 
     response = await service.handle_chat(request)
 
-    # Verify route is BACKEND_API for incident report
-    assert response.meta.route == "BACKEND_API"
+    # BACKEND_STATUS without sub_intent_id returns CLARIFY response
+    # (changed behavior: needs clarification for which backend service to call)
+    assert response.meta.route == "CLARIFY"
 
 
 # --- MaskingStage Enum Tests ---

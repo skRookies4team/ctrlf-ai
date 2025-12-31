@@ -1523,3 +1523,105 @@ class ChatService:
             intent=intent,
             soft_guardrail_instruction=soft_guardrail_instruction,
         )
+
+    # =========================================================================
+    # Personalization: 개인화 처리 핸들러
+    # =========================================================================
+
+    async def _handle_personalization(
+        self,
+        q: str,
+        user_query: str,
+        start_time: float,
+        pii_input: "PiiService.PiiResult",
+        req: ChatRequest,
+        domain: str,
+        intent: IntentType,
+    ) -> ChatResponse:
+        """개인화 요청을 처리합니다.
+
+        PersonalizationClient.resolve_facts()로 facts 조회 후
+        AnswerGenerator.generate()로 자연어 답변을 생성합니다.
+
+        Args:
+            q: PersonalizationSubIntentId (Q1-Q20)
+            user_query: 사용자 질문 (마스킹 처리됨)
+            start_time: 요청 시작 시간
+            pii_input: PII 입력 마스킹 결과
+            req: ChatRequest
+            domain: 도메인
+            intent: IntentType
+
+        Returns:
+            ChatResponse: 개인화 응답
+        """
+        try:
+            # 1) PersonalizationClient로 facts 조회
+            # period는 None으로 전달 -> 클라이언트에서 디폴트 사용
+            facts = await self._personalization_client.resolve_facts(
+                sub_intent_id=q,
+                period=None,
+                target_dept_id=None,  # TODO: 부서 비교(Q5) 시 dept 파싱 필요
+            )
+
+            logger.info(
+                f"Personalization facts retrieved: q={q}, "
+                f"has_error={facts.error is not None}, "
+                f"metrics_keys={list(facts.metrics.keys()) if facts.metrics else []}"
+            )
+
+            # 2) AnswerGenerator로 자연어 답변 생성
+            context = AnswerGeneratorContext(
+                sub_intent_id=q,
+                user_question=user_query,
+                facts=facts,
+            )
+            raw_answer = await self._answer_generator.generate(context)
+
+            # 3) PII 마스킹 (OUTPUT)
+            pii_output = await self._pii.detect_and_mask(
+                text=raw_answer,
+                stage=MaskingStage.OUTPUT,
+            )
+            final_answer = pii_output.masked_text
+
+            # 4) ChatResponse 생성
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            return ChatResponse(
+                answer=final_answer,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    route=RouteType.BACKEND_API.value,
+                    intent=intent.value if intent else "BACKEND_STATUS",
+                    domain=domain,
+                    masked=pii_input.has_pii or pii_output.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    has_pii_output=pii_output.has_pii,
+                    latency_ms=latency_ms,
+                    rag_used=False,
+                    rag_source_count=0,
+                    # 개인화 관련 메타 정보 추가
+                    personalization_q=q,
+                ),
+            )
+
+        except Exception as e:
+            logger.error(f"Personalization handling failed: {e}")
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            # 에러 시 fallback 메시지 반환
+            return ChatResponse(
+                answer=BACKEND_FALLBACK_MESSAGE,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    route=RouteType.BACKEND_API.value,
+                    intent=intent.value if intent else "BACKEND_STATUS",
+                    domain=domain,
+                    masked=pii_input.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    latency_ms=latency_ms,
+                    error_type="PERSONALIZATION_ERROR",
+                    error_message=str(e),
+                ),
+            )
