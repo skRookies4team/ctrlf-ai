@@ -509,14 +509,14 @@ class ChatStreamService:
         """
         # 대소문자 구분 없이 매칭
         role_lower = user_role.lower()
-        # Phase 52: Llama 영어 출력 방지를 위한 한국어 강제 지침 추가
-        korean_instruction = " 반드시 한국어로만 답변하세요. 영어로 답변하지 마세요."
+        # Phase 52: Llama 대응 - 한국어 강제 (긍정형 지시)
+        korean_instruction = " 모든 응답은 반드시 한국어로만 작성하세요."
         prompts = {
-            "employee": "당신은 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
-            "manager": "당신은 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
-            "creator": "당신은 CTRL+F 콘텐츠 생성 AI 어시스턴트입니다. 교육 자료, FAQ, 문서 작성을 도와줍니다." + korean_instruction,
-            "reviewer": "당신은 CTRL+F 검토 AI 어시스턴트입니다. 문서 검토 및 품질 관리를 지원합니다." + korean_instruction,
-            "admin": "당신은 CTRL+F 관리자 AI 어시스턴트입니다. 시스템 관리 및 설정 관련 질문에 답변합니다." + korean_instruction,
+            "employee": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
+            "manager": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
+            "creator": "당신은 한국어로 답변하는 CTRL+F 콘텐츠 생성 AI 어시스턴트입니다. 교육 자료, FAQ, 문서 작성을 도와줍니다." + korean_instruction,
+            "reviewer": "당신은 한국어로 답변하는 CTRL+F 검토 AI 어시스턴트입니다. 문서 검토 및 품질 관리를 지원합니다." + korean_instruction,
+            "admin": "당신은 한국어로 답변하는 CTRL+F 관리자 AI 어시스턴트입니다. 시스템 관리 및 설정 관련 질문에 답변합니다." + korean_instruction,
         }
         return prompts.get(role_lower)
 
