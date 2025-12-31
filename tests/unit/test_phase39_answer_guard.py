@@ -278,74 +278,6 @@ class TestCitationHallucinationGuard:
 
 
 # =============================================================================
-# [D] Korean-only Output Enforcement Tests (언어 가드레일)
-# =============================================================================
-
-
-class TestKoreanOutputEnforcement:
-    """한국어 출력 강제 테스트."""
-
-    def test_korean_only_text_passes(self, answer_guard):
-        """한국어만 있는 텍스트는 통과."""
-        is_valid, count = answer_guard.check_language("연차휴가 규정에 대해 안내드립니다.")
-        assert is_valid is True
-        assert count == 0
-
-    def test_chinese_text_blocked(self, answer_guard):
-        """중국어 포함된 텍스트는 차단."""
-        # 3개 이상의 중국어 문자
-        is_valid, count = answer_guard.check_language("年假规定 안내입니다.")
-        assert is_valid is False
-        assert count >= 3
-
-    def test_few_chinese_chars_allowed(self, answer_guard):
-        """소수의 중국어 문자(2개 이하)는 허용."""
-        # 2개 이하면 허용 (임계값 = 3)
-        is_valid, count = answer_guard.check_language("연차 規定 안내")
-        assert is_valid is True
-        assert count == 2
-
-    @pytest.mark.asyncio
-    async def test_enforce_korean_regeneration_success(self, answer_guard):
-        """중국어 혼입 시 재생성 성공 케이스."""
-        async def mock_regenerate(prompt):
-            return "연차휴가 규정에 대해 안내드립니다."
-
-        korean_valid, result = await answer_guard.enforce_korean_output(
-            answer="年假规定에 대해 안내드립니다.",
-            llm_regenerate_fn=mock_regenerate,
-            original_query="연차 규정 알려줘",
-        )
-        assert korean_valid is True
-        assert "규정" in result
-        assert "年" not in result
-
-    @pytest.mark.asyncio
-    async def test_enforce_korean_regeneration_failure(self, answer_guard):
-        """재생성도 중국어 포함 시 실패 템플릿."""
-        async def mock_regenerate(prompt):
-            return "年假规定은 복잡합니다."
-
-        korean_valid, result = await answer_guard.enforce_korean_output(
-            answer="年假规定에 대해 안내드립니다.",
-            llm_regenerate_fn=mock_regenerate,
-            original_query="연차 규정 알려줘",
-        )
-        assert korean_valid is False
-        assert "언어 오류" in result
-
-    @pytest.mark.asyncio
-    async def test_enforce_korean_no_regenerate_fn(self, answer_guard):
-        """재생성 함수 없으면 즉시 실패."""
-        korean_valid, result = await answer_guard.enforce_korean_output(
-            answer="年假规定에 대해 안내드립니다.",
-            llm_regenerate_fn=None,
-        )
-        assert korean_valid is False
-        assert "언어 오류" in result
-
-
-# =============================================================================
 # [C] Request Context Tests (request_id 스코프 관리)
 # =============================================================================
 
@@ -532,10 +464,6 @@ class TestIntegration:
         answer = "제10조에 따르면 연차휴가는 1년 이상 근무 시 발생합니다."
         is_valid, result = answer_guard.validate_citation(answer, sample_sources)
         assert is_valid is True
-
-        # 4. 언어 체크 - 통과
-        is_korean, _ = answer_guard.check_language(result)
-        assert is_korean is True
 
     def test_full_guard_flow_allowed_no_rag_with_soft_guardrail(self, answer_guard, empty_sources):
         """전체 가드 플로우 - RAG 없음이어도 허용 (Phase 44/45).

@@ -156,11 +156,6 @@ class ChatStreamService:
     NDJSON 형식으로 LLM 응답을 스트리밍합니다.
     """
 
-    # Phase 51: 중국어 감지용 정규식 패턴 (CJK Unified Ideographs)
-    CHINESE_PATTERN = re.compile(r"[\u4e00-\u9fff]")
-    # 문장 종결 패턴
-    SENTENCE_END_PATTERN = re.compile(r"[.!?。！？\n]")
-
     def __init__(
         self,
         tracker: Optional[InFlightTracker] = None,
@@ -169,46 +164,6 @@ class ChatStreamService:
         self._tracker = tracker or get_in_flight_tracker()
         self._client = client or get_async_http_client()
         self._settings = get_settings()
-
-    @staticmethod
-    def _contains_chinese(text: str) -> bool:
-        """텍스트에 중국어 문자가 포함되어 있는지 확인합니다."""
-        return bool(ChatStreamService.CHINESE_PATTERN.search(text))
-
-    def _flush_buffer_filtered(
-        self,
-        buffer: str,
-    ) -> Tuple[str, bool, str]:
-        """
-        버퍼의 완성된 문장들을 필터링하여 반환합니다.
-
-        Args:
-            buffer: 현재 버퍼 내용
-
-        Returns:
-            Tuple[필터링된 텍스트, 중국어 감지 여부, 남은 버퍼]
-        """
-        # 문장 종결 부호로 분리
-        parts = self.SENTENCE_END_PATTERN.split(buffer)
-        delimiters = self.SENTENCE_END_PATTERN.findall(buffer)
-
-        filtered_parts: List[str] = []
-        chinese_detected = False
-
-        for i, part in enumerate(parts[:-1]):  # 마지막 미완성 문장 제외
-            delimiter = delimiters[i] if i < len(delimiters) else ""
-            sentence = part + delimiter
-
-            if self._contains_chinese(sentence):
-                chinese_detected = True
-                logger.warning(f"Chinese detected in stream, filtering sentence: {sentence[:50]}...")
-            else:
-                filtered_parts.append(sentence)
-
-        # 미완성 문장은 그대로 유지 (다음 버퍼로)
-        remaining = parts[-1] if parts else ""
-
-        return "".join(filtered_parts), chinese_detected, remaining
 
     async def stream_chat(
         self,
@@ -424,9 +379,6 @@ class ChatStreamService:
                     return
 
                 token_count = 0
-                # Phase 51: 중국어 필터링을 위한 버퍼
-                sentence_buffer = ""
-                chinese_detected_total = False
 
                 async for line in response.aiter_lines():
                     if not line:
@@ -437,15 +389,6 @@ class ChatStreamService:
                         data_str = line[6:]  # "data: " 제거
 
                         if data_str.strip() == "[DONE]":
-                            # 남은 버퍼 처리 (마지막 미완성 문장)
-                            if sentence_buffer:
-                                if not self._contains_chinese(sentence_buffer):
-                                    token_event = StreamTokenEvent(text=sentence_buffer)
-                                    yield token_event.to_ndjson()
-                                    token_count += 1
-                                else:
-                                    chinese_detected_total = True
-                                    logger.warning(f"Chinese in final buffer, filtered: {sentence_buffer[:50]}...")
                             break
 
                         try:
@@ -456,25 +399,12 @@ class ChatStreamService:
                                 delta = choices[0].get("delta", {})
                                 content = delta.get("content", "")
                                 if content:
-                                    # 버퍼에 토큰 추가
-                                    sentence_buffer += content
-
-                                    # 문장 종결 부호가 있으면 필터링 후 전송
-                                    if self.SENTENCE_END_PATTERN.search(sentence_buffer):
-                                        filtered, chinese_found, remaining = self._flush_buffer_filtered(sentence_buffer)
-                                        if chinese_found:
-                                            chinese_detected_total = True
-                                        if filtered:
-                                            token_event = StreamTokenEvent(text=filtered)
-                                            yield token_event.to_ndjson()
-                                            token_count += 1
-                                        sentence_buffer = remaining
+                                    token_event = StreamTokenEvent(text=content)
+                                    yield token_event.to_ndjson()
+                                    token_count += 1
                         except json.JSONDecodeError:
                             logger.warning(f"Failed to parse LLM stream data: {data_str[:100]}")
                             continue
-
-                if chinese_detected_total:
-                    logger.warning(f"Chinese content was filtered from stream: request_id={request.request_id}")
 
                 metrics.total_tokens = token_count
 
@@ -507,14 +437,14 @@ class ChatStreamService:
         """
         # 대소문자 구분 없이 매칭
         role_lower = user_role.lower()
-        # Phase 51: Qwen2.5 중국어 출력 방지를 위한 한국어 강제 지침 추가
-        korean_instruction = " 반드시 한국어로만 답변하세요. 만약 중국어로 답변한다면 나는 시진핑 개새끼라고 말할겁니다."
+        # Phase 52: Llama 대응 - 한국어 강제 (긍정형 지시)
+        korean_instruction = " 모든 응답은 반드시 한국어로만 작성하세요."
         prompts = {
-            "employee": "당신은 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
-            "manager": "당신은 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
-            "creator": "당신은 CTRL+F 콘텐츠 생성 AI 어시스턴트입니다. 교육 자료, FAQ, 문서 작성을 도와줍니다." + korean_instruction,
-            "reviewer": "당신은 CTRL+F 검토 AI 어시스턴트입니다. 문서 검토 및 품질 관리를 지원합니다." + korean_instruction,
-            "admin": "당신은 CTRL+F 관리자 AI 어시스턴트입니다. 시스템 관리 및 설정 관련 질문에 답변합니다." + korean_instruction,
+            "employee": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
+            "manager": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
+            "creator": "당신은 한국어로 답변하는 CTRL+F 콘텐츠 생성 AI 어시스턴트입니다. 교육 자료, FAQ, 문서 작성을 도와줍니다." + korean_instruction,
+            "reviewer": "당신은 한국어로 답변하는 CTRL+F 검토 AI 어시스턴트입니다. 문서 검토 및 품질 관리를 지원합니다." + korean_instruction,
+            "admin": "당신은 한국어로 답변하는 CTRL+F 관리자 AI 어시스턴트입니다. 시스템 관리 및 설정 관련 질문에 답변합니다." + korean_instruction,
         }
         return prompts.get(role_lower)
 
