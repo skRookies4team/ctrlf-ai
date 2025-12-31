@@ -2,29 +2,25 @@
 개인화 API 클라이언트 모듈 (Personalization API Client Module)
 
 ctrlf-back (Spring 백엔드)의 개인화 API와 통신하는 HTTP 클라이언트입니다.
-facts 조회 및 부서 검색 API 호출을 담당합니다.
+facts 조회 API 호출을 담당합니다.
 
 주요 기능:
 - resolve_facts: 개인화 facts 데이터 조회 (POST /api/personalization/resolve)
-- search_departments: 부서 검색 (GET /api/org/departments/search)
 
 사용 방법:
     from app.clients.personalization_client import PersonalizationClient
 
     client = PersonalizationClient()
-    facts = await client.resolve_facts("Q11", period="this-year")
-    depts = await client.search_departments("마케팅")
+    facts = await client.resolve_facts("Q11", user_id="emp123", period="this-year")
 """
 
-from typing import List, Optional
+from typing import Optional
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.personalization import (
     DEFAULT_PERIOD_FOR_INTENT,
-    DepartmentInfo,
-    DepartmentSearchResponse,
     PersonalizationError,
     PersonalizationErrorType,
     PersonalizationFacts,
@@ -42,7 +38,7 @@ class PersonalizationClient:
     개인화 API 클라이언트.
 
     ctrlf-back (Spring 백엔드)의 개인화 API와 통신합니다.
-    facts 조회 및 부서 검색 기능을 제공합니다.
+    facts 조회 기능을 제공합니다.
 
     Attributes:
         _base_url: 백엔드 서비스 base URL
@@ -51,13 +47,11 @@ class PersonalizationClient:
 
     Usage:
         client = PersonalizationClient()
-        facts = await client.resolve_facts("Q11")
-        depts = await client.search_departments("마케팅")
+        facts = await client.resolve_facts("Q11", user_id="emp123")
     """
 
     # API 경로 상수
     RESOLVE_PATH = "/api/personalization/resolve"
-    DEPT_SEARCH_PATH = "/api/org/departments/search"
 
     def __init__(
         self,
@@ -99,7 +93,6 @@ class PersonalizationClient:
         sub_intent_id: str,
         user_id: str,
         period: Optional[str] = None,
-        target_dept_id: Optional[str] = None,
     ) -> PersonalizationFacts:
         """
         개인화 facts를 조회합니다.
@@ -110,7 +103,6 @@ class PersonalizationClient:
             sub_intent_id: Q1-Q20 인텐트 ID
             user_id: 사용자 ID (X-User-Id 헤더로 전달)
             period: 기간 유형 (this-week|this-month|3m|this-year)
-            target_dept_id: 부서 평균 조회 시 대상 부서 ID (Q5에서만 사용)
 
         Returns:
             PersonalizationFacts: 조회된 facts 데이터 (에러 시 error 필드 포함)
@@ -133,7 +125,7 @@ class PersonalizationClient:
         # 백엔드 URL 미설정 시 mock 응답
         if not self._base_url:
             logger.debug("Backend URL not configured, returning mock facts")
-            return self._get_mock_facts(sub_intent_id, period, target_dept_id)
+            return self._get_mock_facts(sub_intent_id, period)
 
         endpoint = f"{self._base_url}{self.RESOLVE_PATH}"
 
@@ -144,7 +136,6 @@ class PersonalizationClient:
             request_data = PersonalizationResolveRequest(
                 sub_intent_id=sub_intent_id,
                 period=period,
-                target_dept_id=target_dept_id,
             )
 
             # 헤더에 X-User-Id 추가
@@ -192,54 +183,10 @@ class PersonalizationClient:
                 ),
             )
 
-    async def search_departments(self, query: str) -> DepartmentSearchResponse:
-        """
-        부서를 검색합니다.
-
-        백엔드 GET /api/org/departments/search 호출.
-
-        Args:
-            query: 검색어 (부서명)
-
-        Returns:
-            DepartmentSearchResponse: 검색 결과 (부서 목록)
-        """
-        # 백엔드 URL 미설정 시 mock 응답
-        if not self._base_url:
-            logger.debug("Backend URL not configured, returning mock departments")
-            return self._get_mock_departments(query)
-
-        endpoint = f"{self._base_url}{self.DEPT_SEARCH_PATH}"
-
-        try:
-            client = get_async_http_client()
-
-            response = await client.get(
-                endpoint,
-                params={"query": query},
-                headers=self._get_auth_headers(),
-                timeout=self._timeout,
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                return DepartmentSearchResponse(**data)
-            else:
-                logger.warning(
-                    f"Department search failed: status={response.status_code}, "
-                    f"body={response.text[:200]}"
-                )
-                return DepartmentSearchResponse(items=[])
-
-        except Exception as e:
-            logger.warning(f"Department search error: {e}")
-            return DepartmentSearchResponse(items=[])
-
     def _get_mock_facts(
         self,
         sub_intent_id: str,
         period: Optional[str],
-        target_dept_id: Optional[str],
     ) -> PersonalizationFacts:
         """개발/테스트용 mock facts 반환."""
         from datetime import datetime, timedelta
@@ -261,7 +208,7 @@ class PersonalizationClient:
             period_end = now.strftime("%Y-%m-%d")
 
         # 인텐트별 mock 데이터
-        mock_data = self._get_mock_data_for_intent(sub_intent_id, target_dept_id)
+        mock_data = self._get_mock_data_for_intent(sub_intent_id)
 
         return PersonalizationFacts(
             sub_intent_id=sub_intent_id,
@@ -276,7 +223,6 @@ class PersonalizationClient:
     def _get_mock_data_for_intent(
         self,
         sub_intent_id: str,
-        target_dept_id: Optional[str] = None,
     ) -> dict:
         """인텐트별 mock 데이터 반환."""
         mock_responses = {
@@ -301,7 +247,7 @@ class PersonalizationClient:
                     "company_average": 80.1,
                 },
                 "extra": {
-                    "target_dept_name": "개발팀" if target_dept_id else "내 부서",
+                    "dept_name": "개발팀",
                 },
             },
             "Q6": {  # 가장 많이 틀린 보안 토픽 TOP3
@@ -344,24 +290,3 @@ class PersonalizationClient:
         }
 
         return mock_responses.get(sub_intent_id, {"metrics": {}, "items": []})
-
-    def _get_mock_departments(self, query: str) -> DepartmentSearchResponse:
-        """개발/테스트용 mock 부서 검색 결과."""
-        # 샘플 부서 데이터 (dept_path 포함)
-        all_departments = [
-            DepartmentInfo(dept_id="D001", dept_name="개발팀", dept_path="본사 > 개발본부 > 개발팀"),
-            DepartmentInfo(dept_id="D002", dept_name="개발1팀", dept_path="본사 > 개발본부 > 개발1팀"),
-            DepartmentInfo(dept_id="D003", dept_name="개발2팀", dept_path="본사 > 개발본부 > 개발2팀"),
-            DepartmentInfo(dept_id="D004", dept_name="마케팅팀", dept_path="본사 > 사업본부 > 마케팅팀"),
-            DepartmentInfo(dept_id="D005", dept_name="마케팅기획팀", dept_path="본사 > 사업본부 > 마케팅기획팀"),
-            DepartmentInfo(dept_id="D006", dept_name="인사팀", dept_path="본사 > 경영지원본부 > 인사팀"),
-            DepartmentInfo(dept_id="D007", dept_name="경영지원팀", dept_path="본사 > 경영지원본부 > 경영지원팀"),
-            DepartmentInfo(dept_id="D008", dept_name="보안팀", dept_path="본사 > 개발본부 > 보안팀"),
-            DepartmentInfo(dept_id="D009", dept_name="재무팀", dept_path="본사 > 경영지원본부 > 재무팀"),
-            DepartmentInfo(dept_id="D010", dept_name="영업팀", dept_path="본사 > 사업본부 > 영업팀"),
-        ]
-
-        # 검색어로 필터링
-        matched = [d for d in all_departments if query in d.dept_name]
-
-        return DepartmentSearchResponse(items=matched)

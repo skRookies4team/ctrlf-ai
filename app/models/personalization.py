@@ -9,7 +9,6 @@ prompt.txt 스펙에 따른 개인화 요청/응답 스키마입니다.
 - PersonalizationSubIntentId: Q1-Q20 개인화 인텐트 ID
 - PersonalizationResolveRequest: 개인화 조회 요청
 - PersonalizationResolveResponse: 개인화 조회 응답 (facts)
-- DepartmentInfo / DepartmentSearchResponse: 부서 검색 결과
 """
 
 from datetime import datetime
@@ -189,12 +188,10 @@ class PersonalizationResolveRequest(BaseModel):
     Attributes:
         sub_intent_id: Q1-Q20 인텐트 ID
         period: 기간 유형 (옵션, 기본값 사용 가능)
-        target_dept_id: 부서 평균 조회 시 선택 부서 (Q5에서만 사용)
     """
 
     sub_intent_id: str = Field(..., description="Q1-Q20 인텐트 ID")
     period: Optional[str] = Field(default=None, description="기간 유형 (this-week|this-month|3m|this-year)")
-    target_dept_id: Optional[str] = Field(default=None, description="부서 평균 조회 시 선택 부서 ID (Q5에서만)")
 
 
 class PersonalizationFacts(BaseModel):
@@ -226,53 +223,6 @@ class PersonalizationFacts(BaseModel):
 
 # PersonalizationResolveResponse는 PersonalizationFacts와 동일
 PersonalizationResolveResponse = PersonalizationFacts
-
-
-# =============================================================================
-# Department Search Models
-# =============================================================================
-
-
-class DepartmentInfo(BaseModel):
-    """부서 정보.
-
-    Attributes:
-        dept_id: 부서 ID
-        dept_name: 부서명
-        dept_path: 부서 경로 (상위 부서 포함, 선택)
-    """
-
-    dept_id: str = Field(..., description="부서 ID")
-    dept_name: str = Field(..., description="부서명")
-    dept_path: Optional[str] = Field(default=None, description="부서 경로 (예: 본사 > 개발본부 > 개발팀)")
-
-
-class DepartmentSearchResponse(BaseModel):
-    """부서 검색 응답 (GET /api/org/departments/search).
-
-    Attributes:
-        items: 부서 목록
-    """
-
-    items: List[DepartmentInfo] = Field(default_factory=list, description="부서 목록")
-
-
-# =============================================================================
-# Department Clarify Templates (부서 검색 관련)
-# =============================================================================
-
-
-class DepartmentClarifyTemplates:
-    """부서 검색 관련 되묻기 템플릿.
-
-    prompt.txt에 정의된 고정 문장입니다.
-    """
-
-    # 후보가 여러 개일 때
-    MULTIPLE_MATCHES = "어느 부서 기준으로 볼까요? 부서명을 정확히 입력해 주세요."
-
-    # 후보가 0개일 때
-    NO_MATCHES = "해당 부서를 찾지 못했어요. 부서명을 정확히 입력해 주세요."
 
 
 # =============================================================================
