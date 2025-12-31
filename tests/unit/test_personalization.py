@@ -9,9 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.models.personalization import (
     DEFAULT_PERIOD_FOR_INTENT,
-    DepartmentClarifyTemplates,
-    DepartmentInfo,
-    DepartmentSearchResponse,
     ERROR_RESPONSE_TEMPLATES,
     PersonalizationError,
     PersonalizationErrorType,
@@ -90,11 +87,9 @@ class TestPersonalizationModels:
         request = PersonalizationResolveRequest(
             sub_intent_id="Q11",
             period="this-year",
-            target_dept_id=None,
         )
         assert request.sub_intent_id == "Q11"
         assert request.period == "this-year"
-        assert request.target_dept_id is None
 
     def test_personalization_facts(self):
         """PersonalizationFacts 모델 생성."""
@@ -119,37 +114,6 @@ class TestPersonalizationModels:
         )
         assert facts.error is not None
         assert facts.error.type == "NOT_FOUND"
-
-    def test_department_info(self):
-        """DepartmentInfo 모델."""
-        dept = DepartmentInfo(
-            dept_id="D001",
-            dept_name="개발팀",
-        )
-        assert dept.dept_id == "D001"
-        assert dept.dept_name == "개발팀"
-        assert dept.dept_path is None  # 기본값
-
-    def test_department_info_with_path(self):
-        """DepartmentInfo 모델 (dept_path 포함)."""
-        dept = DepartmentInfo(
-            dept_id="D001",
-            dept_name="개발팀",
-            dept_path="본사 > 개발본부 > 개발팀",
-        )
-        assert dept.dept_id == "D001"
-        assert dept.dept_name == "개발팀"
-        assert dept.dept_path == "본사 > 개발본부 > 개발팀"
-
-    def test_department_search_response(self):
-        """DepartmentSearchResponse 모델."""
-        response = DepartmentSearchResponse(
-            items=[
-                DepartmentInfo(dept_id="D001", dept_name="개발팀"),
-                DepartmentInfo(dept_id="D002", dept_name="개발1팀"),
-            ]
-        )
-        assert len(response.items) == 2
 
     def test_sub_intent_metadata(self):
         """SUB_INTENT_METADATA 확인."""
@@ -247,36 +211,6 @@ class TestPersonalizationClient:
 
             assert facts.error is not None
             assert facts.error.type == "NOT_IMPLEMENTED"
-
-    @pytest.mark.asyncio
-    async def test_search_departments_mock(self):
-        """Mock 부서 검색 테스트."""
-        from app.clients.personalization_client import PersonalizationClient
-
-        with patch("app.clients.personalization_client.settings") as mock_settings:
-            mock_settings.backend_base_url = None
-            mock_settings.BACKEND_API_TOKEN = None
-
-            client = PersonalizationClient(base_url=None)
-            result = await client.search_departments("개발")
-
-            assert len(result.items) > 0
-            assert any("개발" in item.dept_name for item in result.items)
-
-    @pytest.mark.asyncio
-    async def test_search_departments_no_match(self):
-        """부서 검색 결과 없음."""
-        from app.clients.personalization_client import PersonalizationClient
-
-        with patch("app.clients.personalization_client.settings") as mock_settings:
-            mock_settings.backend_base_url = None
-            mock_settings.BACKEND_API_TOKEN = None
-
-            client = PersonalizationClient(base_url=None)
-            result = await client.search_departments("없는부서123")
-
-            assert len(result.items) == 0
-
 
 # =============================================================================
 # Rule Router Personalization Tests
@@ -417,23 +351,6 @@ class TestAnswerGenerator:
         )
 
         assert "조회된 데이터가 없어요" in answer
-
-
-# =============================================================================
-# Department Clarify Templates Tests
-# =============================================================================
-
-
-class TestDepartmentClarifyTemplates:
-    """부서 검색 되묻기 템플릿 테스트."""
-
-    def test_multiple_matches_template(self):
-        """여러 부서 매칭 시 템플릿."""
-        assert "어느 부서 기준으로 볼까요" in DepartmentClarifyTemplates.MULTIPLE_MATCHES
-
-    def test_no_matches_template(self):
-        """부서 없음 시 템플릿."""
-        assert "해당 부서를 찾지 못했어요" in DepartmentClarifyTemplates.NO_MATCHES
 
 
 # =============================================================================

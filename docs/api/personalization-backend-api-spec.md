@@ -25,7 +25,6 @@ AI Gateway(FastAPI)에서 Spring 백엔드(ctrlf-back)로 개인화 데이터를
 | # | Method | Endpoint | 설명 |
 |---|--------|----------|------|
 | 1 | POST | `/api/personalization/resolve` | 개인화 facts 조회 (핵심) |
-| 2 | GET | `/api/org/departments/search` | 부서 검색 (Q5용) |
 
 ### 우선순위 구현 대상 (8개)
 
@@ -67,8 +66,7 @@ POST /api/personalization/resolve
 ```json
 {
   "sub_intent_id": "Q11",
-  "period": "this-year",
-  "target_dept_id": null
+  "period": "this-year"
 }
 ```
 
@@ -76,7 +74,6 @@ POST /api/personalization/resolve
 |-------|------|----------|-------------|
 | `sub_intent_id` | string | ✅ Yes | Q1-Q20 인텐트 ID |
 | `period` | string | ❌ No | 기간 유형 (미지정 시 인텐트별 기본값) |
-| `target_dept_id` | string | ❌ No | 부서 비교 대상 ID (Q5에서만 사용) |
 
 #### Period 유형
 
@@ -263,8 +260,7 @@ POST /api/personalization/resolve
   },
   "items": [],
   "extra": {
-    "target_dept_id": "D001",
-    "target_dept_name": "개발팀"
+    "dept_name": "개발팀"
   },
   "error": null
 }
@@ -274,14 +270,13 @@ POST /api/personalization/resolve
 | Field | Type | Description |
 |-------|------|-------------|
 | `my_average` | float | 내 평균 점수 |
-| `dept_average` | float | 대상 부서 평균 점수 |
+| `dept_average` | float | 내 부서 평균 점수 |
 | `company_average` | float | 전사 평균 점수 |
 
 **extra**:
 | Field | Type | Description |
 |-------|------|-------------|
-| `target_dept_id` | string | 비교 대상 부서 ID (null이면 내 부서) |
-| `target_dept_name` | string | 비교 대상 부서명 |
+| `dept_name` | string | 내 부서명 |
 
 ---
 
@@ -489,50 +484,6 @@ POST /api/personalization/resolve
 
 ---
 
-## API 2: Department Search
-
-부서를 검색합니다. Q5에서 타부서 비교 시 사용합니다.
-
-### Endpoint
-
-```http
-GET /api/org/departments/search?query={검색어}
-```
-
-### Query Parameters
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `query` | string | ✅ Yes | 검색어 (부서명) |
-
-### Response (200 OK)
-
-```json
-{
-  "items": [
-    {
-      "dept_id": "D001",
-      "dept_name": "개발팀",
-      "dept_path": "본사 > 개발본부 > 개발팀"
-    },
-    {
-      "dept_id": "D002",
-      "dept_name": "개발1팀",
-      "dept_path": "본사 > 개발본부 > 개발1팀"
-    }
-  ]
-}
-```
-
-**items[n]**:
-| Field | Type | Description |
-|-------|------|-------------|
-| `dept_id` | string | 부서 ID |
-| `dept_name` | string | 부서명 |
-| `dept_path` | string | 부서 경로 (상위 부서 포함) |
-
----
-
 ## Spring 구현 가이드
 
 ### Controller
@@ -557,29 +508,13 @@ public class PersonalizationController {
         PersonalizationFacts facts = personalizationService.resolve(
             userId,
             request.getSubIntentId(),
-            request.getPeriod(),
-            request.getTargetDeptId()
+            request.getPeriod()
         );
 
         return ResponseEntity.ok(facts);
     }
 }
 
-@RestController
-@RequestMapping("/api/org")
-@RequiredArgsConstructor
-public class OrganizationController {
-
-    private final DepartmentService departmentService;
-
-    @GetMapping("/departments/search")
-    public ResponseEntity<DepartmentSearchResponse> searchDepartments(
-            @RequestParam String query) {
-
-        List<DepartmentInfo> departments = departmentService.search(query);
-        return ResponseEntity.ok(new DepartmentSearchResponse(departments));
-    }
-}
 ```
 
 ### DTO
@@ -590,7 +525,6 @@ public class OrganizationController {
 public class PersonalizationResolveRequest {
     private String subIntentId;  // Q1-Q20
     private String period;        // this-week, this-month, 3m, this-year
-    private String targetDeptId;  // Q5에서만 사용 (nullable)
 }
 
 // Response
@@ -616,21 +550,6 @@ public class PersonalizationError {
     private String type;     // NOT_FOUND, TIMEOUT, PARTIAL, NOT_IMPLEMENTED
     private String message;
 }
-
-// Department
-@Data
-@AllArgsConstructor
-public class DepartmentInfo {
-    private String deptId;
-    private String deptName;
-    private String deptPath;
-}
-
-@Data
-@AllArgsConstructor
-public class DepartmentSearchResponse {
-    private List<DepartmentInfo> items;
-}
 ```
 
 ### Service 예시 (Q11)
@@ -647,13 +566,12 @@ public class PersonalizationService {
     public PersonalizationFacts resolve(
             String userId,
             String subIntentId,
-            String period,
-            String targetDeptId) {
+            String period) {
 
         return switch (subIntentId) {
             case "Q1" -> resolveQ1(userId, period);
             case "Q3" -> resolveQ3(userId, period);
-            case "Q5" -> resolveQ5(userId, period, targetDeptId);
+            case "Q5" -> resolveQ5(userId, period);
             case "Q6" -> resolveQ6(userId, period);
             case "Q9" -> resolveQ9(userId, period);
             case "Q11" -> resolveQ11(userId, period);
@@ -729,9 +647,6 @@ curl -X POST http://localhost:8081/api/personalization/resolve \
   -d '{
     "sub_intent_id": "Q14"
   }'
-
-# 부서 검색
-curl "http://localhost:8081/api/org/departments/search?query=개발"
 ```
 
 ### AI Gateway 환경변수 설정
@@ -758,5 +673,4 @@ BACKEND_API_TOKEN=your-api-token  # 필요 시
 - [ ] Q11 (남은 연차) 로직 구현
 - [ ] Q14 (복지/식대 포인트) 로직 구현
 - [ ] Q20 (올해 HR 할 일) 로직 구현
-- [ ] `GET /api/org/departments/search` 엔드포인트 구현
 - [ ] 에러 처리 (NOT_FOUND, TIMEOUT 등)
