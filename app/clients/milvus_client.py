@@ -566,22 +566,27 @@ class MilvusSearchClient:
         )
 
         output = []
-        for hits in results:
+         for hits in results:
             for hit in hits:
                 entity = hit.entity
-                dataset_id = entity.get("dataset_id", "")
+
+                dataset_id = getattr(entity, "dataset_id", "")
+                content = getattr(entity, "text", "")
+                doc_id = getattr(entity, "doc_id", "")
+                chunk_id = getattr(entity, "chunk_id", None)
+
                 domain_guess = self._extract_domain_from_dataset_id(dataset_id)
 
                 output.append({
                     "id": str(hit.id),
-                    "content": entity.get("text", ""),
-                    "title": entity.get("doc_id", "unknown"),
+                    "content": content,
+                    "title": doc_id or "unknown",
                     "domain": domain_guess,
-                    "doc_id": entity.get("doc_id", ""),
+                    "doc_id": doc_id,
                     "score": hit.score,
                     "metadata": {
                         "dataset_id": dataset_id,
-                        "chunk_id": entity.get("chunk_id"),
+                        "chunk_id": chunk_id,
                     },
                 })
 
