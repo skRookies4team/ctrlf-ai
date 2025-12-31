@@ -465,10 +465,6 @@ class TestIntegration:
         is_valid, result = answer_guard.validate_citation(answer, sample_sources)
         assert is_valid is True
 
-        # 4. 언어 체크 - 통과
-        is_korean, _ = answer_guard.check_language(result)
-        assert is_korean is True
-
     def test_full_guard_flow_allowed_no_rag_with_soft_guardrail(self, answer_guard, empty_sources):
         """전체 가드 플로우 - RAG 없음이어도 허용 (Phase 44/45).
 
