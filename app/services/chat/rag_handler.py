@@ -77,11 +77,16 @@ from app.core.metrics import (
 )
 from app.models.chat import ChatRequest, ChatSource
 from app.utils.debug_log import dbg_final_query, dbg_retrieval_top5, dbg_retrieval_target
+from app.core.retrieval_context import (
+    is_retrieval_blocked,
+    get_block_reason,
+    RetrievalBlockedError,
+)
 
 logger = get_logger(__name__)
 
-# retriever_used 타입 정의
-RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK"]
+# retriever_used 타입 정의 (Phase 50: BLOCKED 추가)
+RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK", "BLOCKED"]
 
 # Phase 44: 검색 설정 상수
 DEFAULT_TOP_K = 5
@@ -551,6 +556,15 @@ class RagHandler:
         Raises:
             RagSearchUnavailableError: 모든 검색 서비스 장애 시 (503 반환용)
         """
+        # Phase 50: 2차 가드 - 컨텍스트 플래그 확인
+        if is_retrieval_blocked():
+            reason = get_block_reason() or "unknown"
+            logger.warning(
+                f"RagHandler: Retrieval blocked by context flag, returning empty sources. "
+                f"reason={reason}"
+            )
+            return [], False, "BLOCKED"
+
         # Phase 44: 검색용 쿼리 정규화 (마스킹 토큰 제거)
         normalized_query = normalize_query_for_search(query)
 
@@ -653,6 +667,13 @@ class RagHandler:
 
             # 결과 0건도 정상 처리 (failed=False)
             return sources, False, "MILVUS"
+
+        except RetrievalBlockedError as e:
+            # Phase 50: 2차 가드 - MilvusClient에서 올라온 RetrievalBlockedError 안전 처리
+            logger.warning(
+                f"RagHandler: RetrievalBlockedError caught from Milvus | reason={e.reason}"
+            )
+            return [], False, "BLOCKED"
 
         except MilvusSearchError as e:
             logger.error(f"Milvus search failed: {e}")

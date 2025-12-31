@@ -139,7 +139,7 @@ class GapSuggestionService:
                 max_tokens=2048,
             )
 
-            logger.debug(f"LLM response: {llm_response[:500]}...")
+            logger.debug(f"LLM response received: len={len(llm_response)}")
 
             # 응답 파싱
             return self._parse_llm_response(llm_response, request.questions)

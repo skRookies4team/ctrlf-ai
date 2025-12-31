@@ -273,7 +273,7 @@ class LLMClient:
             f"Sending chat completion request to LLM: "
             f"messages_count={len(messages)}, model={actual_model}"
         )
-        logger.debug(f"LLM request payload: {payload}")
+        # Note: payload 로깅 제거 - messages에 사용자 쿼리/RAG 컨텍스트 포함되어 PII 유출 위험
 
         try:
             # Phase 12: 재시도 로직으로 감싼 HTTP 요청

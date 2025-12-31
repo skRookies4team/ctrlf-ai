@@ -1,0 +1,73 @@
+{
+  "index_patterns": ["ctrlf-ai-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "ctrlf-ai-ilm-policy",
+      "index.lifecycle.rollover_alias": "ctrlf-ai"
+    },
+    "mappings": {
+      "dynamic": "true",
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date",
+          "format": "strict_date_optional_time||epoch_millis"
+        },
+        "level": {
+          "type": "keyword"
+        },
+        "logger": {
+          "type": "keyword"
+        },
+        "message": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "trace_id": {
+          "type": "keyword"
+        },
+        "user_id": {
+          "type": "keyword"
+        },
+        "dept_id": {
+          "type": "keyword"
+        },
+        "conversation_id": {
+          "type": "keyword"
+        },
+        "turn_id": {
+          "type": "long"
+        },
+        "exception_type": {
+          "type": "keyword"
+        },
+        "stacktrace": {
+          "type": "text",
+          "index": false
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "ctrlf-ai application logs index template",
+    "version": "1.0.0"
+  }
+}

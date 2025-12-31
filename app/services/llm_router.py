@@ -278,7 +278,7 @@ class LLMRouter:
             data = json.loads(response)
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM response as JSON: {e}")
-            logger.debug(f"Raw response: {response[:500]}")
+            logger.debug(f"Raw response parse failed: len={len(response)}")
             raise ValueError(f"Invalid JSON response: {e}")
 
         # RouterResult로 변환

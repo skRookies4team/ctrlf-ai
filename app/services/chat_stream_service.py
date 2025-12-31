@@ -369,7 +369,7 @@ class ChatStreamService:
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
-                    logger.error(f"LLM stream error: status={response.status_code}, body={error_text[:200]}")
+                    logger.error(f"LLM stream error: status={response.status_code}, body_len={len(error_text)}")
                     error_event = StreamErrorEvent(
                         code=StreamErrorCode.LLM_ERROR.value,
                         message=f"LLM 서비스 오류 (HTTP {response.status_code})",
@@ -403,7 +403,7 @@ class ChatStreamService:
                                     yield token_event.to_ndjson()
                                     token_count += 1
                         except json.JSONDecodeError:
-                            logger.warning(f"Failed to parse LLM stream data: {data_str[:100]}")
+                            logger.warning(f"Failed to parse LLM stream data: len={len(data_str)}")
                             continue
 
                 metrics.total_tokens = token_count

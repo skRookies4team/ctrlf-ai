@@ -234,6 +234,15 @@ class ChatAnswerMeta(BaseModel):
         default=None,
         description="Personalization sub-intent ID (Q1-Q20) if this is a personalization request",
     )
+    # Phase 50: 금지질문 필터 정보
+    retrieval_skipped: bool = Field(
+        default=False,
+        description="Whether RAG retrieval was skipped (e.g., forbidden query)",
+    )
+    retrieval_skip_reason: Optional[str] = Field(
+        default=None,
+        description="Reason for skipping retrieval (e.g., FORBIDDEN_QUERY:rule_id)",
+    )
 
 
 class ChatResponse(BaseModel):

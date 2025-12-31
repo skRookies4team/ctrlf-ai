@@ -288,37 +288,37 @@ class IntentService:
         # 1. 사고 "신고" 의도 체크 (신고 키워드 + 사고 키워드 조합)
         if self._contains_any(query_lower, INCIDENT_REPORT_KEYWORDS):
             if self._contains_any(query_lower, INCIDENT_QA_KEYWORDS):
-                logger.debug(f"Intent: INCIDENT_REPORT - query={user_query[:50]}...")
+                logger.debug(f"Intent: INCIDENT_REPORT - query_len={len(user_query)}")
                 return IntentType.INCIDENT_REPORT, Domain.INCIDENT.value
 
         # 2. 사고 "문의" 의도 체크 (사고 관련 키워드만)
         if self._contains_any(query_lower, INCIDENT_QA_KEYWORDS):
-            logger.debug(f"Intent: INCIDENT_QA - query={user_query[:50]}...")
+            logger.debug(f"Intent: INCIDENT_QA - query_len={len(user_query)}")
             return IntentType.INCIDENT_QA, Domain.INCIDENT.value
 
         # 3. 교육 "현황/일정" 조회 체크
         if self._contains_any(query_lower, EDU_STATUS_KEYWORDS):
-            logger.debug(f"Intent: EDU_STATUS - query={user_query[:50]}...")
+            logger.debug(f"Intent: EDU_STATUS - query_len={len(user_query)}")
             return IntentType.EDU_STATUS, Domain.EDU.value
 
         # 4. 교육 "내용" 질문 체크
         if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
-            logger.debug(f"Intent: EDUCATION_QA - query={user_query[:50]}...")
+            logger.debug(f"Intent: EDUCATION_QA - query_len={len(user_query)}")
             return IntentType.EDUCATION_QA, Domain.EDU.value
 
         # 5. 시스템 도움말 체크
         if self._contains_any(query_lower, SYSTEM_HELP_KEYWORDS):
-            logger.debug(f"Intent: SYSTEM_HELP - query={user_query[:50]}...")
+            logger.debug(f"Intent: SYSTEM_HELP - query_len={len(user_query)}")
             return IntentType.SYSTEM_HELP, Domain.POLICY.value
 
         # 6. 정책 관련 키워드 체크 (Phase 43: 잡담 체크 전으로 이동)
         if self._contains_any(query_lower, POLICY_KEYWORDS):
-            logger.debug(f"Intent: POLICY_QA (keyword) - query={user_query[:50]}...")
+            logger.debug(f"Intent: POLICY_QA (keyword) - query_len={len(user_query)}")
             return IntentType.POLICY_QA, Domain.POLICY.value
 
         # 7. 일반 잡담 체크 (Phase 43: 정책 체크 후로 이동)
         if self._contains_any(query_lower, GENERAL_CHAT_KEYWORDS):
-            logger.debug(f"Intent: GENERAL_CHAT - query={user_query[:50]}...")
+            logger.debug(f"Intent: GENERAL_CHAT - query_len={len(user_query)}")
             return IntentType.GENERAL_CHAT, Domain.POLICY.value
 
         # 8. 도메인 힌트가 있으면 해당 도메인의 기본 QA
@@ -331,7 +331,7 @@ class IntentService:
                 return IntentType.POLICY_QA, domain_hint
 
         # 9. 기본값: POLICY_QA
-        logger.debug(f"Intent: POLICY_QA (default) - query={user_query[:50]}...")
+        logger.debug(f"Intent: POLICY_QA (default) - query_len={len(user_query)}")
         return IntentType.POLICY_QA, Domain.POLICY.value
 
     def _determine_route(
