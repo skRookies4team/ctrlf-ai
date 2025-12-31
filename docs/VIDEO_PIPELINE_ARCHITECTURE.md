@@ -123,19 +123,20 @@ POST /api/videos/{video_id}/scripts/generate
 **위치**: `app/services/video_script_generation_service.py`
 
 **주요 기능**:
+
 - 교육 원문 → VideoScript JSON 변환 (LLM 호출)
 - JSON 파싱 + Pydantic 스키마 검증
 - 실패 시 자동 복구 (최대 2회 재시도)
 
 **입력 옵션** (`ScriptGenerationOptions`):
 
-| 옵션 | 기본값 | 설명 |
-|------|--------|------|
-| `language` | `"ko"` | 언어 코드 |
-| `target_minutes` | `3` | 목표 영상 길이 (분) |
-| `max_chapters` | `5` | 최대 챕터 수 |
-| `max_scenes_per_chapter` | `6` | 챕터당 최대 씬 수 |
-| `style` | `"friendly_security_training"` | 스크립트 스타일 |
+| 옵션                     | 기본값                         | 설명                |
+| ------------------------ | ------------------------------ | ------------------- |
+| `language`               | `"ko"`                         | 언어 코드           |
+| `target_minutes`         | `3`                            | 목표 영상 길이 (분) |
+| `max_chapters`           | `5`                            | 최대 챕터 수        |
+| `max_scenes_per_chapter` | `6`                            | 챕터당 최대 씬 수   |
+| `style`                  | `"friendly_security_training"` | 스크립트 스타일     |
 
 ### 2.3 Pydantic 스키마
 
@@ -314,7 +315,7 @@ POST /api/videos/{video_id}/render-jobs
 
 ### 4.1 Phase 1: 스크립트 생성 데이터 흐름
 
-```
+````
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    STEP 1: 사용자 입력                               │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -344,7 +345,7 @@ POST /api/videos/{video_id}/render-jobs
 ├─────────────────────────────────────────────────────────────────────┤
 │  POST {LLM_BASE_URL}/v1/chat/completions                            │
 │  {                                                                  │
-│    "model": "Qwen/Qwen2.5-7B-Instruct",                             │
+│    "model": "meta-llama/Meta-Llama-3-8B-Instruct",                             │
 │    "messages": [...],                                               │
 │    "temperature": 0.3,                                              │
 │    "max_tokens": 4096                                               │
@@ -408,7 +409,7 @@ POST /api/videos/{video_id}/render-jobs
 │  📏 크기: ~5KB                                                       │
 │  📊 구조: 2-3 챕터 × 3-6 씬 = 10-18개 씬                             │
 └─────────────────────────────────────────────────────────────────────┘
-```
+````
 
 ### 4.2 Phase 2: 영상 렌더링 데이터 흐름
 
@@ -574,19 +575,19 @@ POST /api/videos/{video_id}/render-jobs
 
 ### 4.4 각 단계별 데이터 형태 요약 표
 
-| 단계 | 입력 형태 | 입력 크기 | 출력 형태 | 출력 크기 |
-|------|-----------|-----------|-----------|-----------|
-| source_text | `str` | ~2KB | - | - |
-| LLM Prompt | `List[Dict]` | ~6KB | - | - |
-| LLM Response | - | - | `str` | ~5KB |
-| Pydantic 검증 | `Dict` | ~5KB | `Dict` | ~5KB |
-| SceneInfo 추출 | `Dict` | ~5KB | `List[SceneInfo]` | ~3KB |
-| TTS 합성 | `str` | ~2K자 | `Binary (MP3)` | ~1.5MB |
-| 이미지 생성 | `SceneInfo` | ~200B/씬 | `Binary (PNG)` | ~150KB/씬 |
-| FFmpeg 합성 | MP3 + PNG | ~3.5MB | `Binary (MP4)` | ~25MB |
-| 자막 생성 | `List[SceneInfo]` | ~3KB | `Text (SRT)` | ~1KB |
-| 썸네일 추출 | MP4 | ~25MB | `Binary (JPG)` | ~50KB |
-| Storage 업로드 | Binary Files | ~25MB | `StorageResult` | URLs |
+| 단계           | 입력 형태         | 입력 크기 | 출력 형태         | 출력 크기 |
+| -------------- | ----------------- | --------- | ----------------- | --------- |
+| source_text    | `str`             | ~2KB      | -                 | -         |
+| LLM Prompt     | `List[Dict]`      | ~6KB      | -                 | -         |
+| LLM Response   | -                 | -         | `str`             | ~5KB      |
+| Pydantic 검증  | `Dict`            | ~5KB      | `Dict`            | ~5KB      |
+| SceneInfo 추출 | `Dict`            | ~5KB      | `List[SceneInfo]` | ~3KB      |
+| TTS 합성       | `str`             | ~2K자     | `Binary (MP3)`    | ~1.5MB    |
+| 이미지 생성    | `SceneInfo`       | ~200B/씬  | `Binary (PNG)`    | ~150KB/씬 |
+| FFmpeg 합성    | MP3 + PNG         | ~3.5MB    | `Binary (MP4)`    | ~25MB     |
+| 자막 생성      | `List[SceneInfo]` | ~3KB      | `Text (SRT)`      | ~1KB      |
+| 썸네일 추출    | MP4               | ~25MB     | `Binary (JPG)`    | ~50KB     |
+| Storage 업로드 | Binary Files      | ~25MB     | `StorageResult`   | URLs      |
 
 ---
 
@@ -624,35 +625,35 @@ POST /api/videos/{video_id}/render-jobs
 
 **위치**: `app/clients/llm_client.py`
 
-| 설정 | 값 |
-|------|-----|
-| API | OpenAI-compatible |
-| Model | `Qwen/Qwen2.5-7B-Instruct` |
-| Temperature | 0.3 |
-| Max Tokens | 4096 |
-| Timeout | 30초 |
-| Retry | 1회 |
+| 설정        | 값                                    |
+| ----------- | ------------------------------------- |
+| API         | OpenAI-compatible                     |
+| Model       | `meta-llama/Meta-Llama-3-8B-Instruct` |
+| Temperature | 0.3                                   |
+| Max Tokens  | 4096                                  |
+| Timeout     | 30초                                  |
+| Retry       | 1회                                   |
 
 ### 5.3 TTS Provider
 
 **위치**: `app/clients/tts_provider.py`
 
-| Provider | 환경변수 | 음성 | 비고 |
-|----------|----------|------|------|
-| `mock` | `TTS_PROVIDER=mock` | - | 테스트용 무음 |
-| `gtts` | `TTS_PROVIDER=gtts` | Google TTS | 무료 |
-| `polly` | `TTS_PROVIDER=polly` | Seoyeon (KR) | AWS |
-| `gcp` | `TTS_PROVIDER=gcp` | ko-KR-Wavenet-A | Google Cloud |
+| Provider | 환경변수             | 음성            | 비고          |
+| -------- | -------------------- | --------------- | ------------- |
+| `mock`   | `TTS_PROVIDER=mock`  | -               | 테스트용 무음 |
+| `gtts`   | `TTS_PROVIDER=gtts`  | Google TTS      | 무료          |
+| `polly`  | `TTS_PROVIDER=polly` | Seoyeon (KR)    | AWS           |
+| `gcp`    | `TTS_PROVIDER=gcp`   | ko-KR-Wavenet-A | Google Cloud  |
 
 ### 5.4 Storage Adapter
 
 **위치**: `app/clients/storage_adapter.py`
 
-| Provider | 환경변수 | 용도 |
-|----------|----------|------|
-| `local` | `STORAGE_PROVIDER=local` | 개발용 |
-| `s3` | `STORAGE_PROVIDER=s3` | 운영용 (AWS S3) |
-| `backend_presigned` | `STORAGE_PROVIDER=backend_presigned` | 백엔드 위임 |
+| Provider            | 환경변수                             | 용도            |
+| ------------------- | ------------------------------------ | --------------- |
+| `local`             | `STORAGE_PROVIDER=local`             | 개발용          |
+| `s3`                | `STORAGE_PROVIDER=s3`                | 운영용 (AWS S3) |
+| `backend_presigned` | `STORAGE_PROVIDER=backend_presigned` | 백엔드 위임     |
 
 ### 5.5 Backend Client
 
@@ -661,10 +662,12 @@ POST /api/videos/{video_id}/render-jobs
 **Integration Points**:
 
 1. **Render Spec 조회** (Phase 38):
+
    - `GET /internal/scripts/{script_id}/render-spec`
    - RenderSpec 스냅샷 반환
 
 2. **Script 완료 콜백**:
+
    - `POST /video/script/complete`
    - Payload: `{ material_id, script_id, script, version }`
 
@@ -767,15 +770,15 @@ WS /ws/videos/{video_id}/render-progress
 
 ### 7.2 Progress 단계별 범위
 
-| Step | 시작 | 종료 | 메시지 |
-|------|------|------|--------|
-| VALIDATE_SCRIPT | 0% | 15% | 스크립트 검증 중... |
-| GENERATE_TTS | 15% | 40% | TTS 생성 중... |
-| GENERATE_SUBTITLE | 40% | 50% | 자막 생성 중... |
-| RENDER_SLIDES | 50% | 60% | 슬라이드 렌더링 중... |
-| COMPOSE_VIDEO | 60% | 85% | 영상 합성 중... |
-| UPLOAD_ASSETS | 85% | 95% | 에셋 업로드 중... |
-| FINALIZE | 95% | 100% | 완료 처리 중... |
+| Step              | 시작 | 종료 | 메시지                |
+| ----------------- | ---- | ---- | --------------------- |
+| VALIDATE_SCRIPT   | 0%   | 15%  | 스크립트 검증 중...   |
+| GENERATE_TTS      | 15%  | 40%  | TTS 생성 중...        |
+| GENERATE_SUBTITLE | 40%  | 50%  | 자막 생성 중...       |
+| RENDER_SLIDES     | 50%  | 60%  | 슬라이드 렌더링 중... |
+| COMPOSE_VIDEO     | 60%  | 85%  | 영상 합성 중...       |
+| UPLOAD_ASSETS     | 85%  | 95%  | 에셋 업로드 중...     |
+| FINALIZE          | 95%  | 100% | 완료 처리 중...       |
 
 ---
 
@@ -792,12 +795,12 @@ WS /ws/videos/{video_id}/render-progress
 
 ### 8.2 Rendering 에러
 
-| Error Code | 원인 | 처리 |
-|------------|------|------|
+| Error Code              | 원인           | 처리           |
+| ----------------------- | -------------- | -------------- |
 | `STORAGE_UPLOAD_FAILED` | S3 업로드 실패 | 임시 파일 정리 |
-| `CANCELED` | 사용자 취소 | Task.cancel() |
-| `NO_RENDER_SPEC` | 스펙 없음 | FAILED 상태 |
-| `JOB_NOT_FOUND` | Job 없음 | 404 반환 |
+| `CANCELED`              | 사용자 취소    | Task.cancel()  |
+| `NO_RENDER_SPEC`        | 스펙 없음      | FAILED 상태    |
+| `JOB_NOT_FOUND`         | Job 없음       | 404 반환       |
 
 ### 8.3 Task 취소
 
@@ -813,65 +816,65 @@ WS /ws/videos/{video_id}/render-progress
 
 ### 9.1 Script Generation
 
-| 환경변수 | 설명 | 기본값 |
-|----------|------|--------|
-| `LLM_BASE_URL` | LLM 서버 URL | - |
-| `LLM_MODEL_NAME` | 모델명 | `Qwen/Qwen2.5-7B-Instruct` |
-| `AI_ENV` | mock/real 모드 | `mock` |
+| 환경변수         | 설명           | 기본값                                |
+| ---------------- | -------------- | ------------------------------------- |
+| `LLM_BASE_URL`   | LLM 서버 URL   | -                                     |
+| `LLM_MODEL_NAME` | 모델명         | `meta-llama/Meta-Llama-3-8B-Instruct` |
+| `AI_ENV`         | mock/real 모드 | `mock`                                |
 
 ### 9.2 Video Rendering
 
-| 환경변수 | 설명 | 기본값 |
-|----------|------|--------|
-| `TTS_PROVIDER` | TTS 제공자 | `mock` |
-| `RENDER_OUTPUT_DIR` | 렌더링 출력 디렉토리 | `./video_output` |
-| `VIDEO_VISUAL_STYLE` | basic/animated | `basic` |
-| `VIDEO_WIDTH` | 영상 너비 | `1280` |
-| `VIDEO_HEIGHT` | 영상 높이 | `720` |
-| `VIDEO_FPS` | 프레임레이트 | `24` |
-| `VIDEO_FADE_DURATION` | Fade 전환 시간 (초) | `0.5` |
-| `VIDEO_KENBURNS_ZOOM` | Ken Burns 줌 비율 | `1.1` |
+| 환경변수              | 설명                 | 기본값           |
+| --------------------- | -------------------- | ---------------- |
+| `TTS_PROVIDER`        | TTS 제공자           | `mock`           |
+| `RENDER_OUTPUT_DIR`   | 렌더링 출력 디렉토리 | `./video_output` |
+| `VIDEO_VISUAL_STYLE`  | basic/animated       | `basic`          |
+| `VIDEO_WIDTH`         | 영상 너비            | `1280`           |
+| `VIDEO_HEIGHT`        | 영상 높이            | `720`            |
+| `VIDEO_FPS`           | 프레임레이트         | `24`             |
+| `VIDEO_FADE_DURATION` | Fade 전환 시간 (초)  | `0.5`            |
+| `VIDEO_KENBURNS_ZOOM` | Ken Burns 줌 비율    | `1.1`            |
 
 ### 9.3 Storage
 
-| 환경변수 | 설명 | 기본값 |
-|----------|------|--------|
-| `STORAGE_PROVIDER` | 저장소 타입 | `local` |
-| `STORAGE_LOCAL_DIR` | 로컬 저장 경로 | `./data/assets` |
-| `STORAGE_PUBLIC_BASE_URL` | 퍼블릭 URL 기본경로 | `/assets` |
-| `AWS_S3_BUCKET` | S3 버킷명 | - |
-| `AWS_S3_REGION` | S3 리전 | `ap-northeast-2` |
-| `S3_ENDPOINT_URL` | MinIO 엔드포인트 | - |
+| 환경변수                  | 설명                | 기본값           |
+| ------------------------- | ------------------- | ---------------- |
+| `STORAGE_PROVIDER`        | 저장소 타입         | `local`          |
+| `STORAGE_LOCAL_DIR`       | 로컬 저장 경로      | `./data/assets`  |
+| `STORAGE_PUBLIC_BASE_URL` | 퍼블릭 URL 기본경로 | `/assets`        |
+| `AWS_S3_BUCKET`           | S3 버킷명           | -                |
+| `AWS_S3_REGION`           | S3 리전             | `ap-northeast-2` |
+| `S3_ENDPOINT_URL`         | MinIO 엔드포인트    | -                |
 
 ### 9.4 Backend Integration
 
-| 환경변수 | 설명 | 기본값 |
-|----------|------|--------|
-| `BACKEND_BASE_URL` | 백엔드 서버 URL | - |
-| `BACKEND_API_TOKEN` | API 인증 토큰 | - |
-| `BACKEND_INTERNAL_TOKEN` | Internal API 토큰 | - |
-| `BACKEND_TIMEOUT_SEC` | 요청 타임아웃 | `30` |
+| 환경변수                 | 설명              | 기본값 |
+| ------------------------ | ----------------- | ------ |
+| `BACKEND_BASE_URL`       | 백엔드 서버 URL   | -      |
+| `BACKEND_API_TOKEN`      | API 인증 토큰     | -      |
+| `BACKEND_INTERNAL_TOKEN` | Internal API 토큰 | -      |
+| `BACKEND_TIMEOUT_SEC`    | 요청 타임아웃     | `30`   |
 
 ---
 
 ## 10. 주요 파일 위치
 
-| 역할 | 파일 경로 |
-|------|-----------|
-| 스크립트 생성 | `app/services/video_script_generation_service.py` |
-| LLM 클라이언트 | `app/clients/llm_client.py` |
-| 렌더 Job 관리 | `app/services/render_job_runner.py` |
-| 실제 렌더러 | `app/services/video_renderer_real.py` |
-| 비디오 합성 | `app/services/video_composer.py` |
-| TTS 제공자 | `app/clients/tts_provider.py` |
-| 스토리지 | `app/clients/storage_adapter.py` |
-| 백엔드 통신 | `app/clients/backend_client.py` |
-| API 엔드포인트 (v1) | `app/api/v1/videos.py` |
-| API 엔드포인트 (v2) | `app/api/v2/videos.py` |
-| WebSocket | `app/api/v1/ws_render_progress.py` |
-| Render Spec 모델 | `app/models/render_spec.py` |
-| Video Render 모델 | `app/models/video_render.py` |
-| 설정 | `app/core/config.py` |
+| 역할                | 파일 경로                                         |
+| ------------------- | ------------------------------------------------- |
+| 스크립트 생성       | `app/services/video_script_generation_service.py` |
+| LLM 클라이언트      | `app/clients/llm_client.py`                       |
+| 렌더 Job 관리       | `app/services/render_job_runner.py`               |
+| 실제 렌더러         | `app/services/video_renderer_real.py`             |
+| 비디오 합성         | `app/services/video_composer.py`                  |
+| TTS 제공자          | `app/clients/tts_provider.py`                     |
+| 스토리지            | `app/clients/storage_adapter.py`                  |
+| 백엔드 통신         | `app/clients/backend_client.py`                   |
+| API 엔드포인트 (v1) | `app/api/v1/videos.py`                            |
+| API 엔드포인트 (v2) | `app/api/v2/videos.py`                            |
+| WebSocket           | `app/api/v1/ws_render_progress.py`                |
+| Render Spec 모델    | `app/models/render_spec.py`                       |
+| Video Render 모델   | `app/models/video_render.py`                      |
+| 설정                | `app/core/config.py`                              |
 
 ---
 
@@ -902,4 +905,4 @@ WS /ws/videos/{video_id}/render-progress
 
 ---
 
-*이 문서는 실제 코드 분석을 기반으로 작성되었습니다.*
+_이 문서는 실제 코드 분석을 기반으로 작성되었습니다._

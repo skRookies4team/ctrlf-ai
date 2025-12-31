@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: Optional[HttpUrl] = None
 
     # LLM 모델명 (vLLM 등에서 필요)
-    LLM_MODEL_NAME: str = "Qwen/Qwen2.5-7B-Instruct"
+    LLM_MODEL_NAME: str = "meta-llama/Meta-Llama-3-8B-Instruct"
 
     # 임베딩 서비스 URL (LLM과 분리된 임베딩 서버 사용 시)
     EMBEDDING_BASE_URL: Optional[HttpUrl] = None
@@ -210,8 +210,17 @@ class Settings(BaseSettings):
     # =========================================================================
     # Phase 48/50: Low-relevance Gate 설정
     # =========================================================================
-    # Phase 50 변경: score soft 게이트 (max_score < threshold → 최소 1개 유지)
-    # 0.60→0.55 하향 조정 (관측 분포 0.54~0.60대에서 자주 0개 되는 문제 해결)
+    # L2 거리 기준 (낮을수록 유사함, 0 = 완전 일치)
+    # - 0.0~0.8: 매우 유사
+    # - 0.8~1.2: 유사
+    # - 1.2~1.5: 중간
+    # - 1.5 이상: 관련성 낮음
+    # min_score(최소 거리)가 이 값보다 크면 low relevance로 판정
+    RAG_MAX_L2_DISTANCE: float = 1.5
+
+    # max_score 기준 (유사도 점수, 높을수록 유사함)
+    # - 0.55 미만: 관련성 낮음으로 판정
+    # max_score가 이 값보다 작으면 low relevance로 판정
     RAG_MIN_MAX_SCORE: float = 0.55
 
     # 앵커 키워드 게이트용 불용어 (쉼표 구분)
