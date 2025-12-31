@@ -192,22 +192,28 @@ RAG_GAP_TARGET_INTENTS = {
     "JOB_EDU_QA",
 }
 
-# RAG Gap 판정용 점수 임계값
-RAG_GAP_SCORE_THRESHOLD = 0.4
+# RAG Gap 판정용 L2 거리 임계값
+# L2 거리: 낮을수록 유사함 (0 = 완전 일치)
+# 최소 거리가 이 값보다 크면 (= 너무 멀면) Gap 후보로 판정
+RAG_GAP_L2_THRESHOLD = 1.5
 
 
 def is_rag_gap_candidate(
     domain: str,
     intent: str,
     rag_source_count: int,
-    rag_max_score: Optional[float],
-    score_threshold: float = RAG_GAP_SCORE_THRESHOLD,
+    rag_min_l2_distance: Optional[float],
+    l2_threshold: float = RAG_GAP_L2_THRESHOLD,
 ) -> bool:
     """
-    RAG Gap 후보 여부를 판정합니다.
+    RAG Gap 후보 여부를 판정합니다. (L2 거리 기준)
+
+    L2 거리: 낮을수록 유사함 (0 = 완전 일치)
+    - min_l2_distance = 가장 유사한 결과의 거리
+    - min_l2_distance > threshold → 가장 가까운 결과도 너무 멀다 → Gap 후보
 
     POLICY/EDU 도메인에서 사규/교육 관련 질문인데 RAG 검색 결과가 없거나
-    점수가 낮은 경우 True를 반환합니다.
+    거리가 너무 먼 경우 True를 반환합니다.
 
     이 플래그는 "추후 사규/교육 콘텐츠 보완 추천"을 위한 것이며,
     최종 사용자 답변 내용에는 직접적인 영향을 주지 않습니다.
@@ -216,8 +222,8 @@ def is_rag_gap_candidate(
         domain: 도메인 (Domain Enum value 또는 문자열)
         intent: 의도 (IntentType Enum value 또는 문자열)
         rag_source_count: RAG 검색 결과 개수
-        rag_max_score: RAG 검색 결과 중 최고 점수 (None이면 결과 없음)
-        score_threshold: RAG Gap으로 판정할 점수 임계값 (기본: 0.4)
+        rag_min_l2_distance: RAG 검색 결과 중 최소 L2 거리 (None이면 결과 없음)
+        l2_threshold: RAG Gap으로 판정할 L2 거리 임계값 (기본: 1.5)
 
     Returns:
         bool: RAG Gap 후보이면 True, 아니면 False
@@ -226,11 +232,11 @@ def is_rag_gap_candidate(
         >>> is_rag_gap_candidate("POLICY", "POLICY_QA", 0, None)
         True  # POLICY 도메인, 결과 0건
 
-        >>> is_rag_gap_candidate("POLICY", "POLICY_QA", 3, 0.3)
-        True  # POLICY 도메인, 최고 점수가 임계값 미만
+        >>> is_rag_gap_candidate("POLICY", "POLICY_QA", 3, 1.8)
+        True  # POLICY 도메인, 최소 거리가 임계값 초과 (너무 멀음)
 
         >>> is_rag_gap_candidate("POLICY", "POLICY_QA", 3, 0.8)
-        False  # POLICY 도메인, 최고 점수가 충분히 높음
+        False  # POLICY 도메인, 최소 거리가 충분히 가까움
 
         >>> is_rag_gap_candidate("INCIDENT", "INCIDENT_REPORT", 0, None)
         False  # INCIDENT 도메인은 대상이 아님
@@ -248,12 +254,12 @@ def is_rag_gap_candidate(
     if rag_source_count == 0:
         return True
 
-    # 점수가 없으면 Gap이 아님 (결과가 있지만 점수가 없는 경우)
-    if rag_max_score is None:
+    # 거리가 없으면 Gap이 아님 (결과가 있지만 거리가 없는 경우)
+    if rag_min_l2_distance is None:
         return False
 
-    # 최고 점수가 임계값 미만이면 Gap 후보
-    return rag_max_score < score_threshold
+    # 최소 거리가 임계값 초과면 Gap 후보 (너무 멀면)
+    return rag_min_l2_distance > l2_threshold
 
 
 # =============================================================================
@@ -1073,19 +1079,19 @@ class ChatService:
         if backend_data_fetched or route in backend_api_routes or route in mixed_routes:
             backend_latency_ms = self._backend_data.get_last_latency_ms()
 
-        # Phase 14: RAG Gap 후보 판정
-        # RAG 결과에서 최고 점수 추출
-        rag_max_score: Optional[float] = None
+        # Phase 14: RAG Gap 후보 판정 (L2 거리 기준)
+        # RAG 결과에서 최소 L2 거리 추출 (낮을수록 유사함)
+        rag_min_l2_distance: Optional[float] = None
         if sources:
             scores = [s.score for s in sources if s.score is not None]
-            rag_max_score = max(scores) if scores else None
+            rag_min_l2_distance = min(scores) if scores else None
 
         # RAG Gap 후보 여부 계산
         rag_gap_candidate_flag = is_rag_gap_candidate(
             domain=domain,
             intent=intent.value,
             rag_source_count=len(sources),
-            rag_max_score=rag_max_score,
+            rag_min_l2_distance=rag_min_l2_distance,
         )
 
         # Build metadata with extended fields for logging

@@ -15,14 +15,14 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 
 ## 연동 서비스
 
-| 서비스          | 주소                  | 설명                      |
-| --------------- | --------------------- | ------------------------- |
-| **vLLM**        | `your-llm-server:port`  | LLM (Qwen2.5-7B-Instruct) |
-| **Embedding**   | `your-embedding-server:port`  | 임베딩 (ko-sroberta)      |
-| **Milvus**      | `your-milvus-host:19540` | 벡터 DB                   |
-| **RAGFlow**     | `localhost:9380`      | RAG 파이프라인            |
-| **ctrlf-back**  | Spring                | 백엔드 API                |
-| **ctrlf-front** | React                 | 프론트엔드                |
+| 서비스          | 주소                         | 설명                      |
+| --------------- | ---------------------------- | ------------------------- |
+| **vLLM**        | `your-llm-server:port`       | LLM (Qwen2.5-7B-Instruct) |
+| **Embedding**   | `your-embedding-server:port` | 임베딩 (ko-sroberta)      |
+| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                   |
+| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인            |
+| **ctrlf-back**  | Spring                       | 백엔드 API                |
+| **ctrlf-front** | React                        | 프론트엔드                |
 
 ## 빠른 시작
 
@@ -156,24 +156,28 @@ curl http://localhost:8000/health
 ```
 
 **성공 응답:**
+
 ```json
-{"status":"healthy","version":"0.1.0"}
+{ "status": "healthy", "version": "0.1.0" }
 ```
 
 ### Step 3: 채팅 테스트
 
 **방법 A - CLI (권장):**
+
 ```bash
 python chat_cli.py
 ```
 
 **방법 B - Swagger UI:**
+
 ```
 브라우저에서 http://localhost:8000/docs 접속
 → /ai/chat/messages → Try it out → Execute
 ```
 
 **방법 C - curl (PowerShell):**
+
 ```powershell
 curl -X POST http://localhost:8000/ai/chat/messages `
   -H "Content-Type: application/json" `
@@ -198,12 +202,12 @@ curl -X POST http://localhost:8000/internal/ai/render-jobs `
 
 ### 문제 해결
 
-| 증상 | 해결 방법 |
-|------|----------|
-| `Connection refused` | AI Gateway 실행 확인 |
-| `LLM timeout` | .env의 LLM_BASE_URL 확인 |
-| `Milvus error` | .env의 MILVUS_HOST/PORT 확인 |
-| `Callback failed` | 백엔드 서비스 실행 확인 |
+| 증상                 | 해결 방법                    |
+| -------------------- | ---------------------------- |
+| `Connection refused` | AI Gateway 실행 확인         |
+| `LLM timeout`        | .env의 LLM_BASE_URL 확인     |
+| `Milvus error`       | .env의 MILVUS_HOST/PORT 확인 |
+| `Callback failed`    | 백엔드 서비스 실행 확인      |
 
 ## API 엔드포인트
 
@@ -216,12 +220,12 @@ curl -X POST http://localhost:8000/internal/ai/render-jobs `
 
 ### 교육 영상 생성 (Backend → AI)
 
-| 메서드 | 경로                                        | 설명                 |
-| ------ | ------------------------------------------- | -------------------- |
-| POST   | `/internal/ai/source-sets/{id}/start`       | 소스셋 처리 시작     |
-| GET    | `/internal/ai/source-sets/{id}/status`      | 처리 상태 조회       |
-| POST   | `/internal/ai/render-jobs`                  | 렌더 잡 생성         |
-| POST   | `/ai/video/job/{job_id}/start`              | 영상 생성 시작       |
+| 메서드 | 경로                                   | 설명             |
+| ------ | -------------------------------------- | ---------------- |
+| POST   | `/internal/ai/source-sets/{id}/start`  | 소스셋 처리 시작 |
+| GET    | `/internal/ai/source-sets/{id}/status` | 처리 상태 조회   |
+| POST   | `/internal/ai/render-jobs`             | 렌더 잡 생성     |
+| POST   | `/ai/video/job/{job_id}/start`         | 영상 생성 시작   |
 
 ### FAQ/퀴즈
 
@@ -246,7 +250,7 @@ AI_ENV=real
 
 # LLM 서버 (vLLM - 채팅 + 임베딩 통합)
 LLM_BASE_URL=http://your-llm-server:port
-LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
 EMBEDDING_MODEL_NAME=BAAI/bge-m3
 
 # Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)

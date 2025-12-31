@@ -19,11 +19,12 @@ Phase 44: 2nd-chance retrieval & Query Normalization
 - 과도한 공백/특수문자 정규화
 
 Phase 45: Similarity 분포 로깅 (디버깅/진단용)
-- 검색 결과의 similarity 점수 분포 로깅 (min/max/avg)
+- 검색 결과의 L2 거리 분포 로깅 (min/max/avg)
 - 0건 결과 시 원인 분석을 위한 상세 로깅
 
-Phase 48: Low-relevance Gate
-- max_score < RAG_MIN_MAX_SCORE → sources=[] 강등
+Phase 48: Low-relevance Gate (L2 거리 기준)
+- min_score(최소 거리) > RAG_MAX_L2_DISTANCE → sources soft 강등
+- L2 거리: 낮을수록 유사함 (0 = 완전 일치)
 - 앵커 키워드가 sources 텍스트에 없으면 → sources=[] 강등
 - 저관련 검색 결과로 '근거 있는 척' 하는 현상 방지
 """
@@ -138,11 +139,15 @@ def log_similarity_distribution(
     domain: str,
 ) -> None:
     """
-    Phase 45: 검색 결과의 similarity 분포를 로깅합니다.
+    Phase 45: 검색 결과의 L2 거리 분포를 로깅합니다.
 
     디버깅/진단용으로, 검색 결과가 0건일 때 원인 분석에 유용합니다.
-    - 검색 결과 수, min/max/avg similarity 점수 로깅
-    - 점수 구간별 분포 로깅 (0.9+, 0.7-0.9, 0.5-0.7, <0.5)
+    - 검색 결과 수, min/max/avg L2 거리 로깅
+    - L2 거리 구간별 분포 로깅 (낮을수록 유사함)
+      - <0.8: 매우 유사
+      - 0.8~1.2: 유사
+      - 1.2~1.5: 중간
+      - >=1.5: 관련성 낮음
 
     Args:
         sources: RAG 검색 결과 리스트
@@ -154,7 +159,7 @@ def log_similarity_distribution(
         # Phase 48.1: ASCII-safe query preview
         query_safe = ascii_safe_preview(query_preview, 50)
         logger.info(
-            f"[Similarity] {search_stage}: 0 results | "
+            f"[L2Distance] {search_stage}: 0 results | "
             f"domain={domain} | query='{query_safe}'"
         )
         return
@@ -162,25 +167,25 @@ def log_similarity_distribution(
     scores = [s.score for s in sources if s.score is not None]
     if not scores:
         logger.info(
-            f"[Similarity] {search_stage}: {len(sources)} results (no scores) | "
+            f"[L2Distance] {search_stage}: {len(sources)} results (no scores) | "
             f"domain={domain}"
         )
         return
 
-    min_score = min(scores)
-    max_score = max(scores)
+    min_score = min(scores)  # 최소 거리 = 가장 유사
+    max_score = max(scores)  # 최대 거리 = 가장 멀음
     avg_score = sum(scores) / len(scores)
 
-    # 점수 구간별 분포
-    high = sum(1 for s in scores if s >= 0.9)
-    mid_high = sum(1 for s in scores if 0.7 <= s < 0.9)
-    mid_low = sum(1 for s in scores if 0.5 <= s < 0.7)
-    low = sum(1 for s in scores if s < 0.5)
+    # L2 거리 구간별 분포 (낮을수록 좋음)
+    very_close = sum(1 for s in scores if s < 0.8)        # 매우 유사
+    close = sum(1 for s in scores if 0.8 <= s < 1.2)      # 유사
+    medium = sum(1 for s in scores if 1.2 <= s < 1.5)     # 중간
+    far = sum(1 for s in scores if s >= 1.5)              # 관련성 낮음
 
     logger.info(
-        f"[Similarity] {search_stage}: {len(sources)} results | "
+        f"[L2Distance] {search_stage}: {len(sources)} results | "
         f"min={min_score:.3f}, max={max_score:.3f}, avg={avg_score:.3f} | "
-        f"distribution: [>=0.9:{high}, 0.7-0.9:{mid_high}, 0.5-0.7:{mid_low}, <0.5:{low}] | "
+        f"distribution: [<0.8:{very_close}, 0.8-1.2:{close}, 1.2-1.5:{medium}, >=1.5:{far}] | "
         f"domain={domain}"
     )
 
@@ -343,14 +348,18 @@ def apply_low_relevance_gate(
     domain: str,
 ) -> Tuple[List["ChatSource"], Optional[str]]:
     """
-    Phase 48/50: 저관련 검색 결과를 필터링합니다.
+    Phase 48/50: 저관련 검색 결과를 필터링합니다. (L2 거리 기준)
+
+    L2 거리: 낮을수록 유사함 (0 = 완전 일치)
+    - min_score(최소 거리) = 가장 유사한 결과의 거리
+    - min_score > threshold → 가장 가까운 결과도 너무 멀다 → low relevance
 
     Phase 50 개선:
-    - score_gate: max_score < threshold 시에도 최소 1개는 유지 (soft gate)
+    - score_gate: min_score > threshold 시에도 최소 1개는 유지 (soft gate)
     - anchor_gate: 미매칭 시에도 최소 ANCHOR_GATE_MIN_KEEP개는 유지
 
     두 가지 게이트를 적용:
-    A. score soft 게이트: max_score < RAG_MIN_MAX_SCORE → 경고만, 최소 1개 유지
+    A. L2 거리 soft 게이트: min_score > RAG_MAX_L2_DISTANCE → 경고만, 최소 1개 유지
     B. 앵커 키워드 soft 게이트: 핵심어 미매칭 → 경고만, 최소 1개 유지
 
     Args:
@@ -368,32 +377,33 @@ def apply_low_relevance_gate(
     if not sources:
         return sources, None
 
-    # score 계산
+    # L2 거리 계산 (낮을수록 유사함)
     scores = [s.score for s in sources if s.score is not None]
     if not scores:
         # score가 없는 경우 → 통과 (RAGFlow 등에서 score 없이 반환하는 경우)
         return sources, None
 
-    max_score = max(scores)
+    min_score = min(scores)  # 최소 거리 = 가장 유사한 결과
+    max_score = max(scores)  # 최대 거리 = 가장 먼 결과
     avg_score = sum(scores) / len(scores)
-    min_threshold = settings.RAG_MIN_MAX_SCORE
+    max_l2_threshold = settings.RAG_MAX_L2_DISTANCE
 
     # Phase 50: 안전장치 - 최소 유지 개수
     min_keep = ANCHOR_GATE_MIN_KEEP
 
-    # Gate A: score soft 게이트
-    if max_score < min_threshold:
+    # Gate A: L2 거리 soft 게이트 (최소 거리가 threshold보다 크면 = 너무 멀면)
+    if min_score > max_l2_threshold:
         # Phase 50: 완전 drop 대신 최소 min_keep개 유지
         kept_sources = sources[:min_keep]
         query_safe = ascii_safe_preview(query, 50)
         logger.warning(
-            f"[LowRelevanceGate] SOFT_DEMOTE by score_gate | "
-            f"max_score={max_score:.3f} < threshold={min_threshold} | "
+            f"[LowRelevanceGate] SOFT_DEMOTE by l2_distance_gate | "
+            f"min_score={min_score:.3f} > threshold={max_l2_threshold} (too far) | "
             f"query='{query_safe}' | domain={domain} | "
-            f"avg_score={avg_score:.3f} | top_k={len(sources)} | "
+            f"avg_score={avg_score:.3f} | max_score={max_score:.3f} | top_k={len(sources)} | "
             f"kept_count={len(kept_sources)} (min_keep={min_keep})"
         )
-        return kept_sources, "max_score_below_threshold_soft"
+        return kept_sources, "min_l2_distance_above_threshold_soft"
 
     # Gate B: 앵커 키워드 soft 게이트
     anchor_keywords = extract_anchor_keywords(query)
@@ -408,7 +418,7 @@ def apply_low_relevance_gate(
             f"[LowRelevanceGate] SOFT_DEMOTE by anchor_gate | "
             f"anchor_keywords={keywords_safe} not found in sources | "
             f"query='{query_safe}' | domain={domain} | "
-            f"max_score={max_score:.3f} | avg_score={avg_score:.3f} | "
+            f"min_score={min_score:.3f} | avg_score={avg_score:.3f} | "
             f"top_k={len(sources)} | kept_count={len(kept_sources)} (min_keep={min_keep})"
         )
         return kept_sources, "no_anchor_term_match_soft"
@@ -417,7 +427,7 @@ def apply_low_relevance_gate(
     query_safe = ascii_safe_preview(query, 30)
     logger.info(
         f"[LowRelevanceGate] PASSED | "
-        f"max_score={max_score:.3f} >= threshold={min_threshold} | "
+        f"min_score={min_score:.3f} <= threshold={max_l2_threshold} | "
         f"anchor_match=True | query='{query_safe}' | domain={domain}"
     )
     return sources, None
