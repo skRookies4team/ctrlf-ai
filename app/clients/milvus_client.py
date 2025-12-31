@@ -566,7 +566,7 @@ class MilvusSearchClient:
         )
 
         output = []
-         for hits in results:
+        for hits in results:
             for hit in hits:
                 entity = hit.entity
 

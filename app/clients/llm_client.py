@@ -130,33 +130,6 @@ class LLMClient:
         "or check the LLM service status."
     )
 
-    # Phase 52: 영어 감지용 정규식 패턴 (ASCII Alphabets)
-    ENGLISH_PATTERN = re.compile(r"[a-zA-Z]")
-    ENGLISH_THRESHOLD = 10  # 영어 문자가 이 개수 이상이면 영어 문장으로 간주
-    # 영어 재생성 최대 시도 횟수
-    MAX_ENGLISH_RETRY = 2
-
-    @staticmethod
-    def _contains_english(text: str) -> bool:
-        """텍스트에 영어 문자가 과도하게 포함되어 있는지 확인합니다."""
-        english_chars = LLMClient.ENGLISH_PATTERN.findall(text)
-        return len(english_chars) >= LLMClient.ENGLISH_THRESHOLD
-
-    @staticmethod
-    def _remove_english_sentences(text: str) -> str:
-        """
-        영어가 과도하게 포함된 문장을 제거합니다.
-
-        문장 단위로 분리 후 영어가 과도하게 포함된 문장만 제거합니다.
-        """
-        # 문장 분리 (마침표, 물음표, 느낌표 기준)
-        sentences = re.split(r"(?<=[.!?。！？])\s*", text)
-        # 영어가 과도하지 않은 문장만 유지
-        korean_sentences = [
-            s for s in sentences if s.strip() and not LLMClient._contains_english(s)
-        ]
-        return " ".join(korean_sentences).strip()
-
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -334,24 +307,6 @@ class LLMClient:
                     error_type=ErrorType.UPSTREAM_ERROR,
                     message="LLM response has empty content",
                 )
-
-            # Phase 52: 영어 감지 및 필터링 (Llama 대응)
-            if self._contains_english(content):
-                logger.warning(
-                    f"LLM response contains excessive English, filtering... "
-                    f"original_length={len(content)}"
-                )
-                content = self._remove_english_sentences(content)
-                logger.info(
-                    f"English filtered: new_length={len(content)}"
-                )
-
-                # 필터링 후 내용이 너무 짧으면 경고
-                if len(content) < 20:
-                    logger.warning(
-                        "Content too short after English filtering, "
-                        "may need manual review"
-                    )
 
             logger.info(
                 f"LLM chat completion success: response_length={len(content)}"
