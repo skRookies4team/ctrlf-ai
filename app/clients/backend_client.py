@@ -39,7 +39,6 @@ Environment Variables:
 """
 
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -51,7 +50,6 @@ from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
 from app.core.retry import BACKEND_RETRY_CONFIG, DEFAULT_BACKEND_TIMEOUT, retry_async_operation
 from app.models.ai_log import AILogEntry, AILogResponse, to_backend_log_payload
-from app.models.faq_candidate import QuestionLog
 
 logger = get_logger(__name__)
 
@@ -62,7 +60,6 @@ logger = get_logger(__name__)
 
 # AI 로그
 BACKEND_AI_LOG_PATH = "/api/ai-logs"
-BACKEND_AI_LOGS_QUERY_PATH = "/api/ai-logs/query"  # 질문 로그 조회
 
 # 교육(EDU) 도메인
 BACKEND_EDU_STATUS_PATH = "/api/edu/status"
@@ -482,81 +479,6 @@ class BackendClient:
         except Exception as e:
             logger.debug(f"Backend health check failed: {e}")
             return False
-
-    async def get_question_logs(
-        self,
-        domain: Optional[str] = None,
-        days_back: int = 30,
-        min_count: int = 1,
-        limit: int = 1000,
-    ) -> List[QuestionLog]:
-        """
-        사용자 질문 로그를 조회합니다.
-        
-        Args:
-            domain: 도메인 필터 (POLICY, EDUCATION 등, 선택)
-            days_back: 조회 기간 (일, 기본 30일)
-            min_count: 최소 질문 빈도 (기본 1회)
-            limit: 최대 조회 개수 (기본 1000개)
-            
-        Returns:
-            List[QuestionLog]: 질문 로그 목록
-        """
-        if not self._base_url:
-            logger.debug("Backend URL not configured, returning empty list")
-            return []
-
-        endpoint = f"{self._base_url}{BACKEND_AI_LOGS_QUERY_PATH}"
-        
-        params: Dict[str, Any] = {
-            "daysBack": days_back,
-            "minCount": min_count,
-            "limit": limit,
-        }
-        if domain:
-            params["domain"] = domain
-
-        try:
-            client = get_async_http_client()
-            headers = self._get_bearer_headers()
-
-            response = await client.get(
-                endpoint,
-                params=params,
-                headers=headers if headers else None,
-                timeout=self._timeout,
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                # 백엔드 응답 형식에 맞게 파싱
-                logs_data = data.get("logs", []) or data.get("data", []) or []
-                return [
-                    QuestionLog(
-                        log_id=str(log.get("id", log.get("logId", ""))),
-                        question_masked=log.get("questionMasked", log.get("question_masked", "")),
-                        domain=log.get("domain", ""),
-                        intent=log.get("intent", ""),
-                        created_at=datetime.fromisoformat(
-                            log.get("createdAt", log.get("created_at", ""))
-                        ) if isinstance(log.get("createdAt", log.get("created_at")), str) 
-                        else datetime.utcnow(),
-                        user_id=log.get("userId", log.get("user_id")),
-                        session_id=log.get("sessionId", log.get("session_id")),
-                        count=log.get("count", 1),
-                    )
-                    for log in logs_data
-                ]
-            else:
-                logger.warning(
-                    f"Backend question logs query failed: status={response.status_code}, "
-                    f"body={response.text[:200]}"
-                )
-                return []
-
-        except Exception as e:
-            logger.warning(f"Backend question logs query error: {e}")
-            return []
 
     # =========================================================================
     # 비즈니스 데이터 조회 (교육, 사고)
