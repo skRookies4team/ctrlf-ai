@@ -18,12 +18,20 @@ from fastapi import APIRouter
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
+    FaqDraft,
     FaqDraftGenerateBatchRequest,
     FaqDraftGenerateBatchResponse,
     FaqDraftGenerateRequest,
     FaqDraftGenerateResponse,
 )
+from app.models.faq_candidate import (
+    AutoFaqGenerateRequest,
+    AutoFaqGenerateResponse,
+)
 from app.services.faq_service import FaqDraftService, FaqGenerationError
+from app.services.question_clustering_service import QuestionClusteringService
+from app.services.faq_candidate_service import FaqCandidateService
+from app.clients.backend_client import get_backend_client
 
 logger = get_logger(__name__)
 
@@ -336,3 +344,171 @@ async def generate_faq_draft_batch(
         success_count=success_count,
         failed_count=failed_count,
     )
+
+
+# =============================================================================
+# 자동 FAQ 생성 파이프라인 (질문 로그 → 클러스터링 → 후보 선정 → 초안 생성)
+# =============================================================================
+
+
+@router.post(
+    "/generate/auto",
+    response_model=AutoFaqGenerateResponse,
+    summary="자동 FAQ 생성 (질문 로그 기반)",
+    description="사용자 질문 로그를 분석하여 자동으로 FAQ 후보를 선정하고 초안을 생성합니다.",
+)
+async def generate_faq_auto(
+    request: AutoFaqGenerateRequest,
+) -> AutoFaqGenerateResponse:
+    """
+    자동 FAQ 생성 파이프라인.
+    
+    전체 흐름:
+    1. 백엔드에서 사용자 질문 로그 조회
+    2. 질문 클러스터링 (유사 질문 그룹화)
+    3. FAQ 후보 선정 (자주 묻는 질문)
+    4. FAQ 초안 생성 (선택적)
+    
+    Args:
+        request: 자동 FAQ 생성 요청
+            - domain: 도메인 필터 (선택)
+            - min_frequency: 최소 질문 빈도 (기본 3회)
+            - days_back: 조회 기간 (일, 기본 30일)
+            - max_candidates: 최대 후보 수 (기본 20개)
+            - auto_generate_drafts: 자동으로 FAQ 초안 생성 여부 (기본 True)
+    
+    Returns:
+        AutoFaqGenerateResponse: 생성 결과
+    """
+    logger.info(
+        f"Auto FAQ generation request: domain={request.domain}, "
+        f"min_frequency={request.min_frequency}, days_back={request.days_back}"
+    )
+
+    try:
+        # 1. 백엔드에서 질문 로그 조회
+        backend_client = get_backend_client()
+        question_logs = await backend_client.get_question_logs(
+            domain=request.domain,
+            days_back=request.days_back,
+            min_count=request.min_frequency,
+            limit=1000,
+        )
+
+        if not question_logs:
+            logger.info("No question logs found")
+            return AutoFaqGenerateResponse(
+                status="SUCCESS",
+                candidates_found=0,
+                drafts_generated=0,
+                drafts_failed=0,
+                candidates=[],
+                drafts=[],
+                error_message=None,
+            )
+
+        logger.info(f"Retrieved {len(question_logs)} question logs")
+
+        # 2. 질문 클러스터링
+        clustering_service = QuestionClusteringService()
+        clusters = await clustering_service.cluster_questions(
+            question_logs=question_logs,
+            domain=request.domain,
+        )
+
+        if not clusters:
+            logger.info("No clusters created")
+            return AutoFaqGenerateResponse(
+                status="SUCCESS",
+                candidates_found=0,
+                drafts_generated=0,
+                drafts_failed=0,
+                candidates=[],
+                drafts=[],
+                error_message=None,
+            )
+
+        logger.info(f"Created {len(clusters)} clusters")
+
+        # 3. FAQ 후보 선정
+        candidate_service = FaqCandidateService()
+        candidates = candidate_service.select_candidates(
+            clusters=clusters,
+            min_frequency=request.min_frequency,
+            max_candidates=request.max_candidates,
+        )
+
+        if not candidates:
+            logger.info("No candidates selected")
+            return AutoFaqGenerateResponse(
+                status="SUCCESS",
+                candidates_found=0,
+                drafts_generated=0,
+                drafts_failed=0,
+                candidates=[],
+                drafts=[],
+                error_message=None,
+            )
+
+        logger.info(f"Selected {len(candidates)} FAQ candidates")
+
+        # 4. FAQ 초안 생성 (선택적)
+        drafts_generated = 0
+        drafts_failed = 0
+        generated_drafts: List[FaqDraft] = []
+
+        if request.auto_generate_drafts:
+            faq_service = get_faq_service()
+            
+            # 각 후보에 대해 FAQ 초안 생성
+            for candidate in candidates:
+                cluster = candidate.cluster
+                try:
+                    draft_request = FaqDraftGenerateRequest(
+                        domain=cluster.domain,
+                        cluster_id=cluster.cluster_id,
+                        canonical_question=cluster.canonical_question,
+                        sample_questions=cluster.sample_questions,
+                        top_docs=[],  # 자동 생성 시 문서는 검색으로 확보
+                    )
+                    
+                    draft = await faq_service.generate_faq_draft(draft_request)
+                    generated_drafts.append(draft)
+                    drafts_generated += 1
+                    logger.debug(
+                        f"Generated FAQ draft for candidate {candidate.candidate_id}: "
+                        f"{draft.faq_draft_id}"
+                    )
+                except Exception as e:
+                    drafts_failed += 1
+                    logger.warning(
+                        f"Failed to generate FAQ draft for candidate {candidate.candidate_id}: {e}"
+                    )
+
+        status = "SUCCESS"
+        if drafts_failed > 0 and drafts_generated == 0:
+            status = "FAILED"
+        elif drafts_failed > 0:
+            status = "PARTIAL"
+
+        return AutoFaqGenerateResponse(
+            status=status,
+            candidates_found=len(candidates),
+            drafts_generated=drafts_generated,
+            drafts_failed=drafts_failed,
+            candidates=candidates,
+            drafts=generated_drafts,
+            error_message=None,
+        )
+
+    except Exception as e:
+        logger.exception(f"Auto FAQ generation failed: {e}")
+        return AutoFaqGenerateResponse(
+            status="FAILED",
+            candidates_found=0,
+            drafts_generated=0,
+            drafts_failed=0,
+            candidates=[],
+            drafts=[],
+            error_message=f"자동 FAQ 생성 실패: {str(e)}",
+        )
