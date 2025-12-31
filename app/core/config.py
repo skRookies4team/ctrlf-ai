@@ -218,11 +218,6 @@ class Settings(BaseSettings):
     # min_score(최소 거리)가 이 값보다 크면 low relevance로 판정
     RAG_MAX_L2_DISTANCE: float = 1.5
 
-    # max_score 기준 (유사도 점수, 높을수록 유사함)
-    # - 0.55 미만: 관련성 낮음으로 판정
-    # max_score가 이 값보다 작으면 low relevance로 판정
-    RAG_MIN_MAX_SCORE: float = 0.55
-
     # 앵커 키워드 게이트용 불용어 (쉼표 구분)
     # Phase 50: 행동 표현은 코드에서 별도 처리 (ACTION_TOKENS, ACTION_SUFFIX_PATTERN)
     # 이 단어들을 제거한 후 남은 토큰이 sources 텍스트에 하나도 없으면 soft 강등

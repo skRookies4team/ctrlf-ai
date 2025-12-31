@@ -84,6 +84,7 @@ from app.models.chat import (
 )
 from app.models.intent import Domain, IntentType, MaskingStage, RouteType, UserRole
 from app.models.router_types import (
+    ClarifyTemplates,
     RouterResult,
     RouterRouteType,
     Tier0Intent,
@@ -91,6 +92,13 @@ from app.models.router_types import (
 )
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, get_llm_client
+from app.clients.personalization_client import PersonalizationClient
+from app.models.personalization import AnswerGeneratorContext
+from app.services.answer_generator import AnswerGenerator
+from app.services.personalization_mapper import (
+    to_personalization_q,
+    is_personalization_request,
+)
 from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
@@ -324,6 +332,8 @@ class ChatService:
         router_orchestrator: Optional[RouterOrchestrator] = None,
         video_progress_service: Optional[VideoProgressService] = None,
         answer_guard_service: Optional[AnswerGuardService] = None,
+        personalization_client: Optional[PersonalizationClient] = None,
+        answer_generator: Optional[AnswerGenerator] = None,
     ) -> None:
         """
         Initialize ChatService.
@@ -338,6 +348,8 @@ class ChatService:
             router_orchestrator: RouterOrchestrator instance. If None, creates a new instance. (Phase 22)
             video_progress_service: VideoProgressService instance. If None, creates a new instance. (Phase 22)
             answer_guard_service: AnswerGuardService instance. If None, creates singleton. (Phase 39)
+            personalization_client: PersonalizationClient instance. If None, creates a new instance. (Personalization)
+            answer_generator: AnswerGenerator instance. If None, creates a new instance. (Personalization)
         """
         # Phase 싱글톤 리팩토링: 클라이언트/서비스 인스턴스 재사용
         self._llm = llm_client or get_llm_client()
@@ -375,6 +387,10 @@ class ChatService:
             guardrail_service=self._guardrail,
             context_formatter=self._context_formatter,
         )
+
+        # Personalization: PersonalizationClient & AnswerGenerator 초기화
+        self._personalization_client = personalization_client or PersonalizationClient()
+        self._answer_generator = answer_generator or AnswerGenerator(llm_client=self._llm)
 
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
@@ -713,6 +729,51 @@ class ChatService:
             # BACKEND_API: Backend만 사용 (RAG 없음)
             logger.info(f"BACKEND_API route: Fetching backend data only")
 
+            # =========================================================
+            # Personalization: 개인화 분기 처리
+            # =========================================================
+            # orchestration_result에서 sub_intent_id 가져오기
+            sub_intent_id = ""
+            if orchestration_result is not None:
+                sub_intent_id = orchestration_result.router_result.sub_intent_id or ""
+
+            # 1) sub_intent_id가 비어 있으면 needs_clarify 응답
+            if not sub_intent_id:
+                logger.info("BACKEND_STATUS without sub_intent_id, returning clarify response")
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                clarify_msg = ClarifyTemplates.BACKEND_STATUS_CLARIFY[0]
+                return ChatResponse(
+                    answer=clarify_msg,
+                    sources=[],
+                    meta=ChatAnswerMeta(
+                        route="CLARIFY",
+                        intent=Tier0Intent.BACKEND_STATUS.value,
+                        domain=domain,
+                        masked=pii_input.has_pii,
+                        has_pii_input=pii_input.has_pii,
+                        latency_ms=latency_ms,
+                    ),
+                )
+
+            # 2) 개인화 Q 확정 (매퍼 사용)
+            personalization_q = to_personalization_q(sub_intent_id, masked_query)
+
+            # 3) 개인화 요청이면: facts 조회 → 답변 생성 → 바로 반환
+            if personalization_q:
+                logger.info(f"Personalization request: sub_intent_id={sub_intent_id} -> Q={personalization_q}")
+                personalization_response = await self._handle_personalization(
+                    q=personalization_q,
+                    user_query=masked_query,
+                    start_time=start_time,
+                    pii_input=pii_input,
+                    req=req,
+                    domain=domain,
+                    intent=intent,
+                )
+                return personalization_response
+
+            # 4) 개인화 아니면 기존 BackendHandler.fetch_for_api() 흐름 유지
+            logger.info(f"Non-personalization BACKEND_API: sub_intent_id={sub_intent_id}")
             backend_context = await self._fetch_backend_data_for_api(
                 user_role=intent_result.user_role,
                 domain=domain,
