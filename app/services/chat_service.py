@@ -98,6 +98,7 @@ from app.services.answer_generator import AnswerGenerator
 from app.services.personalization_mapper import (
     to_personalization_q,
     is_personalization_request,
+    extract_period_from_query,
 )
 from app.services.ai_log_service import AILogService
 from app.services.backend_context_formatter import BackendContextFormatter
@@ -760,10 +761,16 @@ class ChatService:
 
             # 3) 개인화 요청이면: facts 조회 → 답변 생성 → 바로 반환
             if personalization_q:
-                logger.info(f"Personalization request: sub_intent_id={sub_intent_id} -> Q={personalization_q}")
+                # 사용자 쿼리에서 기간 추출 (없으면 None -> 클라이언트에서 디폴트 처리)
+                extracted_period = extract_period_from_query(masked_query)
+                logger.info(
+                    f"Personalization request: sub_intent_id={sub_intent_id} -> Q={personalization_q}, "
+                    f"period={extracted_period}"
+                )
                 personalization_response = await self._handle_personalization(
                     q=personalization_q,
                     user_query=masked_query,
+                    period=extracted_period,
                     start_time=start_time,
                     pii_input=pii_input,
                     req=req,
@@ -1030,34 +1037,6 @@ class ChatService:
         # =====================================================================
         # Phase 39: [D] Korean-only Output Enforcement (언어 가드레일)
         # =====================================================================
-        # 중국어 혼입 탐지 시: 한국어 강제 재생성 1회 시도
-        # 재생성도 실패하면 "언어 오류" 템플릿으로 대체
-        if final_route != RouteType.ERROR:  # 에러 응답은 검증 스킵
-            async def llm_regenerate(prompt: str) -> str:
-                """LLM 재생성 함수."""
-                return await self._llm.generate_chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=None,
-                    temperature=0.2,
-                    max_tokens=1024,
-                )
-
-            korean_valid, korean_answer = await self._answer_guard.enforce_korean_output(
-                answer=raw_answer,
-                llm_regenerate_fn=llm_regenerate,
-                original_query=masked_query,
-                debug_info=debug_info,
-            )
-
-            if not korean_valid:
-                logger.warning("Korean enforcement FAILED - replacing with error template")
-                raw_answer = korean_answer  # 언어 오류 템플릿으로 교체
-                error_type = "LANGUAGE_ERROR"
-                error_message = "중국어 혼입 감지됨"
-                self._last_error_reason = "LANGUAGE_ERROR"
-            else:
-                raw_answer = korean_answer
-
         # Phase 39: 성공 시 마지막 에러 사유 초기화
         if error_type is None:
             self._last_error_reason = None
@@ -1532,6 +1511,7 @@ class ChatService:
         self,
         q: str,
         user_query: str,
+        period: Optional[str],
         start_time: float,
         pii_input: "PiiService.PiiResult",
         req: ChatRequest,
@@ -1546,6 +1526,7 @@ class ChatService:
         Args:
             q: PersonalizationSubIntentId (Q1-Q20)
             user_query: 사용자 질문 (마스킹 처리됨)
+            period: 기간 (this-week|this-month|3m|this-year), None이면 디폴트 사용
             start_time: 요청 시작 시간
             pii_input: PII 입력 마스킹 결과
             req: ChatRequest
@@ -1557,10 +1538,10 @@ class ChatService:
         """
         try:
             # 1) PersonalizationClient로 facts 조회
-            # period는 None으로 전달 -> 클라이언트에서 디폴트 사용
+            # period가 None이면 클라이언트에서 DEFAULT_PERIOD_FOR_INTENT 사용
             facts = await self._personalization_client.resolve_facts(
                 sub_intent_id=q,
-                period=None,
+                period=period,
                 target_dept_id=None,  # TODO: 부서 비교(Q5) 시 dept 파싱 필요
             )
 

@@ -26,11 +26,19 @@ logger = get_logger(__name__)
 
 # 단일 SubIntentId -> Q 매핑 (1:1 대응)
 SUBINTENT_TO_Q: dict[str, str] = {
-    # HR 관련
-    "HR_LEAVE_CHECK": "Q11",       # 남은 연차 일수
+    # HR 관련 - 명확한 sub_intent_id가 있는 경우
     "HR_WELFARE_CHECK": "Q14",     # 복지/식대 포인트
-    "HR_ATTENDANCE_CHECK": "Q20",  # 올해 HR 할 일 (근태 포함)
+    "HR_ATTENDANCE_CHECK": "Q10",  # 내 근태 현황 (Q10이 맞음, Q20은 올해 HR 할일)
+    # HR_LEAVE_CHECK은 query 기반으로 세분화 (아래 _classify_hr_leave 함수)
 }
+
+# HR_LEAVE_CHECK 세분화용 키워드 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
+HR_WELFARE_KEYWORDS = frozenset([
+    "복지", "복지포인트", "복지 포인트", "포인트 잔액", "식대", "선택복지",
+])
+HR_ATTENDANCE_KEYWORDS = frozenset([
+    "근태", "출근", "퇴근", "근태현황", "근태 현황",
+])
 
 # EDU_STATUS_CHECK 세분화용 키워드 매핑
 EDU_STATUS_KEYWORDS: dict[str, list[str]] = {
@@ -93,10 +101,16 @@ def to_personalization_q(
         logger.debug(f"Already personalization Q: {sub_intent_id}")
         return sub_intent_id
 
-    # 직접 매핑 확인
+    # 직접 매핑 확인 (HR_WELFARE_CHECK, HR_ATTENDANCE_CHECK)
     if sub_intent_id in SUBINTENT_TO_Q:
         q = SUBINTENT_TO_Q[sub_intent_id]
         logger.debug(f"Mapped {sub_intent_id} -> {q}")
+        return q
+
+    # HR_LEAVE_CHECK 세분화 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
+    if sub_intent_id == "HR_LEAVE_CHECK":
+        q = _classify_hr_leave(query)
+        logger.debug(f"HR_LEAVE_CHECK classified as {q} for query: {query[:50]}...")
         return q
 
     # EDU_STATUS_CHECK 세분화
@@ -140,6 +154,34 @@ def _classify_edu_status(query: str) -> str:
     return "Q2"
 
 
+def _classify_hr_leave(query: str) -> str:
+    """HR_LEAVE_CHECK를 query 키워드로 Q11/Q14/Q10 중 하나로 세분화합니다.
+
+    RuleRouter가 모든 HR 관련 키워드를 HR_LEAVE_CHECK으로 분류하므로,
+    여기서 query를 분석하여 더 구체적인 Q로 매핑합니다.
+
+    Args:
+        query: 사용자 질문
+
+    Returns:
+        str: Q14 (복지포인트), Q10 (근태), Q11 (기본: 연차)
+    """
+    q_lower = query.lower()
+
+    # Q14: 복지포인트/식대
+    for keyword in HR_WELFARE_KEYWORDS:
+        if keyword in q_lower:
+            return "Q14"
+
+    # Q10: 근태 현황
+    for keyword in HR_ATTENDANCE_KEYWORDS:
+        if keyword in q_lower:
+            return "Q10"
+
+    # 기본: Q11 (연차)
+    return "Q11"
+
+
 # =============================================================================
 # 개인화 대상 여부 판단
 # =============================================================================
@@ -176,3 +218,60 @@ def is_personalization_request(
 
     # 매핑 가능한 SubIntentId
     return sub_intent_id in PERSONALIZATION_SUBINTENTS
+
+
+# =============================================================================
+# 기간(Period) 파싱
+# =============================================================================
+
+# 기간 키워드 매핑
+PERIOD_KEYWORDS: dict[str, str] = {
+    # this-week
+    "이번 주": "this-week",
+    "이번주": "this-week",
+    "금주": "this-week",
+    "이주": "this-week",
+    # this-month
+    "이번 달": "this-month",
+    "이번달": "this-month",
+    "이달": "this-month",
+    "금월": "this-month",
+    # 3m (3개월)
+    "3개월": "3m",
+    "삼개월": "3m",
+    "최근 3개월": "3m",
+    # this-year
+    "올해": "this-year",
+    "금년": "this-year",
+    "이번 년도": "this-year",
+    "이번년도": "this-year",
+}
+
+
+def extract_period_from_query(query: str) -> Optional[str]:
+    """사용자 쿼리에서 기간(period)을 추출합니다.
+
+    Args:
+        query: 사용자 질문
+
+    Returns:
+        Optional[str]: 추출된 기간 (this-week|this-month|3m|this-year) 또는 None
+
+    Examples:
+        >>> extract_period_from_query("이번 달 연차 현황")
+        "this-month"
+
+        >>> extract_period_from_query("올해 교육 이수 현황")
+        "this-year"
+
+        >>> extract_period_from_query("연차 며칠?")
+        None  # 기간 명시 없음 -> 디폴트 사용
+    """
+    q_lower = query.lower()
+
+    for keyword, period in PERIOD_KEYWORDS.items():
+        if keyword in q_lower:
+            logger.debug(f"Period extracted: '{keyword}' -> {period}")
+            return period
+
+    return None
