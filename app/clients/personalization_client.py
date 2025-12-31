@@ -97,6 +97,7 @@ class PersonalizationClient:
     async def resolve_facts(
         self,
         sub_intent_id: str,
+        user_id: str,
         period: Optional[str] = None,
         target_dept_id: Optional[str] = None,
     ) -> PersonalizationFacts:
@@ -107,6 +108,7 @@ class PersonalizationClient:
 
         Args:
             sub_intent_id: Q1-Q20 인텐트 ID
+            user_id: 사용자 ID (X-User-Id 헤더로 전달)
             period: 기간 유형 (this-week|this-month|3m|this-year)
             target_dept_id: 부서 평균 조회 시 대상 부서 ID (Q5에서만 사용)
 
@@ -145,10 +147,14 @@ class PersonalizationClient:
                 target_dept_id=target_dept_id,
             )
 
+            # 헤더에 X-User-Id 추가
+            headers = self._get_auth_headers()
+            headers["X-User-Id"] = user_id
+
             response = await client.post(
                 endpoint,
                 json=request_data.model_dump(exclude_none=True),
-                headers=self._get_auth_headers(),
+                headers=headers,
                 timeout=self._timeout,
             )
 

@@ -110,13 +110,13 @@ def to_personalization_q(
     # HR_LEAVE_CHECK 세분화 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
     if sub_intent_id == "HR_LEAVE_CHECK":
         q = _classify_hr_leave(query)
-        logger.debug(f"HR_LEAVE_CHECK classified as {q} for query: {query[:50]}...")
+        logger.debug(f"HR_LEAVE_CHECK classified as {q}, query_len={len(query)}")
         return q
 
     # EDU_STATUS_CHECK 세분화
     if sub_intent_id == "EDU_STATUS_CHECK":
         q = _classify_edu_status(query)
-        logger.debug(f"EDU_STATUS_CHECK classified as {q} for query: {query[:50]}...")
+        logger.debug(f"EDU_STATUS_CHECK classified as {q}, query_len={len(query)}")
         return q
 
     # 매핑되지 않음 (개인화 대상 아님)

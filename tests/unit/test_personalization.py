@@ -227,7 +227,7 @@ class TestPersonalizationClient:
             mock_settings.BACKEND_API_TOKEN = None
 
             client = PersonalizationClient(base_url=None)
-            facts = await client.resolve_facts("Q11")
+            facts = await client.resolve_facts("Q11", user_id="test_user")
 
             assert facts.sub_intent_id == "Q11"
             assert "remaining_days" in facts.metrics
@@ -243,7 +243,7 @@ class TestPersonalizationClient:
 
             client = PersonalizationClient(base_url=None)
             # Q2는 우선순위가 아님
-            facts = await client.resolve_facts("Q2")
+            facts = await client.resolve_facts("Q2", user_id="test_user")
 
             assert facts.error is not None
             assert facts.error.type == "NOT_IMPLEMENTED"
