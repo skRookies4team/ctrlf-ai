@@ -59,6 +59,74 @@ GitHub Actions → Integration Tests → Run workflow
 
 ---
 
+## 로컬 E2E Smoke 테스트 실행
+
+### 테스트 항목
+
+| 테스트 | 설명 | 필수 환경변수 |
+|--------|------|---------------|
+| `test_llm_service_reachable` | LLM 서비스 연결 확인 | `LLM_BASE_URL` |
+| `test_chat_api_responds` | FastAPI 앱 헬스체크 | - |
+| `test_llm_generates_response` | LLM 응답 생성 확인 | `LLM_BASE_URL` |
+
+### 실행 방법
+
+#### 방법 1: .env 파일 사용 (권장)
+
+```bash
+# 1. .env에 필요한 환경변수 설정
+# LLM_BASE_URL=http://your-llm-server:8001
+
+# 2. .env 로드 후 테스트 실행
+set -a && source .env && set +a
+pytest tests/integration/ -v
+```
+
+#### 방법 2: 환경변수 직접 지정
+
+```bash
+# Linux/Mac
+LLM_BASE_URL=http://localhost:8001 pytest tests/integration/ -v
+
+# Windows PowerShell
+$env:LLM_BASE_URL="http://localhost:8001"; pytest tests/integration/ -v
+
+# Windows CMD
+set LLM_BASE_URL=http://localhost:8001 && pytest tests/integration/ -v
+```
+
+### 선택적 환경변수
+
+| 환경변수 | 기본값 | 설명 |
+|----------|--------|------|
+| `MILVUS_HOST` | - | Milvus 연결 시 필요 |
+| `MILVUS_PORT` | `19530` | Milvus 포트 |
+| `BACKEND_BASE_URL` | - | Spring 백엔드 URL |
+
+### 로컬 vs CI 동작 차이
+
+| 환경 | 필수 환경변수 누락 시 |
+|------|---------------------|
+| **로컬** | 테스트 **skip** (편의성) |
+| **CI** (`GITHUB_ACTIONS=true`) | 즉시 **fail** (strict) |
+
+### 예상 출력
+
+```
+tests/integration/test_e2e_smoke.py::TestServiceHealth::test_llm_service_reachable PASSED
+tests/integration/test_e2e_smoke.py::TestE2ESmoke::test_chat_api_responds PASSED
+tests/integration/test_e2e_smoke.py::TestE2ESmoke::test_llm_generates_response PASSED
+
+3 passed in 2.50s
+```
+
+환경변수 미설정 시:
+```
+3 skipped (local): missing env vars: LLM_BASE_URL (LLM 서비스 URL)
+```
+
+---
+
 ## 트러블슈팅
 
 ### 1. "Missing required env vars" 에러
