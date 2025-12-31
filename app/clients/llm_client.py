@@ -64,6 +64,10 @@ INTERNAL_DOMAIN_PATTERNS: Set[str] = {
 # 내부 IP 대역 (CIDR 체크 대신 간단한 prefix 체크)
 INTERNAL_IP_PREFIXES = ("10.", "172.", "192.168.")
 
+# 외부이지만 허용할 LLM 서버 IP allowlist (운영 정책용)
+ALLOWED_EXTERNAL_LLM_HOSTS: Set[str] = {
+    "58.127.241.84",
+}
 
 def _is_internal_domain(url: str) -> bool:
     """URL이 내부 도메인인지 확인합니다.
@@ -251,19 +255,31 @@ class LLMClient:
 
         base = str(self._base_url).rstrip("/")
 
-        # A5: 외부 도메인 차단 체크
+        # A5: 외부 도메인 차단 체크 (allowlist 예외 허용)
+        parsed = urlparse(base)
+        host = parsed.hostname or ""
+
         if not _is_internal_domain(base):
+            if host not in ALLOWED_EXTERNAL_LLM_HOSTS:
+                logger.warning(
+                    f"EXTERNAL_DOMAIN_BLOCK: LLM base_url blocked: {base}"
+                )
+                emit_security_event_once(
+                    block_type="EXTERNAL_DOMAIN_BLOCK",
+                    blocked=True,
+                    rule_id="LLM_EXTERNAL_DOMAIN",
+                )
+                return self.FALLBACK_MESSAGE
+
+            # ✅ allowlist에 있는 외부 IP는 허용
             logger.warning(
-                f"EXTERNAL_DOMAIN_BLOCK: LLM base_url is not an internal domain: {base}"
+                f"[ALLOWLIST] External LLM host allowed: {host}"
             )
-            # SECURITY 이벤트 발행
             emit_security_event_once(
                 block_type="EXTERNAL_DOMAIN_BLOCK",
-                blocked=True,
+                blocked=False,
                 rule_id="LLM_EXTERNAL_DOMAIN",
             )
-            # 외부 도메인 호출 차단 - fallback 반환
-            return self.FALLBACK_MESSAGE
 
         url = f"{base}/v1/chat/completions"
 
