@@ -287,8 +287,9 @@ class TestConfigValues:
 
     def test_min_max_score_threshold(self):
         """RAG_MIN_MAX_SCORE가 0.55인지 확인"""
-        from app.core.config import get_settings
-        settings = get_settings()
+        from app.core.config import Settings
+        # 캐시 문제 방지를 위해 Settings 클래스 직접 사용
+        settings = Settings()
         assert settings.RAG_MIN_MAX_SCORE == 0.55
 
     def test_anchor_gate_min_keep(self):
