@@ -48,12 +48,12 @@
 
 ### 1.2 핵심 개념
 
-| 개념 | 설명 |
-|------|------|
-| **VideoScript** | LLM이 생성한 스크립트 JSON (chapters/scenes 구조) |
-| **RenderJob** | 영상 렌더링 작업 단위 (QUEUED → PROCESSING → COMPLETED/FAILED) |
-| **RenderSpec** | 백엔드에서 조회한 렌더링 스냅샷 (Phase 38) |
-| **SceneInfo** | 개별 씬 정보 (narration, caption, duration 등) |
+| 개념            | 설명                                                           |
+| --------------- | -------------------------------------------------------------- |
+| **VideoScript** | LLM이 생성한 스크립트 JSON (chapters/scenes 구조)              |
+| **RenderJob**   | 영상 렌더링 작업 단위 (QUEUED → PROCESSING → COMPLETED/FAILED) |
+| **RenderSpec**  | 백엔드에서 조회한 렌더링 스냅샷 (Phase 38)                     |
+| **SceneInfo**   | 개별 씬 정보 (narration, caption, duration 등)                 |
 
 ---
 
@@ -113,15 +113,16 @@ ctrlf-ai/
 
 **주요 엔드포인트**:
 
-| Method | URL | 설명 | 변경 가능 |
-|--------|-----|------|----------|
-| `POST` | `/api/scripts` | 스크립트 생성 | O |
-| `GET` | `/api/scripts/{script_id}` | 스크립트 조회 | O |
-| `POST` | `/api/videos/{video_id}/scripts/generate` | **스크립트 자동 생성 (LLM)** | O |
-| `GET` | `/api/scripts/{script_id}/editor` | 편집용 뷰 조회 | O |
-| `PATCH` | `/api/scripts/{script_id}/editor` | 씬 부분 수정 | O |
+| Method  | URL                                       | 설명                         | 변경 가능 |
+| ------- | ----------------------------------------- | ---------------------------- | --------- |
+| `POST`  | `/api/scripts`                            | 스크립트 생성                | O         |
+| `GET`   | `/api/scripts/{script_id}`                | 스크립트 조회                | O         |
+| `POST`  | `/api/videos/{video_id}/scripts/generate` | **스크립트 자동 생성 (LLM)** | O         |
+| `GET`   | `/api/scripts/{script_id}/editor`         | 편집용 뷰 조회               | O         |
+| `PATCH` | `/api/scripts/{script_id}/editor`         | 씬 부분 수정                 | O         |
 
 **핵심 함수**:
+
 ```python
 # 스크립트 자동 생성 (LLM 호출)
 @router.post("/videos/{video_id}/scripts/generate")
@@ -148,17 +149,18 @@ async def generate_script(video_id: str, request: ScriptGenerateRequest):
 
 **주요 엔드포인트**:
 
-| Method | URL | 설명 | 변경 가능 |
-|--------|-----|------|----------|
-| `POST` | `/api/v2/videos/{video_id}/render-jobs` | **렌더 잡 생성 (idempotent)** | X (API 스펙 고정) |
-| `GET` | `/api/v2/videos/{video_id}/render-jobs` | 잡 목록 조회 | X |
-| `GET` | `/api/v2/videos/{video_id}/render-jobs/{job_id}` | 잡 상세 조회 | X |
-| `POST` | `/api/v2/videos/{video_id}/render-jobs/{job_id}/cancel` | 잡 취소 | X |
-| `GET` | `/api/v2/videos/{video_id}/assets/published` | 발행된 에셋 조회 | X |
-| `POST` | `/ai/video/job/{job_id}/start` | **잡 시작 (Backend → AI)** | X |
-| `POST` | `/ai/video/job/{job_id}/retry` | **잡 재시도 (Backend → AI)** | X |
+| Method | URL                                                     | 설명                          | 변경 가능         |
+| ------ | ------------------------------------------------------- | ----------------------------- | ----------------- |
+| `POST` | `/api/v2/videos/{video_id}/render-jobs`                 | **렌더 잡 생성 (idempotent)** | X (API 스펙 고정) |
+| `GET`  | `/api/v2/videos/{video_id}/render-jobs`                 | 잡 목록 조회                  | X                 |
+| `GET`  | `/api/v2/videos/{video_id}/render-jobs/{job_id}`        | 잡 상세 조회                  | X                 |
+| `POST` | `/api/v2/videos/{video_id}/render-jobs/{job_id}/cancel` | 잡 취소                       | X                 |
+| `GET`  | `/api/v2/videos/{video_id}/assets/published`            | 발행된 에셋 조회              | X                 |
+| `POST` | `/ai/video/job/{job_id}/start`                          | **잡 시작 (Backend → AI)**    | X                 |
+| `POST` | `/ai/video/job/{job_id}/retry`                          | **잡 재시도 (Backend → AI)**  | X                 |
 
 **중요 정책**:
+
 - **Idempotency**: 동일 video_id에 PROCESSING/QUEUED 잡이 있으면 기존 잡 반환
 - **상태 머신**: `QUEUED → PROCESSING → COMPLETED | FAILED`
 - **APPROVED 스크립트만** 렌더 가능
@@ -172,6 +174,7 @@ async def generate_script(video_id: str, request: ScriptGenerateRequest):
 **엔드포인트**: `WS /ws/videos/{video_id}/render-progress`
 
 **이벤트 형태**:
+
 ```json
 {
   "job_id": "uuid",
@@ -195,6 +198,7 @@ async def generate_script(video_id: str, request: ScriptGenerateRequest):
 **핵심 클래스**: `VideoScriptGenerationService`
 
 **주요 메서드**:
+
 ```python
 async def generate_script(
     self,
@@ -211,6 +215,7 @@ async def generate_script(
 ```
 
 **입력 옵션** (`ScriptGenerationOptions`):
+
 ```python
 @dataclass
 class ScriptGenerationOptions:
@@ -222,6 +227,7 @@ class ScriptGenerationOptions:
 ```
 
 **출력 스키마** (`VideoScriptSchema`):
+
 ```python
 class VideoScriptSchema(BaseModel):
     chapters: List[ChapterSchema]  # 챕터 목록
@@ -247,6 +253,7 @@ class SceneSchema(BaseModel):
 **핵심 클래스**: `RenderJobRunner`
 
 **상태 머신**:
+
 ```
               create_job()
                    │
@@ -269,15 +276,16 @@ class SceneSchema(BaseModel):
 
 **주요 메서드**:
 
-| 메서드 | 역할 |
-|--------|------|
-| `create_job()` | 잡 생성 (idempotent) |
-| `start_job()` | 백엔드에서 render-spec 조회 후 실행 시작 |
-| `retry_job()` | 기존 render-spec 스냅샷으로 재시도 |
-| `cancel_job()` | 진행 중인 잡 취소 |
-| `_execute_job_with_spec()` | 7-Step 파이프라인 실행 |
+| 메서드                     | 역할                                     |
+| -------------------------- | ---------------------------------------- |
+| `create_job()`             | 잡 생성 (idempotent)                     |
+| `start_job()`              | 백엔드에서 render-spec 조회 후 실행 시작 |
+| `retry_job()`              | 기존 render-spec 스냅샷으로 재시도       |
+| `cancel_job()`             | 진행 중인 잡 취소                        |
+| `_execute_job_with_spec()` | 7-Step 파이프라인 실행                   |
 
 **Phase 38 스냅샷 정책**:
+
 - `start_job()`: 백엔드에서 render-spec 조회 → DB에 스냅샷 저장
 - `retry_job()`: 기존 스냅샷 재사용 (백엔드 재호출 X)
 
@@ -291,17 +299,18 @@ class SceneSchema(BaseModel):
 
 **7-Step 파이프라인**:
 
-| Step | Enum | 진행률 | 설명 |
-|------|------|--------|------|
-| 1 | `VALIDATE_SCRIPT` | 0% → 15% | 스크립트 검증, SceneInfo 추출 |
-| 2 | `GENERATE_TTS` | 15% → 40% | narration → MP3 합성 |
-| 3 | `GENERATE_SUBTITLE` | 40% → 50% | SRT 자막 생성 |
-| 4 | `RENDER_SLIDES` | 50% → 60% | 이미지 생성 (animated 모드) |
-| 5 | `COMPOSE_VIDEO` | 60% → 85% | FFmpeg 영상 합성 |
-| 6 | `UPLOAD_ASSETS` | 85% → 95% | 스토리지 업로드 |
-| 7 | `FINALIZE` | 95% → 100% | 완료 처리, 콜백 |
+| Step | Enum                | 진행률     | 설명                          |
+| ---- | ------------------- | ---------- | ----------------------------- |
+| 1    | `VALIDATE_SCRIPT`   | 0% → 15%   | 스크립트 검증, SceneInfo 추출 |
+| 2    | `GENERATE_TTS`      | 15% → 40%  | narration → MP3 합성          |
+| 3    | `GENERATE_SUBTITLE` | 40% → 50%  | SRT 자막 생성                 |
+| 4    | `RENDER_SLIDES`     | 50% → 60%  | 이미지 생성 (animated 모드)   |
+| 5    | `COMPOSE_VIDEO`     | 60% → 85%  | FFmpeg 영상 합성              |
+| 6    | `UPLOAD_ASSETS`     | 85% → 95%  | 스토리지 업로드               |
+| 7    | `FINALIZE`          | 95% → 100% | 완료 처리, 콜백               |
 
 **핵심 메서드**:
+
 ```python
 async def execute_step(self, job_id: str, step: RenderStep) -> RenderStepResult:
     """단일 스텝 실행"""
@@ -325,6 +334,7 @@ async def _upload_assets(self, ctx: RealRenderJobContext) -> Dict[str, str]:
 **핵심 클래스**: `VideoComposer`
 
 **주요 메서드**:
+
 ```python
 async def compose(
     self,
@@ -342,6 +352,7 @@ async def compose(
 ```
 
 **FFmpeg 설정**:
+
 ```python
 # Basic 모드
 VIDEO_WIDTH = 1280
@@ -367,14 +378,15 @@ KENBURNS_ZOOM = 1.1  # 줌 비율
 
 **지원 Provider**:
 
-| Provider | 환경변수 | 음성 | 용도 |
-|----------|----------|------|------|
-| `mock` | `TTS_PROVIDER=mock` | 무음 | 테스트 |
-| `gtts` | `TTS_PROVIDER=gtts` | Google | 무료 |
-| `polly` | `TTS_PROVIDER=polly` | Seoyeon (AWS) | 운영 |
-| `gcp` | `TTS_PROVIDER=gcp` | ko-KR-Wavenet-A | 운영 |
+| Provider | 환경변수             | 음성            | 용도   |
+| -------- | -------------------- | --------------- | ------ |
+| `mock`   | `TTS_PROVIDER=mock`  | 무음            | 테스트 |
+| `gtts`   | `TTS_PROVIDER=gtts`  | Google          | 무료   |
+| `polly`  | `TTS_PROVIDER=polly` | Seoyeon (AWS)   | 운영   |
+| `gcp`    | `TTS_PROVIDER=gcp`   | ko-KR-Wavenet-A | 운영   |
 
 **인터페이스**:
+
 ```python
 class BaseTTSProvider(ABC):
     @abstractmethod
@@ -397,13 +409,14 @@ class BaseTTSProvider(ABC):
 
 **지원 Provider**:
 
-| Provider | 환경변수 | 용도 |
-|----------|----------|------|
-| `local` | `STORAGE_PROVIDER=local` | 개발 |
-| `s3` | `STORAGE_PROVIDER=s3` | 운영 (AWS S3) |
+| Provider            | 환경변수                             | 용도               |
+| ------------------- | ------------------------------------ | ------------------ |
+| `local`             | `STORAGE_PROVIDER=local`             | 개발               |
+| `s3`                | `STORAGE_PROVIDER=s3`                | 운영 (AWS S3)      |
 | `backend_presigned` | `STORAGE_PROVIDER=backend_presigned` | 운영 (백엔드 위임) |
 
 **인터페이스**:
+
 ```python
 class BaseStorageProvider(ABC):
     @abstractmethod
@@ -418,6 +431,7 @@ class BaseStorageProvider(ABC):
 ```
 
 **Object Key 규칙**:
+
 ```
 videos/{video_id}/{script_id}/{job_id}/video.mp4
 videos/{video_id}/{script_id}/{job_id}/subtitles.srt
@@ -432,11 +446,11 @@ videos/{video_id}/{script_id}/{job_id}/thumb.jpg
 
 **주요 메서드**:
 
-| 메서드 | 용도 | 방향 |
-|--------|------|------|
-| `fetch_render_spec()` | render-spec 조회 | AI → Backend |
+| 메서드                     | 용도                    | 방향         |
+| -------------------------- | ----------------------- | ------------ |
+| `fetch_render_spec()`      | render-spec 조회        | AI → Backend |
 | `notify_script_complete()` | 스크립트 생성 완료 콜백 | AI → Backend |
-| `notify_job_complete()` | 렌더링 완료 콜백 | AI → Backend |
+| `notify_job_complete()`    | 렌더링 완료 콜백        | AI → Backend |
 
 ---
 
@@ -504,6 +518,7 @@ class RenderSpec(BaseModel):
 ### 4.1 백엔드 → AI 호출 API
 
 #### (1) 영상 생성 시작
+
 ```
 POST /ai/video/job/{jobId}/start
 ```
@@ -511,6 +526,7 @@ POST /ai/video/job/{jobId}/start
 **요청**: 없음 (Path Parameter만)
 
 **응답**:
+
 ```json
 {
   "job_id": "uuid",
@@ -522,6 +538,7 @@ POST /ai/video/job/{jobId}/start
 ```
 
 **에러 코드**:
+
 - `JOB_NOT_FOUND`: 잡 없음 (404)
 - `SCRIPT_FETCH_FAILED`: render-spec 조회 실패 (502)
 - `EMPTY_RENDER_SPEC`: 씬이 없음 (422)
@@ -529,6 +546,7 @@ POST /ai/video/job/{jobId}/start
 ---
 
 #### (2) 영상 생성 재시도
+
 ```
 POST /ai/video/job/{jobId}/retry
 ```
@@ -538,6 +556,7 @@ POST /ai/video/job/{jobId}/retry
 **응답**: 동일
 
 **에러 코드**:
+
 - `JOB_NOT_FOUND`: 잡 없음 (404)
 - `NO_RENDER_SPEC_FOR_RETRY`: 스냅샷 없음 (409)
 
@@ -546,11 +565,13 @@ POST /ai/video/job/{jobId}/retry
 ### 4.2 AI → 백엔드 콜백 API
 
 #### (1) 스크립트 생성 완료
+
 ```
 POST /internal/callbacks/source-sets/{sourceSetId}/complete
 ```
 
 **Body**:
+
 ```json
 {
   "videoId": "uuid",
@@ -559,7 +580,9 @@ POST /internal/callbacks/source-sets/{sourceSetId}/complete
   "documents": [
     { "documentId": "uuid", "status": "COMPLETED", "failReason": null }
   ],
-  "script": { /* 생성된 스크립트 JSON */ },
+  "script": {
+    /* 생성된 스크립트 JSON */
+  },
   "errorCode": null,
   "errorMessage": null
 }
@@ -568,11 +591,13 @@ POST /internal/callbacks/source-sets/{sourceSetId}/complete
 ---
 
 #### (2) 렌더링 완료
+
 ```
 POST /video/job/{jobId}/complete
 ```
 
 **Body**:
+
 ```json
 {
   "jobId": "uuid",
@@ -587,11 +612,13 @@ POST /video/job/{jobId}/complete
 ### 4.3 AI가 백엔드에서 조회하는 API
 
 #### (1) Render-Spec 조회
+
 ```
 GET /internal/scripts/{scriptId}/render-spec
 ```
 
 **응답**:
+
 ```json
 {
   "script_id": "uuid",
@@ -619,12 +646,15 @@ GET /internal/scripts/{scriptId}/render-spec
 > **변경 불가**: DB 스키마와 동일하게 유지
 
 **Job 상태**:
+
 ```
 QUEUED → PROCESSING → COMPLETED | FAILED
 ```
+
 - ~~RENDERING~~ 대신 `PROCESSING` 사용 (DB 정렬)
 
 **Source Set 상태**:
+
 ```
 CREATED → LOCKED → SCRIPT_READY | FAILED
 ```
@@ -708,21 +738,21 @@ CREATED → LOCKED → SCRIPT_READY | FAILED
 
 ### 6.2 LLM 설정
 
-| 설정 | 값 |
-|------|-----|
-| API | OpenAI-compatible |
-| Model | `Qwen/Qwen2.5-7B-Instruct` |
-| Temperature | 0.3 (일관성) |
-| Max Tokens | 4096 |
-| Timeout | 30초 |
+| 설정        | 값                                    |
+| ----------- | ------------------------------------- |
+| API         | OpenAI-compatible                     |
+| Model       | `meta-llama/Meta-Llama-3-8B-Instruct` |
+| Temperature | 0.3 (일관성)                          |
+| Max Tokens  | 4096                                  |
+| Timeout     | 30초                                  |
 
 ### 6.3 TTS 설정
 
-| Provider | Voice | 특징 |
-|----------|-------|------|
-| AWS Polly | Seoyeon | Neural, 고품질 |
-| GCP | ko-KR-Wavenet-A | Wavenet, 고품질 |
-| gTTS | - | 무료, 기본 품질 |
+| Provider  | Voice           | 특징            |
+| --------- | --------------- | --------------- |
+| AWS Polly | Seoyeon         | Neural, 고품질  |
+| GCP       | ko-KR-Wavenet-A | Wavenet, 고품질 |
+| gTTS      | -               | 무료, 기본 품질 |
 
 ### 6.4 FFmpeg 설정
 
@@ -747,7 +777,7 @@ ffmpeg -y \
 ```bash
 # LLM
 LLM_BASE_URL=http://58.127.241.84:1237/
-LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
 
 # TTS
 TTS_PROVIDER=mock  # mock | gtts | polly | gcp
@@ -795,11 +825,13 @@ VIDEO_KENBURNS_ZOOM=1.1
 ### 8.1 절대 변경 금지
 
 1. **API URL 경로**: 백엔드와 협의된 스펙
+
    - `/ai/video/job/{jobId}/start`
    - `/ai/video/job/{jobId}/retry`
    - `/api/v2/videos/{video_id}/render-jobs`
 
 2. **상태값 이름**: DB 스키마와 동일
+
    - `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`
    - ~~RENDERING~~ 사용 금지
 
@@ -888,7 +920,9 @@ curl -X POST http://localhost:8000/ai/video/job/<job_id>/start
 
 ```javascript
 // 브라우저 콘솔
-const ws = new WebSocket('ws://localhost:8000/ws/videos/test-video/render-progress');
+const ws = new WebSocket(
+  "ws://localhost:8000/ws/videos/test-video/render-progress"
+);
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
@@ -929,4 +963,4 @@ scripts.py (API)
 
 ---
 
-*이 문서는 실제 코드 분석을 기반으로 작성되었습니다.*
+_이 문서는 실제 코드 분석을 기반으로 작성되었습니다._

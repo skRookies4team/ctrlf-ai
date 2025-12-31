@@ -146,10 +146,10 @@
 
 ### 2.2 answer_source 값 (현재 사용)
 
-| 값 | 설명 |
-|----|------|
+| 값         | 설명                            |
+| ---------- | ------------------------------- |
 | `TOP_DOCS` | 백엔드에서 제공한 top_docs 사용 |
-| `MILVUS` | Milvus 직접 검색 결과 사용 |
+| `MILVUS`   | Milvus 직접 검색 결과 사용      |
 
 > **Note**: `RAGFLOW`는 더 이상 사용되지 않습니다. 레거시 호환을 위해 Literal에 남아있습니다.
 
@@ -202,14 +202,14 @@ class PiiMaskResult:
 
 ### 파일 위치 및 역할
 
-| 파일 | 역할 |
-|------|------|
-| `app/api/v1/faq.py` | API 엔드포인트 정의 |
-| `app/models/faq.py` | 요청/응답 Pydantic 모델 |
-| `app/services/faq_service.py` | 핵심 비즈니스 로직 |
-| `app/services/pii_service.py` | PII 검출/마스킹 서비스 |
+| 파일                           | 역할                        |
+| ------------------------------ | --------------------------- |
+| `app/api/v1/faq.py`            | API 엔드포인트 정의         |
+| `app/models/faq.py`            | 요청/응답 Pydantic 모델     |
+| `app/services/faq_service.py`  | 핵심 비즈니스 로직          |
+| `app/services/pii_service.py`  | PII 검출/마스킹 서비스      |
 | `app/clients/milvus_client.py` | Milvus 벡터 검색 클라이언트 |
-| `app/clients/llm_client.py` | LLM 호출 클라이언트 |
+| `app/clients/llm_client.py`    | LLM 호출 클라이언트         |
 
 ---
 
@@ -363,6 +363,7 @@ if status == "LOW_RELEVANCE":
 ### 5.1 Stage 0: API 요청 수신
 
 #### 입력 (HTTP Request Body)
+
 ```json
 // POST /ai/faq/generate
 // Content-Type: application/json
@@ -443,13 +444,14 @@ if status == "LOW_RELEVANCE":
 ### 5.3 Stage 5: LLM 호출
 
 #### HTTP 요청
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ LLM HTTP Request                                                         │
 │ POST {LLM_BASE_URL}/v1/chat/completions                                  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ {                                                                        │
-│   "model": "Qwen/Qwen2.5-7B-Instruct",                                   │
+│   "model": "meta-llama/Meta-Llama-3-8B-Instruct",                                   │
 │   "messages": [                                                          │
 │     {                                                                   │
 │       "role": "system",                                                 │
@@ -568,13 +570,13 @@ POST /ai/faq/generate/batch
 
 ### 7.1 에러 코드 정리
 
-| 에러 코드 | 발생 Stage | 원인 |
-|-----------|------------|------|
-| `PII_DETECTED` | Stage 1 | 입력에 PII |
-| `NO_DOCS_FOUND` | Stage 2 | Milvus 검색 결과 없음 |
-| `PII_DETECTED_CONTEXT` | Stage 3 | 검색 결과 snippet에 PII |
-| `LOW_RELEVANCE_CONTEXT` | Stage 8 | LLM이 컨텍스트가 질문과 관련 없다고 판단 |
-| `PII_DETECTED_OUTPUT` | Stage 7 | LLM 출력에 PII |
+| 에러 코드               | 발생 Stage | 원인                                     |
+| ----------------------- | ---------- | ---------------------------------------- |
+| `PII_DETECTED`          | Stage 1    | 입력에 PII                               |
+| `NO_DOCS_FOUND`         | Stage 2    | Milvus 검색 결과 없음                    |
+| `PII_DETECTED_CONTEXT`  | Stage 3    | 검색 결과 snippet에 PII                  |
+| `LOW_RELEVANCE_CONTEXT` | Stage 8    | LLM이 컨텍스트가 질문과 관련 없다고 판단 |
+| `PII_DETECTED_OUTPUT`   | Stage 7    | LLM 출력에 PII                           |
 
 ### 7.2 에러 응답 형식
 
@@ -594,11 +596,11 @@ POST /ai/faq/generate/batch
 
 > **Note**: RAGFlow는 제거되었습니다.
 
-| 서비스 | 클라이언트 | 엔드포인트 | 역할 |
-|--------|-----------|-----------|------|
-| **PII Service** | `PiiService` | `POST {PII_BASE_URL}/mask` | 개인정보 검출/마스킹 |
-| **Milvus** | `MilvusSearchClient` | Milvus gRPC/HTTP | 벡터 검색 |
-| **LLM** | `LLMClient` | `POST {LLM_BASE_URL}/v1/chat/completions` | FAQ 생성 (Qwen2.5-7B) |
+| 서비스          | 클라이언트           | 엔드포인트                                | 역할                  |
+| --------------- | -------------------- | ----------------------------------------- | --------------------- |
+| **PII Service** | `PiiService`         | `POST {PII_BASE_URL}/mask`                | 개인정보 검출/마스킹  |
+| **Milvus**      | `MilvusSearchClient` | Milvus gRPC/HTTP                          | 벡터 검색             |
+| **LLM**         | `LLMClient`          | `POST {LLM_BASE_URL}/v1/chat/completions` | FAQ 생성 (Qwen2.5-7B) |
 
 ### 8.2 외부 서비스 호출 횟수
 
@@ -663,7 +665,7 @@ MILVUS_PORT=19530
 
 # LLM
 LLM_BASE_URL=http://llm-server:8000/v1
-LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
 ```
 
 ---
@@ -711,33 +713,33 @@ LLM_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
 
 ## 부록: 주요 코드 위치 참조
 
-| 기능 | 파일 | 라인 |
-|------|------|------|
-| API 엔드포인트 (단건) | `app/api/v1/faq.py` | 44-169 |
-| API 엔드포인트 (배치) | `app/api/v1/faq.py` | 242-338 |
-| 데이터 모델 | `app/models/faq.py` | 전체 |
-| 메인 서비스 로직 | `app/services/faq_service.py` | 176-256 |
-| 입력 PII 검사 | `app/services/faq_service.py` | 649-694 |
-| Milvus 검색 | `app/services/faq_service.py` | 294-349 |
-| 컨텍스트 PII 검사 | `app/services/faq_service.py` | 742-790 |
-| LLM 메시지 구성 | `app/services/faq_service.py` | 355-394 |
-| 응답 파싱 | `app/services/faq_service.py` | 507-619 |
-| 출력 PII 검사 | `app/services/faq_service.py` | 696-736 |
-| FaqDraft 생성 | `app/services/faq_service.py` | 442-501 |
-| 품질 로그 | `app/services/faq_service.py` | 796-890 |
-| PII 서비스 | `app/services/pii_service.py` | 전체 |
-| Milvus 클라이언트 | `app/clients/milvus_client.py` | 전체 |
-| LLM 클라이언트 | `app/clients/llm_client.py` | 전체 |
+| 기능                  | 파일                           | 라인    |
+| --------------------- | ------------------------------ | ------- |
+| API 엔드포인트 (단건) | `app/api/v1/faq.py`            | 44-169  |
+| API 엔드포인트 (배치) | `app/api/v1/faq.py`            | 242-338 |
+| 데이터 모델           | `app/models/faq.py`            | 전체    |
+| 메인 서비스 로직      | `app/services/faq_service.py`  | 176-256 |
+| 입력 PII 검사         | `app/services/faq_service.py`  | 649-694 |
+| Milvus 검색           | `app/services/faq_service.py`  | 294-349 |
+| 컨텍스트 PII 검사     | `app/services/faq_service.py`  | 742-790 |
+| LLM 메시지 구성       | `app/services/faq_service.py`  | 355-394 |
+| 응답 파싱             | `app/services/faq_service.py`  | 507-619 |
+| 출력 PII 검사         | `app/services/faq_service.py`  | 696-736 |
+| FaqDraft 생성         | `app/services/faq_service.py`  | 442-501 |
+| 품질 로그             | `app/services/faq_service.py`  | 796-890 |
+| PII 서비스            | `app/services/pii_service.py`  | 전체    |
+| Milvus 클라이언트     | `app/clients/milvus_client.py` | 전체    |
+| LLM 클라이언트        | `app/clients/llm_client.py`    | 전체    |
 
 ---
 
 ## 변경 이력
 
-| 날짜 | 내용 |
-|------|------|
+| 날짜       | 내용                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
 | 2025-12-31 | RAGFlow 제거 반영, Milvus 직접 검색으로 변경, API 경로 수정 (`/ai/faq/*`), LLM 모델명 수정 (Qwen2.5-7B) |
-| 2024-12-23 | 초기 작성 |
+| 2024-12-23 | 초기 작성                                                                                               |
 
 ---
 
-*이 문서는 실제 코드 분석을 기반으로 작성되었습니다.*
+_이 문서는 실제 코드 분석을 기반으로 작성되었습니다._
