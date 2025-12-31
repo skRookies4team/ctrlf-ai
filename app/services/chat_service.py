@@ -520,7 +520,7 @@ class ChatService:
         # =====================================================================
         # RouterOrchestrator 사용 여부는 명시적 플래그(ROUTER_ORCHESTRATOR_ENABLED)로 결정합니다.
         # Phase 22 수정: bool(llm_base_url) 대신 명시적 플래그 사용
-        from app.core.config import get_settings
+        # Note: get_settings는 모듈 상단에서 import됨 (테스트 패치 일관성을 위해 함수 내 import 제거)
         settings = get_settings()
         use_router_orchestrator = settings.ROUTER_ORCHESTRATOR_ENABLED
 
