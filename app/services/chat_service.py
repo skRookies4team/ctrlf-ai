@@ -158,6 +158,15 @@ from app.telemetry.metrics import (
     set_rag_metrics,
     rag_metrics_to_rag_info,
 )
+from app.services.forbidden_query_filter import (
+    ForbiddenQueryFilter,
+    ForbiddenCheckResult,
+    get_forbidden_query_filter,
+)
+from app.core.retrieval_context import (
+    set_retrieval_blocked,
+    reset_retrieval_context,
+)
 
 logger = get_logger(__name__)
 
@@ -393,6 +402,15 @@ class ChatService:
         self._personalization_client = personalization_client or PersonalizationClient()
         self._answer_generator = answer_generator or AnswerGenerator(llm_client=self._llm)
 
+        # Phase 50: 금지질문 필터 초기화
+        settings = get_settings()
+        if settings.FORBIDDEN_QUERY_FILTER_ENABLED:
+            self._forbidden_filter = get_forbidden_query_filter(
+                profile=settings.FORBIDDEN_QUERY_PROFILE
+            )
+        else:
+            self._forbidden_filter = None
+
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
         Handle a chat request and generate a response using full pipeline.
@@ -420,6 +438,10 @@ class ChatService:
         """
         start_time = time.perf_counter()
 
+        # Phase 50: 요청 시작 시 retrieval 컨텍스트 초기화
+        # 테스트/동일 루프에서 이전 요청의 blocked 상태가 남아있을 수 있으므로 clear
+        reset_retrieval_context()
+
         # Phase 41: RAG 디버그용 request_id 생성
         request_id = generate_request_id()
 
@@ -438,6 +460,56 @@ class ChatService:
 
         user_query = req.messages[-1].content
         logger.debug(f"User query received: len={len(user_query)}")
+
+        # =====================================================================
+        # Phase 50: 금지질문 필터 (1차 가드) - PII 마스킹 전에 raw_query로 체크
+        # =====================================================================
+        if self._forbidden_filter is not None:
+            forbidden_result = self._forbidden_filter.check(user_query)
+            if forbidden_result.is_forbidden:
+                logger.warning(
+                    f"Forbidden query detected: rule_id={forbidden_result.matched_rule_id}, "
+                    f"decision={forbidden_result.decision}, query_hash={forbidden_result.query_hash}"
+                )
+
+                # Phase 50: 2차 가드용 컨텍스트 플래그 설정
+                set_retrieval_blocked(
+                    blocked=True,
+                    reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                )
+
+                # RAG 검색 없이 즉시 대체 응답 반환
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+                # CHAT_TURN 이벤트 발행 (금지질문)
+                emit_chat_turn_once(
+                    intent_main="FORBIDDEN_QUERY",
+                    route_type="BLOCKED",
+                    domain="UNKNOWN",
+                    rag_used=False,
+                    latency_ms_total=latency_ms,
+                    error_code=None,
+                    pii_detected_input=False,
+                    pii_detected_output=False,
+                )
+
+                # 대체 응답 결정
+                if forbidden_result.example_response:
+                    answer_text = forbidden_result.example_response
+                else:
+                    answer_text = "죄송합니다. 해당 질문에는 답변드리기 어렵습니다. 다른 질문을 해주세요."
+
+                return ChatResponse(
+                    answer=answer_text,
+                    sources=[],
+                    meta=ChatAnswerMeta(
+                        rag_used=False,
+                        latency_ms=latency_ms,
+                        fallback_reason="FORBIDDEN_QUERY",
+                        retrieval_skipped=True,
+                        retrieval_skip_reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}",
+                    ),
+                )
 
         # Step 2: PII Masking (INPUT stage)
         # A7: Fail-Closed 적용 - PII detector 장애 시 안전한 응답 반환

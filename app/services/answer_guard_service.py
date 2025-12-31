@@ -511,7 +511,7 @@ class AnswerGuardService:
         if not is_complaint:
             return None
 
-        logger.info(f"Complaint detected: '{user_query[:30]}...'")
+        logger.info(f"Complaint detected: query_len={len(user_query)}")
 
         # 응답 구성
         apology = AnswerTemplates.COMPLAINT_APOLOGY

@@ -93,6 +93,7 @@ class PersonalizationClient:
         sub_intent_id: str,
         user_id: str,
         period: Optional[str] = None,
+        target_dept_id: Optional[str] = None,
     ) -> PersonalizationFacts:
         """
         개인화 facts를 조회합니다.
@@ -103,6 +104,7 @@ class PersonalizationClient:
             sub_intent_id: Q1-Q20 인텐트 ID
             user_id: 사용자 ID (X-User-Id 헤더로 전달)
             period: 기간 유형 (this-week|this-month|3m|this-year)
+            target_dept_id: 부서 비교 대상 ID (Q5에서만 사용)
 
         Returns:
             PersonalizationFacts: 조회된 facts 데이터 (에러 시 error 필드 포함)
@@ -136,6 +138,7 @@ class PersonalizationClient:
             request_data = PersonalizationResolveRequest(
                 sub_intent_id=sub_intent_id,
                 period=period,
+                target_dept_id=target_dept_id,
             )
 
             # 헤더에 X-User-Id 추가
@@ -163,7 +166,7 @@ class PersonalizationClient:
             else:
                 logger.warning(
                     f"Personalization resolve failed: status={response.status_code}, "
-                    f"body={response.text[:200]}"
+                    f"body_len={len(response.text)}"
                 )
                 return PersonalizationFacts(
                     sub_intent_id=sub_intent_id,
@@ -247,7 +250,8 @@ class PersonalizationClient:
                     "company_average": 80.1,
                 },
                 "extra": {
-                    "dept_name": "개발팀",
+                    "target_dept_id": "D001",
+                    "target_dept_name": "개발팀",
                 },
             },
             "Q6": {  # 가장 많이 틀린 보안 토픽 TOP3

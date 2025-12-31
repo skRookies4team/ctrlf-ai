@@ -188,10 +188,12 @@ class PersonalizationResolveRequest(BaseModel):
     Attributes:
         sub_intent_id: Q1-Q20 인텐트 ID
         period: 기간 유형 (옵션, 기본값 사용 가능)
+        target_dept_id: 부서 비교 대상 ID (Q5에서만 사용)
     """
 
     sub_intent_id: str = Field(..., description="Q1-Q20 인텐트 ID")
     period: Optional[str] = Field(default=None, description="기간 유형 (this-week|this-month|3m|this-year)")
+    target_dept_id: Optional[str] = Field(default=None, description="부서 비교 대상 ID (Q5에서만 사용)")
 
 
 class PersonalizationFacts(BaseModel):

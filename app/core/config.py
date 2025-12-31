@@ -253,6 +253,20 @@ class Settings(BaseSettings):
     # False: 기존 로직 유지 (POLICY_QA/EDUCATION_QA로 분류)
     SUMMARY_INTENT_ENABLED: bool = False
 
+    # =========================================================================
+    # Phase 50: 금지질문 필터 설정 (Forbidden Query Filter)
+    # =========================================================================
+    # 금지질문 필터 활성화 여부
+    # True: 금지질문 룰셋 검사 후 매칭 시 RAG 검색 스킵
+    # False: 금지질문 필터 비활성화 (모든 질문 통과)
+    FORBIDDEN_QUERY_FILTER_ENABLED: bool = True
+
+    # 사용할 금지질문 프로필 ("A" = strict, "B" = practical)
+    FORBIDDEN_QUERY_PROFILE: str = "A"
+
+    # 금지질문 룰셋 JSON 디렉토리 (app/ 기준 상대경로)
+    FORBIDDEN_QUERY_RULESET_DIR: str = "resources/forbidden_queries"
+
     # Embedding 모델 설정 (vLLM 서버에서 사용)
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원

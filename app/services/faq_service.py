@@ -39,6 +39,10 @@ from app.models.faq import (
 )
 from app.models.intent import MaskingStage
 from app.services.pii_service import PiiService
+from app.services.forbidden_query_filter import (
+    ForbiddenQueryFilter,
+    get_forbidden_query_filter,
+)
 
 logger = get_logger(__name__)
 
@@ -171,6 +175,15 @@ class FaqDraftService:
         self._llm = llm_client or LLMClient()
         self._pii_service = pii_service or PiiService()
 
+        # Phase 50: 금지질문 필터 초기화
+        settings = get_settings()
+        if settings.FORBIDDEN_QUERY_FILTER_ENABLED:
+            self._forbidden_filter = get_forbidden_query_filter(
+                profile=settings.FORBIDDEN_QUERY_PROFILE
+            )
+        else:
+            self._forbidden_filter = None
+
         logger.info("FaqDraftService: Milvus search enabled (RAGFlow removed)")
 
     async def generate_faq_draft(
@@ -208,7 +221,7 @@ class FaqDraftService:
                 temperature=0.3,
                 max_tokens=2048,
             )
-            logger.debug(f"LLM response: {llm_response[:500]}...")
+            logger.debug(f"LLM response received: len={len(llm_response)}")
 
         except Exception as e:
             logger.exception(f"LLM call failed: {e}")
@@ -231,13 +244,13 @@ class FaqDraftService:
         if status == "LOW_RELEVANCE":
             if settings.FAQ_LOW_RELEVANCE_BLOCK:
                 # 차단 모드: 에러 발생
-                logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
+                logger.warning(f"Low relevance context: cluster_id={req.cluster_id}, query_len={len(req.canonical_question)}")
                 raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
             else:
                 # 경고 모드: 경고만 출력하고 계속 진행
                 logger.warning(
                     f"Low relevance context detected but continuing "
-                    f"(cluster_id={req.cluster_id}, question='{req.canonical_question[:50]}...')"
+                    f"(cluster_id={req.cluster_id}, query_len={len(req.canonical_question)})"
                 )
                 # status를 SUCCESS로 강제 변경하여 FAQ 생성 허용
                 parsed["status"] = "SUCCESS"
@@ -310,7 +323,20 @@ class FaqDraftService:
         Raises:
             FaqGenerationError: 검색 실패 또는 결과 없음
         """
-        logger.info(f"Searching Milvus for: '{req.canonical_question[:50]}...'")
+        logger.info(f"Searching Milvus: cluster_id={req.cluster_id}, query_len={len(req.canonical_question)}")
+
+        # Phase 50: 금지질문 필터 체크 (Milvus 호출 전)
+        if self._forbidden_filter is not None:
+            forbidden_result = self._forbidden_filter.check(req.canonical_question)
+            if forbidden_result.is_forbidden:
+                logger.warning(
+                    f"FaqService: Forbidden query detected, skipping Milvus search: "
+                    f"rule_id={forbidden_result.matched_rule_id}, "
+                    f"query_hash={forbidden_result.query_hash}"
+                )
+                raise FaqGenerationError(
+                    f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                )
 
         try:
             # Milvus 벡터 검색 (text 포함)
@@ -328,7 +354,7 @@ class FaqDraftService:
 
         # 결과가 없으면 NO_DOCS_FOUND 에러
         if not results:
-            logger.warning(f"No documents found in Milvus for query: '{req.canonical_question[:50]}...'")
+            logger.warning(f"No documents found in Milvus: cluster_id={req.cluster_id}, query_len={len(req.canonical_question)}")
             raise FaqGenerationError("NO_DOCS_FOUND")
 
         # RagSearchResult로 변환 (Milvus 응답 형식)

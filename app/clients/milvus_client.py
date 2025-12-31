@@ -38,6 +38,7 @@ from pymilvus import connections, Collection, utility
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.retrieval_context import check_retrieval_allowed, RetrievalBlockedError
 from app.models.chat import ChatSource
 from app.utils.debug_log import dbg_retrieval_target, dbg_retrieval_top5
 
@@ -610,7 +611,13 @@ class MilvusSearchClient:
 
         Returns:
             List[Dict[str, Any]]: 검색 결과 리스트
+
+        Raises:
+            RetrievalBlockedError: 금지질문으로 retrieval이 차단된 경우
         """
+        # Phase 50: 2차 가드 - contextvars 플래그 체크
+        check_retrieval_allowed("MilvusSearchClient.search")
+
         top_k = top_k or self._top_k
 
         logger.info(
@@ -655,7 +662,14 @@ class MilvusSearchClient:
         기존 RagflowClient.search_as_sources()와 호환되는 인터페이스입니다.
 
         Phase 48: RAG_DATASET_FILTER_ENABLED=True 시 domain에 따른 dataset_id 필터 적용
+        Phase 50: 2차 가드 - contextvars 플래그 체크
+
+        Raises:
+            RetrievalBlockedError: 금지질문으로 retrieval이 차단된 경우
         """
+        # Phase 50: 2차 가드 - contextvars 플래그 체크
+        check_retrieval_allowed("MilvusSearchClient.search_as_sources")
+
         settings = get_settings()
 
         # Phase 48: domain → dataset_id 필터 생성
