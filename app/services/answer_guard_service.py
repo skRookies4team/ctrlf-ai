@@ -62,7 +62,7 @@ class AnswerGuardError(str, Enum):
 
     NO_RAG_EVIDENCE = "NO_RAG_EVIDENCE"  # RAG 근거 없음
     CITATION_HALLUCINATION = "CITATION_HALLUCINATION"  # 가짜 조항 인용
-    LANGUAGE_ERROR = "LANGUAGE_ERROR"  # 언어 오류 (중국어 혼입)
+    LANGUAGE_ERROR = "LANGUAGE_ERROR"  # 언어 오류 (영어 혼입)
     REQUEST_ID_MISMATCH = "REQUEST_ID_MISMATCH"  # request_id 불일치
 
 
@@ -115,9 +115,9 @@ CITATION_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-# [D] 중국어 문자 범위 (CJK Unified Ideographs)
-CHINESE_CHAR_PATTERN = re.compile(r"[\u4E00-\u9FFF]")
-CHINESE_THRESHOLD = 3  # 중국어 문자가 이 개수 이상이면 실패로 간주
+# [D] 영어 문자 범위 (ASCII Alphabets)
+ENGLISH_CHAR_PATTERN = re.compile(r"[a-zA-Z]")
+ENGLISH_THRESHOLD = 10  # 영어 문자가 이 개수 이상이면 실패로 간주 (전문용어 허용)
 
 
 # =============================================================================
@@ -275,7 +275,7 @@ class DebugInfo:
     citation_valid: bool = True
     citation_blocked_patterns: List[str] = field(default_factory=list)
     language_valid: bool = True
-    chinese_char_count: int = 0
+    english_char_count: int = 0
 
     def to_log_dict(self) -> Dict[str, Any]:
         """로그용 딕셔너리로 변환 (개인정보 제외)."""
@@ -305,7 +305,7 @@ class DebugInfo:
                 "citation_valid": self.citation_valid,
                 "blocked_patterns": self.citation_blocked_patterns,
                 "language_valid": self.language_valid,
-                "chinese_chars": self.chinese_char_count,
+                "english_chars": self.english_char_count,
             },
         }
 
@@ -736,27 +736,27 @@ class AnswerGuardService:
         text: str,
         debug_info: Optional[DebugInfo] = None,
     ) -> Tuple[bool, int]:
-        """텍스트에 중국어가 혼입되었는지 검사합니다.
+        """텍스트에 영어가 혼입되었는지 검사합니다.
 
         Args:
             text: 검사할 텍스트
             debug_info: 디버그 정보 객체
 
         Returns:
-            (is_valid, chinese_char_count) 튜플
+            (is_valid, english_char_count) 튜플
         """
-        chinese_chars = CHINESE_CHAR_PATTERN.findall(text)
-        count = len(chinese_chars)
+        english_chars = ENGLISH_CHAR_PATTERN.findall(text)
+        count = len(english_chars)
 
-        is_valid = count < CHINESE_THRESHOLD
+        is_valid = count < ENGLISH_THRESHOLD
 
         if debug_info:
             debug_info.language_valid = is_valid
-            debug_info.chinese_char_count = count
+            debug_info.english_char_count = count
 
         if not is_valid:
             logger.warning(
-                f"Language check FAILED: {count} Chinese characters detected"
+                f"Language check FAILED: {count} English characters detected"
             )
 
         return (is_valid, count)
@@ -770,7 +770,7 @@ class AnswerGuardService:
     ) -> Tuple[bool, str]:
         """한국어 출력을 강제합니다.
 
-        [D] 중국어 혼입 탐지 시:
+        [D] 영어 혼입 탐지 시:
         1) "한국어로만 다시 작성" 강제 프롬프트로 1회 재생성
         2) 재생성도 실패하면 "언어 오류" 템플릿
 
@@ -799,7 +799,7 @@ class AnswerGuardService:
 
         try:
             regenerate_prompt = (
-                "이전 답변에 중국어가 섞여 있었습니다. "
+                "이전 답변에 영어가 섞여 있었습니다. "
                 "반드시 한국어로만 다시 답변해 주세요.\n\n"
                 f"원래 질문: {original_query}"
             )
@@ -815,7 +815,7 @@ class AnswerGuardService:
             else:
                 logger.warning(
                     f"Korean-only regeneration failed: "
-                    f"still {count_2} Chinese chars"
+                    f"still {count_2} English chars"
                 )
                 return (False, AnswerTemplates.LANGUAGE_ERROR)
 
