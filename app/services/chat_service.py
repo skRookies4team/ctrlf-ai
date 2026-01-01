@@ -167,6 +167,10 @@ from app.core.retrieval_context import (
     set_retrieval_blocked,
     reset_retrieval_context,
 )
+from app.core.backend_context import (
+    set_backend_blocked,
+    reset_backend_context,
+)
 
 logger = get_logger(__name__)
 
@@ -438,9 +442,10 @@ class ChatService:
         """
         start_time = time.perf_counter()
 
-        # Phase 50: 요청 시작 시 retrieval 컨텍스트 초기화
+        # Phase 50 / Step 3: 요청 시작 시 컨텍스트 초기화
         # 테스트/동일 루프에서 이전 요청의 blocked 상태가 남아있을 수 있으므로 clear
         reset_retrieval_context()
+        reset_backend_context()
 
         # Phase 41: RAG 디버그용 request_id 생성
         request_id = generate_request_id()
@@ -462,54 +467,79 @@ class ChatService:
         logger.debug(f"User query received: len={len(user_query)}")
 
         # =====================================================================
-        # Phase 50: 금지질문 필터 (1차 가드) - PII 마스킹 전에 raw_query로 체크
+        # Phase 50 / Step 3: 금지질문 필터 (1차 가드) - PII 마스킹 전에 raw_query로 체크
+        # Step 3 정책:
+        #   - BOTH (skip_rag=True & skip_backend_api=True): 즉시 canned 응답
+        #   - BACKEND-only (skip_rag=False & skip_backend_api=True): Backend 차단, RAG 허용
+        #   - RAG-only (skip_rag=True & skip_backend_api=False): RAG 차단, Backend 허용
         # =====================================================================
+        # Step 3: 금지질문 판정 결과를 저장 (후속 라우팅에서 사용)
+        forbidden_result: Optional[ForbiddenCheckResult] = None
+
         if self._forbidden_filter is not None:
             forbidden_result = self._forbidden_filter.check(user_query)
             if forbidden_result.is_forbidden:
                 logger.warning(
                     f"Forbidden query detected: rule_id={forbidden_result.matched_rule_id}, "
-                    f"decision={forbidden_result.decision}, query_hash={forbidden_result.query_hash}"
+                    f"decision={forbidden_result.decision}, "
+                    f"skip_rag={forbidden_result.skip_rag}, skip_backend_api={forbidden_result.skip_backend_api}, "
+                    f"query_hash={forbidden_result.query_hash}"
                 )
 
-                # Phase 50: 2차 가드용 컨텍스트 플래그 설정
-                set_retrieval_blocked(
-                    blocked=True,
-                    reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
-                )
+                # Step 3: 2차 가드용 컨텍스트 플래그 설정 (각각 독립적으로)
+                if forbidden_result.skip_rag:
+                    set_retrieval_blocked(
+                        blocked=True,
+                        reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                    )
+                if forbidden_result.skip_backend_api:
+                    set_backend_blocked(
+                        blocked=True,
+                        reason=f"FORBIDDEN_BACKEND:{forbidden_result.matched_rule_id}"
+                    )
 
-                # RAG 검색 없이 즉시 대체 응답 반환
-                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                # Step 3: BOTH 차단 (skip_rag=True & skip_backend_api=True) → 즉시 canned 응답
+                if forbidden_result.skip_rag and forbidden_result.skip_backend_api:
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-                # CHAT_TURN 이벤트 발행 (금지질문)
-                emit_chat_turn_once(
-                    intent_main="FORBIDDEN_QUERY",
-                    route_type="BLOCKED",
-                    domain="UNKNOWN",
-                    rag_used=False,
-                    latency_ms_total=latency_ms,
-                    error_code=None,
-                    pii_detected_input=False,
-                    pii_detected_output=False,
-                )
-
-                # 대체 응답 결정
-                if forbidden_result.example_response:
-                    answer_text = forbidden_result.example_response
-                else:
-                    answer_text = "죄송합니다. 해당 질문에는 답변드리기 어렵습니다. 다른 질문을 해주세요."
-
-                return ChatResponse(
-                    answer=answer_text,
-                    sources=[],
-                    meta=ChatAnswerMeta(
+                    # CHAT_TURN 이벤트 발행 (금지질문 - BOTH 차단)
+                    emit_chat_turn_once(
+                        intent_main="FORBIDDEN_QUERY",
+                        route_type="BLOCKED",
+                        domain="UNKNOWN",
                         rag_used=False,
-                        latency_ms=latency_ms,
-                        fallback_reason="FORBIDDEN_QUERY",
-                        retrieval_skipped=True,
-                        retrieval_skip_reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}",
-                    ),
-                )
+                        latency_ms_total=latency_ms,
+                        error_code=None,
+                        pii_detected_input=False,
+                        pii_detected_output=False,
+                    )
+
+                    # 대체 응답 결정
+                    if forbidden_result.example_response:
+                        answer_text = forbidden_result.example_response
+                    else:
+                        answer_text = "죄송합니다. 해당 질문에는 답변드리기 어렵습니다. 다른 질문을 해주세요."
+
+                    return ChatResponse(
+                        answer=answer_text,
+                        sources=[],
+                        meta=ChatAnswerMeta(
+                            rag_used=False,
+                            latency_ms=latency_ms,
+                            fallback_reason="FORBIDDEN_QUERY",
+                            retrieval_skipped=True,
+                            retrieval_skip_reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}",
+                            backend_skipped=True,
+                            backend_skip_reason=f"FORBIDDEN_BACKEND:{forbidden_result.matched_rule_id}",
+                            # Step 6: 금지질문 상세 관측 필드
+                            forbidden_match_type=forbidden_result.match_type,
+                            forbidden_score=forbidden_result.fuzzy_score or forbidden_result.embedding_score,
+                            forbidden_ruleset_version=forbidden_result.ruleset_version,
+                            forbidden_rule_id=forbidden_result.matched_rule_id,
+                        ),
+                    )
+                # Step 3: BACKEND-only 또는 RAG-only 차단 → 계속 진행 (후속 라우팅에서 처리)
+                # 컨텍스트 플래그는 이미 설정되었으므로 2차 가드에서 차단됨
 
         # Step 2: PII Masking (INPUT stage)
         # A7: Fail-Closed 적용 - PII detector 장애 시 안전한 응답 반환
@@ -1209,6 +1239,7 @@ class ChatService:
         # Build metadata with extended fields for logging
         # Phase 10: user_role 추가
         # Phase 12: error_type, error_message, fallback_reason, 개별 latency 추가
+        # Step 6: forbidden 관측 필드 추가
         meta = ChatAnswerMeta(
             user_role=intent_result.user_role.value,  # Phase 10: 역할 정보 포함
             used_model="internal-llm",  # TODO: Get actual model name from LLM response
@@ -1232,6 +1263,47 @@ class ChatService:
             backend_latency_ms=backend_latency_ms,
             # Phase 14: RAG Gap 후보 플래그
             rag_gap_candidate=rag_gap_candidate_flag,
+            # Step 3/6: 금지질문 관측 필드 (BACKEND-only/RAG-only 케이스)
+            retrieval_skipped=(
+                forbidden_result.skip_rag
+                if forbidden_result and forbidden_result.is_forbidden
+                else False
+            ),
+            retrieval_skip_reason=(
+                f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                if forbidden_result and forbidden_result.is_forbidden and forbidden_result.skip_rag
+                else None
+            ),
+            backend_skipped=(
+                forbidden_result.skip_backend_api
+                if forbidden_result and forbidden_result.is_forbidden
+                else False
+            ),
+            backend_skip_reason=(
+                f"FORBIDDEN_BACKEND:{forbidden_result.matched_rule_id}"
+                if forbidden_result and forbidden_result.is_forbidden and forbidden_result.skip_backend_api
+                else None
+            ),
+            forbidden_match_type=(
+                forbidden_result.match_type
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
+            forbidden_score=(
+                forbidden_result.fuzzy_score or forbidden_result.embedding_score
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
+            forbidden_ruleset_version=(
+                forbidden_result.ruleset_version
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
+            forbidden_rule_id=(
+                forbidden_result.matched_rule_id
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
         )
 
         # Phase 12: 메트릭 기록
