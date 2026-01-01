@@ -17,6 +17,7 @@ facts 조회 API 호출을 담당합니다.
 from typing import Optional
 
 from app.clients.http_client import get_async_http_client
+from app.core.backend_context import check_backend_allowed
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.personalization import (
@@ -108,7 +109,13 @@ class PersonalizationClient:
 
         Returns:
             PersonalizationFacts: 조회된 facts 데이터 (에러 시 error 필드 포함)
+
+        Raises:
+            BackendBlockedError: Backend API가 차단된 경우 (금지질문)
         """
+        # Step 3: 2차 가드 - Backend API 차단 여부 확인
+        check_backend_allowed("PersonalizationClient.resolve_facts")
+
         # 기본 period 설정 (미지정 시)
         if period is None:
             period = DEFAULT_PERIOD_FOR_INTENT.get(sub_intent_id, PeriodType.THIS_YEAR).value
