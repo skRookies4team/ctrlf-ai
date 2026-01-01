@@ -243,6 +243,32 @@ class ChatAnswerMeta(BaseModel):
         default=None,
         description="Reason for skipping retrieval (e.g., FORBIDDEN_QUERY:rule_id)",
     )
+    # Step 3: Backend API 차단 정보
+    backend_skipped: bool = Field(
+        default=False,
+        description="Whether Backend API was skipped (e.g., forbidden query)",
+    )
+    backend_skip_reason: Optional[str] = Field(
+        default=None,
+        description="Reason for skipping Backend API (e.g., FORBIDDEN_BACKEND:rule_id)",
+    )
+    # Step 6: 금지질문 필터 상세 관측 필드 (임계값 튜닝/오탐 분석용)
+    forbidden_match_type: Optional[str] = Field(
+        default=None,
+        description="Match engine type: exact, fuzzy, embedding (null if not forbidden)",
+    )
+    forbidden_score: Optional[float] = Field(
+        default=None,
+        description="Match score: fuzzy(0-100) or embedding(0-1) (null if exact or not forbidden)",
+    )
+    forbidden_ruleset_version: Optional[str] = Field(
+        default=None,
+        description="Ruleset version used for matching",
+    )
+    forbidden_rule_id: Optional[str] = Field(
+        default=None,
+        description="Matched rule ID (e.g., FR-A-001)",
+    )
 
 
 class ChatResponse(BaseModel):
