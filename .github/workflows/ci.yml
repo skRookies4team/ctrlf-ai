@@ -1,0 +1,30 @@
+name: CI Checks
+
+on:
+  push:
+    branches: [ "main", "develop", "feature/**" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+jobs:
+  lint-and-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Step 7: MilvusSearchClient 직접 호출 검사
+      - name: Check no Milvus direct calls in services
+        run: python scripts/ci_check_no_milvus_direct.py
+
+      # 추가 검사 (선택)
+      # - name: Run tests
+      #   run: |
+      #     pip install -r requirements.txt
+      #     pytest tests/ -v

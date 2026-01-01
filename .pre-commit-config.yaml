@@ -1,0 +1,17 @@
+# Pre-commit hooks configuration
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Step 7: MilvusSearchClient 직접 호출 검사
+  - repo: local
+    hooks:
+      - id: check-no-milvus-direct
+        name: Check no Milvus direct calls in services
+        entry: python scripts/ci_check_no_milvus_direct.py
+        language: python
+        pass_filenames: false
+        stages: [commit]
+        always_run: true
+        # 변경된 파일이 app/services/ 아래일 때만 실행
+        files: ^app/services/.*\.py$
