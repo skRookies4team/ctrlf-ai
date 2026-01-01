@@ -966,7 +966,7 @@ class SourceSetOrchestrator:
             # 실패 로그 저장 실패는 전체 처리를 중단하지 않음
 
     # =========================================================================
-    # Script Generation
+    # Script Generation (씬 단위 RAG 방식)
     # =========================================================================
 
     async def _generate_script(
@@ -974,7 +974,75 @@ class SourceSetOrchestrator:
         job: ProcessingJob,
         document_chunks: Dict[str, List[Dict[str, Any]]],
     ) -> GeneratedScript:
-        """스크립트를 생성합니다 (Step 3: LLM 연동).
+        """스크립트를 생성합니다 (씬 단위 RAG 방식).
+
+        문서를 통째로 프롬프트에 싣지 않고, 씬 단위로 필요한 청크만 검색하여
+        컨텍스트 제한을 우회합니다.
+
+        흐름:
+        1. 아웃라인 생성: 문서 메타데이터로 씬 목차 설계 (1회 LLM)
+        2. 씬별 RAG 검색 + 생성: 각 씬 키워드로 Top-K 검색 후 생성 (N회 LLM)
+        3. 결과 병합: 씬들을 합쳐서 최종 스크립트
+
+        Args:
+            job: 처리 작업 상태
+            document_chunks: 문서별 청크 (doc_id → chunks)
+
+        Returns:
+            GeneratedScript: 생성된 스크립트
+        """
+        from app.services.scene_based_script_generator import (
+            SceneBasedScriptGenerator,
+        )
+
+        # 문서 정보 준비
+        documents = [
+            {
+                "document_id": doc.document_id,
+                "title": doc.title,
+                "domain": doc.domain,
+            }
+            for doc in job.documents
+        ]
+
+        # LLM 모델 설정
+        model = job.llm_model_hint or "meta-llama/Meta-Llama-3-8B-Instruct"
+
+        # 씬 단위 RAG 스크립트 생성기
+        generator = SceneBasedScriptGenerator(
+            milvus_client=self._milvus_client,
+            model=model,
+            top_k=3,  # 씬당 검색할 청크 수
+        )
+
+        logger.info(
+            f"Using scene-based RAG script generation: "
+            f"source_set_id={job.source_set_id}, model={model}"
+        )
+
+        # 스크립트 생성
+        script = await generator.generate_script(
+            source_set_id=job.source_set_id,
+            video_id=job.video_id,
+            education_id=job.education_id,
+            documents=documents,
+            document_chunks=document_chunks,
+        )
+
+        return script
+
+    # =========================================================================
+    # Legacy Script Generation (기존 방식 - 백업용)
+    # =========================================================================
+
+    async def _generate_script_legacy(
+        self,
+        job: ProcessingJob,
+        document_chunks: Dict[str, List[Dict[str, Any]]],
+    ) -> GeneratedScript:
+        """스크립트를 생성합니다 (기존 방식 - 전체 문서를 프롬프트에 포함).
+
+        Note: 컨텍스트 제한으로 긴 문서 처리 불가. 씬 단위 RAG 방식 권장.
 
         Args:
             job: 처리 작업 상태
@@ -1042,15 +1110,23 @@ class SourceSetOrchestrator:
 4. 전체 영상 길이는 3-10분 목표
 5. 반드시 유효한 JSON만 출력 (설명 없이)"""
 
+        # 컨텍스트 길이 제한 (LLM 8192 토큰 제한 고려)
+        max_context_chars = 8000
+        truncated_context = full_context[:max_context_chars]
+        if len(full_context) > max_context_chars:
+            logger.info(
+                f"Context truncated: {len(full_context)} -> {max_context_chars} chars"
+            )
+
         user_prompt = f"""다음 교육 자료를 바탕으로 교육 영상 스크립트를 생성해주세요:
 
-{full_context[:15000]}  # 토큰 제한 고려
+{truncated_context}
 
 JSON 스크립트:"""
 
         # 3. LLM 호출
         llm_client = LLMClient()
-        model = job.llm_model_hint or "qwen2.5-14b-instruct"
+        model = job.llm_model_hint or "meta-llama/Meta-Llama-3-8B-Instruct"
 
         try:
             response = await llm_client.generate_chat_completion(
@@ -1060,7 +1136,7 @@ JSON 스크립트:"""
                 ],
                 model=model,
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=2500,  # 8192 - 입력토큰(~5000) = ~3000 여유
             )
 
             # 4. JSON 파싱

@@ -248,15 +248,39 @@ class GeneratedScene(BaseModel):
     )
     narration: str = Field(
         ...,
-        description="나레이션 텍스트",
+        description="나레이션 텍스트 (TTS 입력)",
     )
     caption: Optional[str] = Field(
         None,
-        description="자막/캡션",
+        description="화면 하단 자막",
     )
     visual: Optional[str] = Field(
         None,
-        description="시각 자료 설명",
+        description="시각 자료 설명 (레거시, visual_description 권장)",
+    )
+    visual_type: Optional[str] = Field(
+        None,
+        alias="visualType",
+        description="시각 자료 유형 (TITLE_SLIDE|KEY_POINTS|COMPARISON|DIAGRAM|EXAMPLE|WARNING|SUMMARY)",
+    )
+    visual_text: Optional[str] = Field(
+        None,
+        alias="visualText",
+        description="화면에 표시할 텍스트 (bullet point는 \\n 구분)",
+    )
+    visual_description: Optional[str] = Field(
+        None,
+        alias="visualDescription",
+        description="영상 편집자를 위한 시각 자료 상세 설명",
+    )
+    highlight_terms: List[str] = Field(
+        default_factory=list,
+        alias="highlightTerms",
+        description="강조 표시할 핵심 용어",
+    )
+    transition: Optional[str] = Field(
+        None,
+        description="화면 전환 효과 (fade|slide|zoom|none)",
     )
     duration_sec: float = Field(
         ...,
