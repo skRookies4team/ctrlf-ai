@@ -415,6 +415,57 @@ curl http://localhost:8081/stats
 curl -X POST http://localhost:8080/stats/reset
 ```
 
+### Mock RAGFlow로 스크립트 생성 테스트
+
+Mock RAGFlow는 문서 처리 API도 지원하여 스크립트 생성 파이프라인을 테스트할 수 있습니다.
+
+**지원 API:**
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `POST /api/v1/datasets/{id}/documents` | 문서 업로드 |
+| `POST /api/v1/datasets/{id}/documents/{doc_id}/run` | 파싱 트리거 (즉시 완료) |
+| `GET /api/v1/datasets/{id}/documents/{doc_id}` | 문서 상태 조회 |
+| `GET /api/v1/datasets/{id}/documents/{doc_id}/chunks` | 청크 조회 |
+| `GET /stats/documents` | 문서 처리 통계 |
+
+**테스트 방법:**
+
+```bash
+# 1. Mock RAGFlow 실행 (포트 8090 권장, 8080이 사용 중일 수 있음)
+cd mock_ragflow
+python -m uvicorn main:app --port 8090
+
+# 2. 헬스체크
+curl http://localhost:8090/health
+
+# 3. 테스트 스크립트 실행
+export RAGFLOW_BASE_URL=http://localhost:8090
+python test_mock_ragflow_script.py
+```
+
+**예상 출력:**
+
+```
+============================================================
+Mock RAGFlow 스크립트 생성 테스트
+============================================================
+1. RagflowClient 직접 테스트
+   ✓ 업로드 완료: doc_id=doc-xxx
+   ✓ 파싱 트리거 완료
+   ✓ 상태: run=DONE, progress=1.0, chunks=5
+
+2. SourceSetOrchestrator 문서 처리 테스트
+   ✓ 성공: True
+   ✓ 청크 수: 5
+
+✓ 모든 테스트 통과!
+```
+
+**Mock 청크 생성 규칙:**
+- 파일명에서 주제를 추출하여 Mock 청크 내용 자동 생성
+- 예: `장애인식개선교육.pdf` → "장애인식개선교육에 대한 개요입니다..."
+- 기본 5개 청크 생성 (개요, 정책/절차, 법률/규정, 사례, FAQ)
+
 ---
 
 ## Docker 배포 (ELK 로그 수집)
