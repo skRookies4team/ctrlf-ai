@@ -328,6 +328,95 @@ pytest -v
 pytest tests/test_internal_rag.py -v
 ```
 
+## Mock 서버 구성 및 분리 테스트
+
+### Mock 서버 목록
+
+| Mock 서버 | 포트 | 용도 |
+|-----------|------|------|
+| `mock_ragflow/` | 8080 | RAG 문서 검색 API 시뮬레이션 |
+| `mock_llm/` | 8001 | OpenAI 호환 LLM API 시뮬레이션 |
+| `mock_backend/` | 8081 | Spring 백엔드 로그 수집 API 시뮬레이션 |
+
+### URL 우선순위
+
+환경변수 우선순위에 따라 개별 Mock/Real 혼합이 가능합니다:
+
+```
+1. 직접 지정 URL (최우선): RAGFLOW_BASE_URL, LLM_BASE_URL, BACKEND_BASE_URL
+2. AI_ENV=real → *_REAL URL 사용
+3. AI_ENV=mock → *_MOCK URL 사용
+```
+
+### 분리 테스트 시나리오
+
+#### 시나리오 1: 백엔드 API 테스트 (RAGFlow/LLM Mock 사용)
+
+실제 백엔드를 테스트하면서 RAGFlow와 LLM은 Mock 사용:
+
+```bash
+# Mock 서버 실행
+docker compose --profile mock up -d ragflow llm-internal
+
+# 환경변수 설정
+export RAGFLOW_BASE_URL=http://localhost:8080      # Mock RAGFlow
+export LLM_BASE_URL=http://localhost:8001          # Mock LLM
+export BACKEND_BASE_URL=http://real-backend:8080   # 실제 백엔드
+
+# AI Gateway 실행
+uvicorn app.main:app --reload --port 8000
+```
+
+#### 시나리오 2: RAGFlow API 테스트 (백엔드 Mock 사용)
+
+실제 RAGFlow를 테스트하면서 백엔드는 Mock 사용:
+
+```bash
+# Mock 서버 실행
+docker compose --profile mock up -d backend-mock
+
+# 환경변수 설정
+export RAGFLOW_BASE_URL=http://real-ragflow:9380   # 실제 RAGFlow
+export LLM_BASE_URL=http://real-llm:8001           # 실제 LLM
+export BACKEND_BASE_URL=http://localhost:8081      # Mock 백엔드
+
+# AI Gateway 실행
+uvicorn app.main:app --reload --port 8000
+```
+
+### Mock 서버 개별 실행
+
+```bash
+# RAGFlow Mock만 실행
+cd mock_ragflow && docker build -t mock-ragflow . && docker run -p 8080:8080 mock-ragflow
+
+# LLM Mock만 실행
+cd mock_llm && docker build -t mock-llm . && docker run -p 8001:8001 mock-llm
+
+# Backend Mock만 실행
+cd mock_backend && docker build -t mock-backend . && docker run -p 8081:8081 mock-backend
+```
+
+### Mock 통계 확인
+
+각 Mock 서버는 `/stats` 엔드포인트로 호출 정보를 제공합니다:
+
+```bash
+# RAGFlow Mock 통계
+curl http://localhost:8080/stats
+
+# LLM Mock 통계
+curl http://localhost:8001/stats
+
+# Backend Mock 통계
+curl http://localhost:8081/stats
+
+# 통계 초기화
+curl -X POST http://localhost:8080/stats/reset
+```
+
+---
+
 ## Docker 배포 (ELK 로그 수집)
 
 Docker로 AI Gateway를 실행하면 ELK 스택을 통해 로그가 자동 수집됩니다.
