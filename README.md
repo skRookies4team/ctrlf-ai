@@ -328,6 +328,71 @@ pytest -v
 pytest tests/test_internal_rag.py -v
 ```
 
+## Docker 배포 (ELK 로그 수집)
+
+Docker로 AI Gateway를 실행하면 ELK 스택을 통해 로그가 자동 수집됩니다.
+
+### 1. Docker 실행
+
+```bash
+# 네트워크 생성 (최초 1회)
+docker network create ctrlf-network
+
+# AI Gateway + ELK 실행 (Mock 모드)
+docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile mock up -d
+
+# 프로덕션 (Real 모드)
+docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile real up -d
+```
+
+### 2. 컨테이너 확인
+
+```bash
+docker ps
+```
+
+| 컨테이너 | 포트 | 설명 |
+|----------|------|------|
+| ctrlf-ai-gateway | 8000 | AI Gateway |
+| ctrlf-elasticsearch | 9200 | 로그 저장소 |
+| ctrlf-kibana | 5601 | 로그 시각화 |
+| ctrlf-fluent-bit | - | 로그 수집기 |
+
+### 3. ES 초기 설정 (최초 1회)
+
+```bash
+# Git Bash에서 실행
+./elk/setup-elasticsearch.sh
+```
+
+### 4. 테스트
+
+```bash
+# 헬스체크
+curl http://localhost:8000/health
+
+# 채팅 테스트
+python chat_cli.py
+```
+
+### 5. Kibana에서 로그 확인
+
+1. 브라우저에서 http://localhost:5601 접속
+2. **Stack Management** → **Data Views** → **Create data view**
+   - Name: `ctrlf-ai`
+   - Index pattern: `ctrlf-ai-*`
+   - Timestamp field: `@timestamp`
+3. **Discover**에서 로그 조회
+
+### 6. 종료
+
+```bash
+docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile mock down
+```
+
+> **Note**: 로컬 개발 시에는 uvicorn을 사용하고, Docker 배포 시에만 ELK 로그 수집이 동작합니다.
+> 자세한 ELK 설정은 [elk/README.md](elk/README.md)를 참고하세요.
+
 ## 프로젝트 구조
 
 ```
