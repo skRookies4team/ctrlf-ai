@@ -28,6 +28,7 @@ Phase 49: EDUCATION allowlist를 config로 분리
 4. 성능: pymilvus sync 호출을 anyio.to_thread로 래핑
 """
 
+import hashlib
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -207,6 +208,50 @@ def is_safe_doc_id(doc_id: str) -> bool:
         return True
 
     return False
+
+
+def make_stable_doc_id(original_doc_id: str) -> str:
+    """
+    Phase 55: 안전하지 않은 doc_id를 SHA256 해시로 변환합니다.
+
+    원본 파일명에 특수문자가 포함되어 있어도 안정적인 식별자로 변환합니다.
+    이미 안전한 형식(UUID, 해시)이면 그대로 반환합니다.
+
+    Args:
+        original_doc_id: 원본 doc_id (파일명 등)
+
+    Returns:
+        str: 안전한 doc_id (해시 또는 원본)
+
+    Example:
+        >>> make_stable_doc_id("정보보안교육_2025.pdf")
+        'sha256_a1b2c3d4e5f6...'  # 64자 hex
+
+        >>> make_stable_doc_id("abc-123-def")
+        'abc-123-def'  # 이미 안전하면 그대로
+    """
+    if is_safe_doc_id(original_doc_id):
+        return original_doc_id
+
+    # SHA256 해시 생성 (prefix 추가로 해시임을 명시)
+    hash_hex = hashlib.sha256(original_doc_id.encode("utf-8")).hexdigest()
+    return f"sha256_{hash_hex}"
+
+
+def get_original_doc_id_from_hash(hash_doc_id: str, metadata: Dict[str, Any]) -> str:
+    """
+    해시된 doc_id에서 원본 doc_id를 복원합니다.
+
+    메타데이터에 original_doc_id가 있으면 반환, 없으면 해시 그대로 반환.
+
+    Args:
+        hash_doc_id: 해시된 doc_id
+        metadata: 문서 메타데이터 (original_doc_id 포함 가능)
+
+    Returns:
+        str: 원본 doc_id 또는 해시
+    """
+    return metadata.get("original_doc_id", hash_doc_id)
 
 
 # =============================================================================
@@ -788,10 +833,18 @@ class MilvusSearchClient:
         """
         logger.info(f"get_document_chunks: doc_id='{doc_id}', dataset_id={dataset_id}")
 
-        # doc_id 안전성 검사 및 escape
+        # Phase 55: doc_id 안전성 검사 및 안정화
+        # 안전하지 않은 doc_id는 해시로 변환 (추적 가능성 유지)
         if not is_safe_doc_id(doc_id):
-            logger.warning(f"Potentially unsafe doc_id, escaping: {doc_id[:50]}")
-        safe_doc_id = escape_milvus_string(doc_id)
+            stable_id = make_stable_doc_id(doc_id)
+            logger.info(
+                f"Unsafe doc_id detected, using stable hash: "
+                f"original='{doc_id[:30]}...' -> stable='{stable_id[:20]}...'"
+            )
+            # 먼저 원본 escape로 시도 (레거시 호환)
+            safe_doc_id = escape_milvus_string(doc_id)
+        else:
+            safe_doc_id = doc_id
 
         try:
             # 필터 표현식 구성
