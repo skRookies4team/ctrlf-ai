@@ -24,7 +24,52 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 | **ctrlf-back**  | Spring                       | 백엔드 API                |
 | **ctrlf-front** | React                        | 프론트엔드                |
 
-## 빠른 시작
+## 빠른 테스트 (Mock 모드)
+
+**외부 서비스(vLLM, Milvus, RAGFlow) 없이** Mock 응답으로 바로 테스트:
+
+```bash
+# 1. 환경 설정
+git clone https://github.com/skRookies4team/ctrlf-ai.git
+cd ctrlf-ai
+python -m venv venv
+.\venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+
+# 2. Mock 모드 설정
+copy .env.example .env   # Windows
+# .env 파일에서 AI_ENV=mock 확인 (기본값)
+
+# 3. 서버 실행
+uvicorn app.main:app --reload --port 8000
+
+# 4. 테스트
+curl http://localhost:8000/health
+```
+
+**Swagger UI에서 테스트:**
+```
+브라우저에서 http://localhost:8000/docs 접속
+→ /ai/chat/messages 선택 → Try it out → Execute
+```
+
+**예상 응답 (Mock 모드):**
+```json
+{
+  "answer": "[Mock] 연차휴가는 근로기준법에 따라...",
+  "meta": {
+    "route_type": "MOCK",
+    "latency_ms": 50
+  }
+}
+```
+
+> **Note**: Mock 모드는 실제 LLM/RAG 없이 테스트용 응답을 반환합니다.
+> 실제 서비스 연동은 `.env`에서 `AI_ENV=real` 설정 후 vLLM, Milvus 연결이 필요합니다.
+
+---
+
+## 빠른 시작 (Real 모드)
 
 ### 1. 환경 설정
 
@@ -304,27 +349,30 @@ ctrlf-ai/
 ## 아키텍처
 
 ```
-┌─────────────┐     ┌─────────────────────────────────────┐
-│  Frontend   │────▶│         AI Gateway (FastAPI)        │
-│  (React)    │     │                                     │
-└─────────────┘     │  ┌─────────────────────────────┐    │
-                    │  │     Router Orchestrator      │    │
-┌─────────────┐     │  │  (Rule Router + LLM Router)  │    │
-│  Backend    │────▶│  └─────────────────────────────┘    │
-│  (Spring)   │     │                │                    │
-└─────────────┘     │  ┌─────────────▼─────────────┐      │
-                    │  │      Chat / Video Service  │      │
-                    │  │  (RAG, LLM, TTS, Render)   │      │
-                    │  └─────────────┬─────────────┘      │
-                    └────────────────┼────────────────────┘
-                                     │
-                    ┌────────────────┼────────────────┐
-                    ▼                ▼                ▼
-              ┌──────────┐    ┌──────────┐    ┌──────────┐
-              │  Milvus  │    │   vLLM   │    │ Embedding│
-              │ (Vector) │    │  (Chat)  │    │(ko-sbert)│
-              └──────────┘    └──────────┘    └──────────┘
+┌──────────────┐      ┌──────────────┐      ┌──────────────────────────────┐
+│   Frontend   │─────▶│   Backend    │◀────▶│      AI Gateway (FastAPI)   │
+│   (React)    │      │   (Spring)   │      │                              │
+└──────────────┘      └──────┬───────┘      │  ┌────────────────────────┐  │
+                             │              │  │   Router Orchestrator   │  │
+                        ┌────┴────┐         │  └───────────┬────────────┘  │
+                        │         │         │              │               │
+                        ▼         ▼         │  ┌───────────▼────────────┐  │
+                     ┌────┐   ┌────┐        │  │  Chat / Video Service  │  │
+                     │ DB │   │ S3 │        │  └───────────┬────────────┘  │
+                     └────┘   └────┘        └──────────────┼───────────────┘
+                                                           │
+                                            ┌──────────────┼──────────────┐
+                                            │              │              │
+                                      ┌─────▼─────┐  ┌─────▼─────┐  ┌─────▼─────┐
+                                      │  Milvus   │◀─│  RAGFlow  │  │   vLLM    │
+                                      │ (벡터검색) │  │ (문서처리) │  │   (LLM)   │
+                                      └───────────┘  └───────────┘  └───────────┘
 ```
+
+**요청 흐름:**
+1. **채팅 (RAG 검색)**: Frontend → Backend → AI Gateway → **Milvus 직접 검색** → vLLM → 응답 반환
+2. **개인화**: AI Gateway → Backend API 호출 → Backend가 DB 조회 → AI Gateway에 데이터 반환
+3. **문서 인덱싱**: Backend가 S3에 문서 저장 → S3 URL을 AI Gateway에 전달 → AI Gateway가 RAGFlow에 URL 전달 → RAGFlow가 문서 전처리 후 Milvus에 벡터 저장
 
 ## 개발 히스토리
 
