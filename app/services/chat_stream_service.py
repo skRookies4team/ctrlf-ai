@@ -438,7 +438,8 @@ class ChatStreamService:
         # 대소문자 구분 없이 매칭
         role_lower = user_role.lower()
         # Phase 52: Llama 대응 - 한국어 강제 (긍정형 지시)
-        korean_instruction = " 모든 응답은 반드시 한국어로만 작성하세요."
+        # Phase 53: 한국어 강제 강화
+        korean_instruction = " 반드시 한국어로만 답변하세요. 영어로 답변하지 마세요. 참고 자료가 영어라도 답변은 한국어로 번역해서 제공하세요."
         prompts = {
             "employee": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
             "manager": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
