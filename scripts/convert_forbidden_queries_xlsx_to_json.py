@@ -31,6 +31,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+import pandas as pd
+
 
 REQUIRED_COLUMNS = [
     "ID",
@@ -41,6 +43,24 @@ REQUIRED_COLUMNS = [
     "권장 응답방식",
     "대체 응답(안내문구) 예시",
 ]
+
+# Step 3: 선택적 컬럼 (없으면 기본값 적용)
+OPTIONAL_COLUMNS = [
+    "SKIP_RAG",      # Y/N - 기본 Y (금지질문은 RAG 스킵)
+    "SKIP_BACKEND",  # Y/N - 기본 N (BACKEND_API는 정책에 따라)
+]
+
+
+def parse_yn_flag(value, default: bool = True) -> bool:
+    """Y/N 플래그를 bool로 변환합니다."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return default
+    s = str(value).strip().upper()
+    if s in ("Y", "YES", "TRUE", "1"):
+        return True
+    if s in ("N", "NO", "FALSE", "0"):
+        return False
+    return default
 
 
 def sha256_file(path: str) -> str:
@@ -66,8 +86,6 @@ def detect_profile_sheets(xlsx_path: str) -> Dict[str, str]:
     xlsx에서 'A_' / 'B_'로 시작하는 첫 시트를 각각 프로필로 사용.
     예) A_엄격(...), B_실무(...)
     """
-    import pandas as pd
-
     xls = pd.ExcelFile(xlsx_path)
     sheets = xls.sheet_names
 
@@ -87,14 +105,16 @@ def detect_profile_sheets(xlsx_path: str) -> Dict[str, str]:
 
 def load_sheet_rules(xlsx_path: str, sheet_name: str, profile: str) -> List[Dict[str, Any]]:
     """시트에서 룰을 로드하고 검증합니다."""
-    import pandas as pd
-
     df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
 
     # 컬럼 검증
     missing_cols = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing_cols:
         raise ValueError(f"필수 컬럼 누락: sheet={sheet_name}, missing={missing_cols}")
+
+    # Step 3: 선택적 컬럼 존재 여부 확인
+    has_skip_rag = "SKIP_RAG" in df.columns
+    has_skip_backend = "SKIP_BACKEND" in df.columns
 
     # 질문/판정 없는 행 제거
     df = df.dropna(subset=["질문", "판정"])
@@ -103,6 +123,11 @@ def load_sheet_rules(xlsx_path: str, sheet_name: str, profile: str) -> List[Dict
     for _, row in df.iterrows():
         rule_id = str(row["ID"]).strip()
         question = str(row["질문"]).strip()
+
+        # Step 3: skip_rag, skip_backend_api 플래그 파싱
+        # 기본값: skip_rag=True (금지질문은 RAG 스킵), skip_backend_api=True (BOTH 차단)
+        skip_rag = parse_yn_flag(row.get("SKIP_RAG") if has_skip_rag else None, default=True)
+        skip_backend = parse_yn_flag(row.get("SKIP_BACKEND") if has_skip_backend else None, default=True)
 
         rule = {
             "rule_id": rule_id,
@@ -118,6 +143,9 @@ def load_sheet_rules(xlsx_path: str, sheet_name: str, profile: str) -> List[Dict
             "sub_reason": "" if pd.isna(row["서브사유"]) else str(row["서브사유"]).strip(),
             "response_mode": "" if pd.isna(row["권장 응답방식"]) else str(row["권장 응답방식"]).strip(),
             "example_response": "" if pd.isna(row["대체 응답(안내문구) 예시"]) else str(row["대체 응답(안내문구) 예시"]).strip(),
+            # Step 3: 차단 범위 플래그
+            "skip_rag": skip_rag,
+            "skip_backend_api": skip_backend,
         }
         rules.append(rule)
 
