@@ -27,11 +27,34 @@ if TYPE_CHECKING:
 
 # Phase 45: 언어 강제 지침 (모든 프롬프트에 공통 적용)
 # Phase 52: Llama 대응 - 한국어 강제 (긍정형 지시)
+# Phase 53: 한국어 강제 강화 - 프롬프트 끝에 배치 + 명확한 지시
 KOREAN_ONLY_INSTRUCTION = """
 [언어 규칙]
 당신은 한국어 AI 어시스턴트입니다.
 모든 응답은 반드시 한국어로만 작성하세요.
 한국어로 생각하고, 한국어로 답변하세요.
+"""
+
+# Phase 53: 프롬프트 끝에 배치할 강력한 한국어 강제 지침
+# Phase 54: 영어 시작 문구 금지 + 번역 지침 강화
+KOREAN_FINAL_REMINDER = """
+
+=== 필수: 한국어 응답 규칙 ===
+[절대 금지] 영어로 응답하지 마세요. 다음과 같은 영어 문구로 시작하면 안 됩니다:
+- "I'd be happy to...", "I can help...", "According to...", "Based on..."
+- "Sure", "Of course", "Thank you", "Let me..."
+
+[필수 사항]
+- 모든 응답은 반드시 한국어로 작성하세요.
+- 참고 문서가 영어라도 내용을 한국어로 번역하여 답변하세요.
+- 영어 용어는 필요한 경우에만 괄호 안에 병기하세요. 예: 개인정보보호(Privacy)
+"""
+
+# Phase 54: RAG 컨텍스트 앞에 추가할 번역 지침
+RAG_CONTEXT_KOREAN_WRAPPER = """
+[중요] 아래 참고 문서가 영어로 작성되어 있더라도,
+반드시 내용을 한국어로 번역/요약하여 답변해야 합니다.
+절대 영어로 답변하지 마세요.
 """
 
 # System prompt template for LLM (RAG context가 있는 경우)
@@ -173,8 +196,10 @@ class MessageBuilder:
         if sources:
             # RAG 결과가 있는 경우
             system_content = SYSTEM_PROMPT_WITH_RAG
+            # Phase 54: RAG 컨텍스트 앞에 한국어 번역 지침 추가
+            system_content += RAG_CONTEXT_KOREAN_WRAPPER
             context_text = self.format_sources_for_prompt(sources)
-            system_content += f"\n\n참고 문서:\n{context_text}"
+            system_content += f"\n참고 문서:\n{context_text}"
         elif rag_attempted:
             # RAG 시도했지만 결과 없는 경우
             system_content = SYSTEM_PROMPT_NO_RAG
@@ -190,6 +215,9 @@ class MessageBuilder:
         # Phase 46: 소프트 가드레일 시스템 지침 추가 (확정 표현 금지)
         if soft_guardrail_instruction:
             system_content = system_content + soft_guardrail_instruction
+
+        # Phase 53: 한국어 강제 지침을 프롬프트 맨 끝에 추가
+        system_content = system_content + KOREAN_FINAL_REMINDER
 
         messages.append({
             "role": "system",
@@ -251,7 +279,9 @@ class MessageBuilder:
 
         # 시스템 프롬프트 구성
         system_content = SYSTEM_PROMPT_MIXED_BACKEND_RAG
-        system_content += f"\n\n{mixed_context}"
+        # Phase 54: 컨텍스트 앞에 한국어 번역 지침 추가
+        system_content += RAG_CONTEXT_KOREAN_WRAPPER
+        system_content += f"\n{mixed_context}"
 
         if guardrail_prefix:
             system_content = guardrail_prefix + "\n\n" + system_content
@@ -259,6 +289,9 @@ class MessageBuilder:
         # Phase 47: 소프트 가드레일 시스템 지침 추가 (모든 경로 적용)
         if soft_guardrail_instruction:
             system_content = system_content + soft_guardrail_instruction
+
+        # Phase 53: 한국어 강제 지침을 프롬프트 맨 끝에 추가
+        system_content = system_content + KOREAN_FINAL_REMINDER
 
         messages.append({
             "role": "system",
@@ -318,6 +351,9 @@ class MessageBuilder:
         # Phase 47: 소프트 가드레일 시스템 지침 추가 (모든 경로 적용)
         if soft_guardrail_instruction:
             system_content = system_content + soft_guardrail_instruction
+
+        # Phase 53: 한국어 강제 지침을 프롬프트 맨 끝에 추가
+        system_content = system_content + KOREAN_FINAL_REMINDER
 
         messages.append({
             "role": "system",

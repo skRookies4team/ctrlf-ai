@@ -84,7 +84,18 @@ LLM_ROUTER_SYSTEM_PROMPT = """당신은 기업 내부 정보보호 AI 어시스�
    - requires_confirmation=true
    - confirmation_prompt="퀴즈를 지금 시작할까요? (예/아니오)" 등
 
-4. **BACKEND_STATUS인데 sub_intent_id가 비어있으면**: needs_clarify=true로 설정
+4. **BACKEND_STATUS이면 sub_intent_id 필수**: tier0_intent가 BACKEND_STATUS이면 반드시 아래 7개 중 하나를 선택하세요:
+   - HR_LEAVE_CHECK: 연차/휴가 관련 조회
+   - HR_ATTENDANCE_CHECK: 근태/출퇴근 관련 조회
+   - HR_WELFARE_CHECK: 복지/포인트 관련 조회
+   - EDU_STATUS_CHECK: 교육 이수/진도/마감 관련 조회
+   - QUIZ_START: 퀴즈 시작 (confirmation 필요)
+   - QUIZ_SUBMIT: 퀴즈 제출/채점 (confirmation 필요)
+   - QUIZ_GENERATION: 퀴즈 생성 (confirmation 필요)
+
+5. **복합 요청 처리**: "비교해줘", "리포트로", "캘린더처럼", "그래프로" 같은 표현은 "출력 형식 modifier"일 뿐, 핵심 조회 의도(sub_intent_id)를 결정하는 데 영향을 주지 않습니다. 예:
+   - "부서별 교육 이수율 비교해줘" → sub_intent_id="EDU_STATUS_CHECK" (핵심은 이수율 조회)
+   - "연차 일정 캘린더로 보여줘" → sub_intent_id="HR_LEAVE_CHECK" (핵심은 연차 조회)
 
 ## 출력 JSON 스키마 (이 형식만 출력하세요)
 ```json
@@ -128,6 +139,23 @@ LLM_ROUTER_EXAMPLES = [
     {
         "user": "안녕하세요",
         "assistant": '{"tier0_intent":"GENERAL_CHAT","domain":"GENERAL","route_type":"LLM_ONLY","sub_intent_id":"","confidence":0.9,"needs_clarify":false,"clarify_question":"","requires_confirmation":false,"confirmation_prompt":"","debug":{"rule_hits":["GENERAL_CHAT"],"keywords":["안녕"]}}'
+    },
+    # 복합 요청 예시 (modifier가 있어도 sub_intent_id 필수)
+    {
+        "user": "부서별 교육 이수율 비교해줘",
+        "assistant": '{"tier0_intent":"BACKEND_STATUS","domain":"EDU","route_type":"BACKEND_API","sub_intent_id":"EDU_STATUS_CHECK","confidence":0.9,"needs_clarify":false,"clarify_question":"","requires_confirmation":false,"confirmation_prompt":"","debug":{"rule_hits":["EDU_STATUS"],"keywords":["교육","이수율","비교"]}}'
+    },
+    {
+        "user": "이번 달 마감되는 교육만 골라서 리포트로 보여줘",
+        "assistant": '{"tier0_intent":"BACKEND_STATUS","domain":"EDU","route_type":"BACKEND_API","sub_intent_id":"EDU_STATUS_CHECK","confidence":0.9,"needs_clarify":false,"clarify_question":"","requires_confirmation":false,"confirmation_prompt":"","debug":{"rule_hits":["EDU_STATUS"],"keywords":["마감","교육","리포트"]}}'
+    },
+    {
+        "user": "내 연차 일정을 캘린더처럼 보여줄 수 있어?",
+        "assistant": '{"tier0_intent":"BACKEND_STATUS","domain":"HR","route_type":"BACKEND_API","sub_intent_id":"HR_LEAVE_CHECK","confidence":0.9,"needs_clarify":false,"clarify_question":"","requires_confirmation":false,"confirmation_prompt":"","debug":{"rule_hits":["HR_PERSONAL"],"keywords":["연차","일정","캘린더"]}}'
+    },
+    {
+        "user": "복지포인트 얼마 남았는지 그래프로 보여줘",
+        "assistant": '{"tier0_intent":"BACKEND_STATUS","domain":"HR","route_type":"BACKEND_API","sub_intent_id":"HR_WELFARE_CHECK","confidence":0.9,"needs_clarify":false,"clarify_question":"","requires_confirmation":false,"confirmation_prompt":"","debug":{"rule_hits":["HR_WELFARE"],"keywords":["복지포인트","남았","그래프"]}}'
     },
 ]
 
@@ -278,7 +306,7 @@ class LLMRouter:
             data = json.loads(response)
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM response as JSON: {e}")
-            logger.debug(f"Raw response: {response[:500]}")
+            logger.debug(f"Raw response parse failed: len={len(response)}")
             raise ValueError(f"Invalid JSON response: {e}")
 
         # RouterResult로 변환

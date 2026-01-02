@@ -85,13 +85,15 @@ from app.models.chat import (
 from app.models.intent import Domain, IntentType, MaskingStage, RouteType, UserRole
 from app.models.router_types import (
     ClarifyTemplates,
+    CRITICAL_ACTION_SUB_INTENTS,
     RouterResult,
     RouterRouteType,
+    SubIntentId,
     Tier0Intent,
     TIER0_ROUTING_POLICY,
 )
 from app.clients.backend_client import BackendDataClient
-from app.clients.llm_client import LLMClient, get_llm_client
+from app.clients.llm_client import LLMClient, LLMCompletionResult, get_llm_client
 from app.clients.personalization_client import PersonalizationClient
 from app.models.personalization import AnswerGeneratorContext
 from app.services.answer_generator import AnswerGenerator
@@ -157,6 +159,19 @@ from app.telemetry.emitters import emit_chat_turn_once, emit_security_event_once
 from app.telemetry.metrics import (
     set_rag_metrics,
     rag_metrics_to_rag_info,
+)
+from app.services.forbidden_query_filter import (
+    ForbiddenQueryFilter,
+    ForbiddenCheckResult,
+    get_forbidden_query_filter,
+)
+from app.core.retrieval_context import (
+    set_retrieval_blocked,
+    reset_retrieval_context,
+)
+from app.core.backend_context import (
+    set_backend_blocked,
+    reset_backend_context,
 )
 
 logger = get_logger(__name__)
@@ -393,6 +408,15 @@ class ChatService:
         self._personalization_client = personalization_client or PersonalizationClient()
         self._answer_generator = answer_generator or AnswerGenerator(llm_client=self._llm)
 
+        # Phase 50: 금지질문 필터 초기화
+        settings = get_settings()
+        if settings.FORBIDDEN_QUERY_FILTER_ENABLED:
+            self._forbidden_filter = get_forbidden_query_filter(
+                profile=settings.FORBIDDEN_QUERY_PROFILE
+            )
+        else:
+            self._forbidden_filter = None
+
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
         Handle a chat request and generate a response using full pipeline.
@@ -420,6 +444,11 @@ class ChatService:
         """
         start_time = time.perf_counter()
 
+        # Phase 50 / Step 3: 요청 시작 시 컨텍스트 초기화
+        # 테스트/동일 루프에서 이전 요청의 blocked 상태가 남아있을 수 있으므로 clear
+        reset_retrieval_context()
+        reset_backend_context()
+
         # Phase 41: RAG 디버그용 request_id 생성
         request_id = generate_request_id()
 
@@ -437,7 +466,82 @@ class ChatService:
             )
 
         user_query = req.messages[-1].content
-        logger.debug(f"User query: {user_query[:100]}...")
+        logger.debug(f"User query received: len={len(user_query)}")
+
+        # =====================================================================
+        # Phase 50 / Step 3: 금지질문 필터 (1차 가드) - PII 마스킹 전에 raw_query로 체크
+        # Step 3 정책:
+        #   - BOTH (skip_rag=True & skip_backend_api=True): 즉시 canned 응답
+        #   - BACKEND-only (skip_rag=False & skip_backend_api=True): Backend 차단, RAG 허용
+        #   - RAG-only (skip_rag=True & skip_backend_api=False): RAG 차단, Backend 허용
+        # =====================================================================
+        # Step 3: 금지질문 판정 결과를 저장 (후속 라우팅에서 사용)
+        forbidden_result: Optional[ForbiddenCheckResult] = None
+
+        if self._forbidden_filter is not None:
+            forbidden_result = self._forbidden_filter.check(user_query)
+            if forbidden_result.is_forbidden:
+                logger.warning(
+                    f"Forbidden query detected: rule_id={forbidden_result.matched_rule_id}, "
+                    f"decision={forbidden_result.decision}, "
+                    f"skip_rag={forbidden_result.skip_rag}, skip_backend_api={forbidden_result.skip_backend_api}, "
+                    f"query_hash={forbidden_result.query_hash}"
+                )
+
+                # Step 3: 2차 가드용 컨텍스트 플래그 설정 (각각 독립적으로)
+                if forbidden_result.skip_rag:
+                    set_retrieval_blocked(
+                        blocked=True,
+                        reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                    )
+                if forbidden_result.skip_backend_api:
+                    set_backend_blocked(
+                        blocked=True,
+                        reason=f"FORBIDDEN_BACKEND:{forbidden_result.matched_rule_id}"
+                    )
+
+                # Step 3: BOTH 차단 (skip_rag=True & skip_backend_api=True) → 즉시 canned 응답
+                if forbidden_result.skip_rag and forbidden_result.skip_backend_api:
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+                    # CHAT_TURN 이벤트 발행 (금지질문 - BOTH 차단)
+                    emit_chat_turn_once(
+                        intent_main="FORBIDDEN_QUERY",
+                        route_type="BLOCKED",
+                        domain="UNKNOWN",
+                        rag_used=False,
+                        latency_ms_total=latency_ms,
+                        error_code=None,
+                        pii_detected_input=False,
+                        pii_detected_output=False,
+                    )
+
+                    # 대체 응답 결정
+                    if forbidden_result.example_response:
+                        answer_text = forbidden_result.example_response
+                    else:
+                        answer_text = "죄송합니다. 해당 질문에는 답변드리기 어렵습니다. 다른 질문을 해주세요."
+
+                    return ChatResponse(
+                        answer=answer_text,
+                        sources=[],
+                        meta=ChatAnswerMeta(
+                            rag_used=False,
+                            latency_ms=latency_ms,
+                            fallback_reason="FORBIDDEN_QUERY",
+                            retrieval_skipped=True,
+                            retrieval_skip_reason=f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}",
+                            backend_skipped=True,
+                            backend_skip_reason=f"FORBIDDEN_BACKEND:{forbidden_result.matched_rule_id}",
+                            # Step 6: 금지질문 상세 관측 필드
+                            forbidden_match_type=forbidden_result.match_type,
+                            forbidden_score=forbidden_result.fuzzy_score or forbidden_result.embedding_score,
+                            forbidden_ruleset_version=forbidden_result.ruleset_version,
+                            forbidden_rule_id=forbidden_result.matched_rule_id,
+                        ),
+                    )
+                # Step 3: BACKEND-only 또는 RAG-only 차단 → 계속 진행 (후속 라우팅에서 처리)
+                # 컨텍스트 플래그는 이미 설정되었으므로 2차 가드에서 차단됨
 
         # Step 2: PII Masking (INPUT stage)
         # A7: Fail-Closed 적용 - PII detector 장애 시 안전한 응답 반환
@@ -520,7 +624,7 @@ class ChatService:
         # =====================================================================
         # RouterOrchestrator 사용 여부는 명시적 플래그(ROUTER_ORCHESTRATOR_ENABLED)로 결정합니다.
         # Phase 22 수정: bool(llm_base_url) 대신 명시적 플래그 사용
-        from app.core.config import get_settings
+        # Note: get_settings는 모듈 상단에서 import됨 (테스트 패치 일관성을 위해 함수 내 import 제거)
         settings = get_settings()
         use_router_orchestrator = settings.ROUTER_ORCHESTRATOR_ENABLED
 
@@ -738,23 +842,61 @@ class ChatService:
             if orchestration_result is not None:
                 sub_intent_id = orchestration_result.router_result.sub_intent_id or ""
 
-            # 1) sub_intent_id가 비어 있으면 needs_clarify 응답
+            # 1) sub_intent_id가 비어 있으면 Sub-Intent Resolver로 자동 보정 시도
             if not sub_intent_id:
-                logger.info("BACKEND_STATUS without sub_intent_id, returning clarify response")
-                latency_ms = int((time.perf_counter() - start_time) * 1000)
-                clarify_msg = ClarifyTemplates.BACKEND_STATUS_CLARIFY[0]
-                return ChatResponse(
-                    answer=clarify_msg,
-                    sources=[],
-                    meta=ChatAnswerMeta(
-                        route="CLARIFY",
-                        intent=Tier0Intent.BACKEND_STATUS.value,
-                        domain=domain,
-                        masked=pii_input.has_pii,
-                        has_pii_input=pii_input.has_pii,
-                        latency_ms=latency_ms,
-                    ),
+                logger.info("BACKEND_STATUS without sub_intent_id, trying Sub-Intent Resolver")
+                resolved_sub_intent = self._resolve_sub_intent_fallback(
+                    query=masked_query,
+                    domain=domain,
                 )
+
+                if resolved_sub_intent:
+                    # 치명 액션(QUIZ_*)인 경우 confirmation 응답 반환
+                    if resolved_sub_intent in CRITICAL_ACTION_SUB_INTENTS:
+                        logger.info(
+                            f"Sub-Intent Resolver: Critical action detected ({resolved_sub_intent}), "
+                            "returning confirmation prompt"
+                        )
+                        latency_ms = int((time.perf_counter() - start_time) * 1000)
+                        # QUIZ_START/SUBMIT에 맞는 confirmation prompt
+                        if resolved_sub_intent == SubIntentId.QUIZ_START.value:
+                            confirm_msg = "퀴즈를 지금 시작할까요? (예/아니오)"
+                        elif resolved_sub_intent == SubIntentId.QUIZ_SUBMIT.value:
+                            confirm_msg = "답안을 제출하고 채점할까요? (예/아니오)"
+                        else:
+                            confirm_msg = "이 작업을 진행할까요? (예/아니오)"
+                        return ChatResponse(
+                            answer=confirm_msg,
+                            sources=[],
+                            meta=ChatAnswerMeta(
+                                route="CONFIRM",
+                                intent=Tier0Intent.BACKEND_STATUS.value,
+                                domain=domain,
+                                masked=pii_input.has_pii,
+                                has_pii_input=pii_input.has_pii,
+                                latency_ms=latency_ms,
+                            ),
+                        )
+                    # 조회성 sub_intent는 바로 사용
+                    sub_intent_id = resolved_sub_intent
+                    logger.info(f"Sub-Intent Resolver: Using fallback sub_intent_id={sub_intent_id}")
+                else:
+                    # Resolver도 실패하면 CLARIFY 응답
+                    logger.info("BACKEND_STATUS: Sub-Intent Resolver failed, returning clarify response")
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    clarify_msg = ClarifyTemplates.BACKEND_STATUS_CLARIFY[0]
+                    return ChatResponse(
+                        answer=clarify_msg,
+                        sources=[],
+                        meta=ChatAnswerMeta(
+                            route="CLARIFY",
+                            intent=Tier0Intent.BACKEND_STATUS.value,
+                            domain=domain,
+                            masked=pii_input.has_pii,
+                            has_pii_input=pii_input.has_pii,
+                            latency_ms=latency_ms,
+                        ),
+                    )
 
             # 2) 개인화 Q 확정 (매퍼 사용)
             personalization_q = to_personalization_q(sub_intent_id, masked_query)
@@ -941,17 +1083,24 @@ class ChatService:
         error_message: Optional[str] = None
         fallback_reason: Optional[str] = None
         llm_latency_ms: Optional[int] = None
+        # Backend 필수 필드 (토큰 사용량)
+        llm_prompt_tokens: Optional[int] = None
+        llm_completion_tokens: Optional[int] = None
+        llm_model_used: Optional[str] = None
 
         try:
-            # Phase 12: LLM 호출 with latency 측정
-            llm_start = time.perf_counter()
-            raw_answer = await self._llm.generate_chat_completion(
+            # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
+            llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
                 messages=llm_messages,
                 model=None,  # Use server default
                 temperature=0.2,
                 max_tokens=1024,
             )
-            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000)
+            raw_answer = llm_result.content
+            llm_latency_ms = llm_result.latency_ms
+            llm_prompt_tokens = llm_result.prompt_tokens
+            llm_completion_tokens = llm_result.completion_tokens
+            llm_model_used = llm_result.model
 
             # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
             if needs_soft_guardrail and soft_guardrail_prefix:
@@ -1137,9 +1286,10 @@ class ChatService:
         # Build metadata with extended fields for logging
         # Phase 10: user_role 추가
         # Phase 12: error_type, error_message, fallback_reason, 개별 latency 추가
+        # Step 6: forbidden 관측 필드 추가
         meta = ChatAnswerMeta(
             user_role=intent_result.user_role.value,  # Phase 10: 역할 정보 포함
-            used_model="internal-llm",  # TODO: Get actual model name from LLM response
+            used_model=llm_model_used or "internal-llm",  # LLM 응답에서 가져온 실제 모델명
             route=final_route.value,
             intent=intent.value,
             domain=domain,
@@ -1160,6 +1310,47 @@ class ChatService:
             backend_latency_ms=backend_latency_ms,
             # Phase 14: RAG Gap 후보 플래그
             rag_gap_candidate=rag_gap_candidate_flag,
+            # Step 3/6: 금지질문 관측 필드 (BACKEND-only/RAG-only 케이스)
+            retrieval_skipped=(
+                forbidden_result.skip_rag
+                if forbidden_result and forbidden_result.is_forbidden
+                else False
+            ),
+            retrieval_skip_reason=(
+                f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                if forbidden_result and forbidden_result.is_forbidden and forbidden_result.skip_rag
+                else None
+            ),
+            backend_skipped=(
+                forbidden_result.skip_backend_api
+                if forbidden_result and forbidden_result.is_forbidden
+                else False
+            ),
+            backend_skip_reason=(
+                f"FORBIDDEN_BACKEND:{forbidden_result.matched_rule_id}"
+                if forbidden_result and forbidden_result.is_forbidden and forbidden_result.skip_backend_api
+                else None
+            ),
+            forbidden_match_type=(
+                forbidden_result.match_type
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
+            forbidden_score=(
+                forbidden_result.fuzzy_score or forbidden_result.embedding_score
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
+            forbidden_ruleset_version=(
+                forbidden_result.ruleset_version
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
+            forbidden_rule_id=(
+                forbidden_result.matched_rule_id
+                if forbidden_result and forbidden_result.is_forbidden
+                else None
+            ),
         )
 
         # Phase 12: 메트릭 기록
@@ -1215,6 +1406,11 @@ class ChatService:
 
         return ChatResponse(
             answer=final_answer,
+            # Backend 필수 필드 (ChatAiResponse.java 호환)
+            prompt_tokens=llm_prompt_tokens,
+            completion_tokens=llm_completion_tokens,
+            model=llm_model_used or meta.used_model,
+            # AI 추가 필드
             sources=sources,
             meta=meta,
         )
@@ -1504,6 +1700,102 @@ class ChatService:
         )
 
     # =========================================================================
+    # Sub-Intent Resolver: CLARIFY 줄이기 위한 자동 보정
+    # =========================================================================
+
+    # Sub-Intent 자동 보정용 키워드 매핑
+    # "표현 형식" 단어(리포트/그래프/캘린더)는 sub_intent를 막지 않음 (modifier로 분리)
+    _SUB_INTENT_KEYWORDS = {
+        # HR 관련
+        SubIntentId.HR_LEAVE_CHECK.value: frozenset([
+            "연차", "휴가", "잔여", "남은 연차", "남은 휴가", "휴가 일수",
+            "연차 며칠", "휴가 며칠", "연차 잔액", "연차 현황",
+        ]),
+        SubIntentId.HR_ATTENDANCE_CHECK.value: frozenset([
+            "근태", "출근", "퇴근", "지각", "조퇴", "결근",
+            "이번달 근태", "이번 달 근태", "출퇴근", "근무시간",
+        ]),
+        SubIntentId.HR_WELFARE_CHECK.value: frozenset([
+            "복지", "포인트", "복지포인트", "식대", "복지 잔액",
+            "남은 포인트", "복지 현황",
+        ]),
+        # 교육 관련
+        SubIntentId.EDU_STATUS_CHECK.value: frozenset([
+            "이수", "미이수", "수료", "미수료", "이수율", "수료율",
+            "진도", "진행률", "교육 현황", "학습 현황",
+            "마감", "데드라인", "기한", "언제까지",
+            "교육 일정", "수강", "듣", "들은",
+        ]),
+        # 퀴즈 관련 (치명 액션 - confirmation 유지 필요)
+        SubIntentId.QUIZ_START.value: frozenset([
+            "퀴즈 시작", "시험 시작", "테스트 시작",
+        ]),
+        SubIntentId.QUIZ_SUBMIT.value: frozenset([
+            "답안 제출", "퀴즈 제출", "채점", "정답 제출",
+        ]),
+    }
+
+    def _resolve_sub_intent_fallback(
+        self,
+        query: str,
+        domain: Optional[str] = None,
+    ) -> Optional[str]:
+        """CLARIFY 전에 sub_intent_id를 키워드 기반으로 자동 보정합니다.
+
+        BACKEND_STATUS인데 sub_intent_id가 비어있을 때 호출됩니다.
+        키워드 매칭으로 적절한 sub_intent_id를 추론합니다.
+
+        Args:
+            query: 사용자 질문 (마스킹 처리된 것)
+            domain: 도메인 (EDU, HR, QUIZ 등) - 힌트로 사용
+
+        Returns:
+            Optional[str]: 추론된 sub_intent_id, 추론 실패 시 None
+
+        Note:
+            - 치명 액션(QUIZ_*)은 반환하되, 호출부에서 confirmation 처리 필요
+            - "리포트/그래프/캘린더"는 modifier로 취급 (sub_intent 결정에 영향 없음)
+        """
+        query_lower = query.lower()
+
+        # 1) 키워드 기반 매칭 (가장 많이 매칭되는 것 선택)
+        best_match: Optional[str] = None
+        best_score = 0
+
+        for sub_intent_id, keywords in self._SUB_INTENT_KEYWORDS.items():
+            score = sum(1 for kw in keywords if kw in query_lower)
+            if score > best_score:
+                best_score = score
+                best_match = sub_intent_id
+
+        # 2) 매칭된 게 있으면 반환
+        if best_match:
+            logger.info(
+                f"Sub-Intent Resolver: Fallback resolved to {best_match} "
+                f"(score={best_score}, domain={domain})"
+            )
+            return best_match
+
+        # 3) 키워드 매칭 실패 시 domain 기반 기본값
+        if domain:
+            domain_fallback = {
+                "EDU": SubIntentId.EDU_STATUS_CHECK.value,
+                "HR": SubIntentId.HR_LEAVE_CHECK.value,
+                "QUIZ": SubIntentId.EDU_STATUS_CHECK.value,  # 퀴즈 도메인도 교육 현황으로
+            }
+            fallback = domain_fallback.get(domain)
+            if fallback:
+                logger.info(
+                    f"Sub-Intent Resolver: Domain-based fallback to {fallback} "
+                    f"(domain={domain})"
+                )
+                return fallback
+
+        # 4) 최종 실패 - None 반환 (CLARIFY로 진행)
+        logger.debug("Sub-Intent Resolver: No fallback found, will CLARIFY")
+        return None
+
+    # =========================================================================
     # Personalization: 개인화 처리 핸들러
     # =========================================================================
 
@@ -1541,6 +1833,7 @@ class ChatService:
             # period가 None이면 클라이언트에서 DEFAULT_PERIOD_FOR_INTENT 사용
             facts = await self._personalization_client.resolve_facts(
                 sub_intent_id=q,
+                user_id=req.user_id,
                 period=period,
                 target_dept_id=None,  # TODO: 부서 비교(Q5) 시 dept 파싱 필요
             )

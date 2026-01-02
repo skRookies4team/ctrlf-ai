@@ -28,10 +28,29 @@ Phase 12 업데이트:
 
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 import httpx
+
+
+@dataclass
+class LLMCompletionResult:
+    """LLM 응답 결과 (토큰 사용량 포함).
+
+    Attributes:
+        content: 응답 텍스트
+        prompt_tokens: 프롬프트 토큰 수 (없으면 None)
+        completion_tokens: 완성 토큰 수 (없으면 None)
+        model: 사용된 모델명 (없으면 None)
+        latency_ms: LLM 호출 latency (ms)
+    """
+    content: str
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    model: Optional[str] = None
+    latency_ms: Optional[int] = None
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
@@ -273,7 +292,7 @@ class LLMClient:
             f"Sending chat completion request to LLM: "
             f"messages_count={len(messages)}, model={actual_model}"
         )
-        logger.debug(f"LLM request payload: {payload}")
+        # Note: payload 로깅 제거 - messages에 사용자 쿼리/RAG 컨텍스트 포함되어 PII 유출 위험
 
         try:
             # Phase 12: 재시도 로직으로 감싼 HTTP 요청
@@ -397,6 +416,142 @@ class LLMClient:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             logger.debug(f"LLM call failed after {latency_ms}ms")
             raise
+
+    async def generate_chat_completion_with_usage(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+    ) -> LLMCompletionResult:
+        """
+        ChatCompletion 요청하고 토큰 사용량을 포함한 결과를 반환합니다.
+
+        Backend에서 토큰 사용량을 DB에 저장하므로, 이 정보를 함께 반환합니다.
+
+        Args:
+            messages: 대화 히스토리
+            model: 사용할 모델 이름 (선택)
+            temperature: 응답 다양성 조절
+            max_tokens: 최대 토큰 수
+
+        Returns:
+            LLMCompletionResult: 응답 텍스트 및 토큰 사용량
+
+        Raises:
+            UpstreamServiceError: LLM 호출 실패 시
+        """
+        if not self._base_url:
+            logger.warning("LLM generate_chat_completion_with_usage skipped: base_url not configured")
+            return LLMCompletionResult(content=self.FALLBACK_MESSAGE)
+
+        base = str(self._base_url).rstrip("/")
+
+        # A5: 외부 도메인 차단 체크
+        parsed = urlparse(base)
+        host = parsed.hostname or ""
+
+        if not _is_internal_domain(base):
+            if host not in ALLOWED_EXTERNAL_LLM_HOSTS:
+                logger.warning(f"EXTERNAL_DOMAIN_BLOCK: LLM base_url blocked: {base}")
+                return LLMCompletionResult(content=self.FALLBACK_MESSAGE)
+
+        url = f"{base}/v1/chat/completions"
+
+        settings = get_settings()
+        actual_model = model or settings.LLM_MODEL_NAME
+
+        payload: Dict[str, Any] = {
+            "model": actual_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        start_time = time.perf_counter()
+
+        try:
+            response = await retry_async_operation(
+                self._client.post,
+                url,
+                json=payload,
+                timeout=self._timeout,
+                config=LLM_RETRY_CONFIG,
+                operation_name="llm_chat_completion_with_usage",
+            )
+            response.raise_for_status()
+
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            data = response.json()
+
+            choices = data.get("choices", [])
+            if not choices:
+                raise UpstreamServiceError(
+                    service=ServiceType.LLM,
+                    error_type=ErrorType.UPSTREAM_ERROR,
+                    message="LLM response has no choices",
+                )
+
+            message = choices[0].get("message", {})
+            content = message.get("content", "")
+
+            if not content:
+                raise UpstreamServiceError(
+                    service=ServiceType.LLM,
+                    error_type=ErrorType.UPSTREAM_ERROR,
+                    message="LLM response has empty content",
+                )
+
+            # 토큰 사용량 추출 (OpenAI 호환 API 형식)
+            usage = data.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            response_model = data.get("model", actual_model)
+
+            logger.info(
+                f"LLM chat completion success: response_length={len(content)}, "
+                f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}"
+            )
+
+            return LLMCompletionResult(
+                content=content,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model=response_model,
+                latency_ms=latency_ms,
+            )
+
+        except UpstreamServiceError:
+            raise
+
+        except httpx.TimeoutException as e:
+            logger.error(f"LLM chat completion timeout after {self._timeout}s")
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.UPSTREAM_TIMEOUT,
+                message=f"LLM timeout after {self._timeout}s",
+                is_timeout=True,
+                original_error=e,
+            )
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"LLM HTTP error: status={e.response.status_code}")
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.UPSTREAM_ERROR,
+                message=f"LLM HTTP {e.response.status_code}",
+                status_code=e.response.status_code,
+                original_error=e,
+            )
+
+        except Exception as e:
+            logger.exception("LLM chat completion unexpected error")
+            raise UpstreamServiceError(
+                service=ServiceType.LLM,
+                error_type=ErrorType.INTERNAL_ERROR,
+                message=f"LLM unexpected error: {type(e).__name__}",
+                original_error=e,
+            )
 
     async def generate_chat_completion_raw(
         self,
