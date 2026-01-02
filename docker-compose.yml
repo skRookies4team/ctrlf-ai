@@ -50,6 +50,9 @@ services:
       # PII 마스킹은 내장 규칙 사용 (외부 서비스 없음)
       - PII_BASE_URL=
       - PII_ENABLED=true
+      # 내부 API 인증 토큰
+      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-ctrlf-backend-internal-token-2024}
+      - RAGFLOW_CALLBACK_TOKEN=${RAGFLOW_CALLBACK_TOKEN:-ctrlf-ragflow-callback-token-2024}
     networks:
       - ctrlf-net
     healthcheck:
