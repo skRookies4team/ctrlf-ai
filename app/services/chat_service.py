@@ -852,29 +852,36 @@ class ChatService:
 
                 if resolved_sub_intent:
                     # 치명 액션(QUIZ_*)인 경우 confirmation 응답 반환
+                    # route="CLARIFY" 유지 (기존 계약 호환)
+                    # pending_sub_intent_id로 다음 턴 연결 정보 전달
                     if resolved_sub_intent in CRITICAL_ACTION_SUB_INTENTS:
                         logger.info(
                             f"Sub-Intent Resolver: Critical action detected ({resolved_sub_intent}), "
-                            "returning confirmation prompt"
+                            "returning confirmation prompt with pending_sub_intent_id"
                         )
                         latency_ms = int((time.perf_counter() - start_time) * 1000)
-                        # QUIZ_START/SUBMIT에 맞는 confirmation prompt
+                        # QUIZ_START/SUBMIT/GENERATION에 맞는 confirmation prompt
                         if resolved_sub_intent == SubIntentId.QUIZ_START.value:
                             confirm_msg = "퀴즈를 지금 시작할까요? (예/아니오)"
                         elif resolved_sub_intent == SubIntentId.QUIZ_SUBMIT.value:
                             confirm_msg = "답안을 제출하고 채점할까요? (예/아니오)"
+                        elif resolved_sub_intent == SubIntentId.QUIZ_GENERATION.value:
+                            confirm_msg = "퀴즈 문항을 생성할까요? (예/아니오)"
                         else:
                             confirm_msg = "이 작업을 진행할까요? (예/아니오)"
+                        # route="CLARIFY" 사용 (기존 프론트/백 계약 유지)
+                        # pending_sub_intent_id로 다음 턴에서 어떤 작업인지 식별
                         return ChatResponse(
                             answer=confirm_msg,
                             sources=[],
                             meta=ChatAnswerMeta(
-                                route="CONFIRM",
+                                route="CLARIFY",
                                 intent=Tier0Intent.BACKEND_STATUS.value,
                                 domain=domain,
                                 masked=pii_input.has_pii,
                                 has_pii_input=pii_input.has_pii,
                                 latency_ms=latency_ms,
+                                pending_sub_intent_id=resolved_sub_intent,
                             ),
                         )
                     # 조회성 sub_intent는 바로 사용
@@ -1705,6 +1712,7 @@ class ChatService:
 
     # Sub-Intent 자동 보정용 키워드 매핑
     # "표현 형식" 단어(리포트/그래프/캘린더)는 sub_intent를 막지 않음 (modifier로 분리)
+    # 약한 키워드("듣", "들은") 제거 → 2글자 이상 키워드로 강화
     _SUB_INTENT_KEYWORDS = {
         # HR 관련
         SubIntentId.HR_LEAVE_CHECK.value: frozenset([
@@ -1719,21 +1727,47 @@ class ChatService:
             "복지", "포인트", "복지포인트", "식대", "복지 잔액",
             "남은 포인트", "복지 현황",
         ]),
-        # 교육 관련
+        # 교육 관련 (약한 키워드 "듣", "들은" 제거 → 강화된 키워드로 대체)
         SubIntentId.EDU_STATUS_CHECK.value: frozenset([
             "이수", "미이수", "수료", "미수료", "이수율", "수료율",
             "진도", "진행률", "교육 현황", "학습 현황",
             "마감", "데드라인", "기한", "언제까지",
-            "교육 일정", "수강", "듣", "들은",
+            "교육 일정", "수강한", "수강했", "들었던", "수강 완료",
         ]),
         # 퀴즈 관련 (치명 액션 - confirmation 유지 필요)
         SubIntentId.QUIZ_START.value: frozenset([
-            "퀴즈 시작", "시험 시작", "테스트 시작",
+            "퀴즈 시작", "시험 시작", "테스트 시작", "퀴즈 풀",
         ]),
         SubIntentId.QUIZ_SUBMIT.value: frozenset([
-            "답안 제출", "퀴즈 제출", "채점", "정답 제출",
+            "답안 제출", "퀴즈 제출", "채점", "정답 제출", "제출할게",
+        ]),
+        SubIntentId.QUIZ_GENERATION.value: frozenset([
+            "퀴즈 생성", "문제 생성", "문제 만들", "출제해", "퀴즈 출제",
         ]),
     }
+
+    # 도메인별 sub_intent 후보 제한 (크로스 매칭 방지)
+    _DOMAIN_SUB_INTENT_MAP = {
+        "HR": frozenset([
+            SubIntentId.HR_LEAVE_CHECK.value,
+            SubIntentId.HR_ATTENDANCE_CHECK.value,
+            SubIntentId.HR_WELFARE_CHECK.value,
+        ]),
+        "EDU": frozenset([
+            SubIntentId.EDU_STATUS_CHECK.value,
+        ]),
+        "QUIZ": frozenset([
+            SubIntentId.QUIZ_START.value,
+            SubIntentId.QUIZ_SUBMIT.value,
+            SubIntentId.QUIZ_GENERATION.value,
+        ]),
+    }
+
+    # 강한 키워드 (1점만으로도 확정 가능)
+    _STRONG_KEYWORDS = frozenset([
+        "연차", "휴가", "근태", "복지포인트", "이수율", "수료율",
+        "퀴즈 시작", "퀴즈 제출", "퀴즈 생성",
+    ])
 
     def _resolve_sub_intent_fallback(
         self,
@@ -1747,7 +1781,7 @@ class ChatService:
 
         Args:
             query: 사용자 질문 (마스킹 처리된 것)
-            domain: 도메인 (EDU, HR, QUIZ 등) - 힌트로 사용
+            domain: 도메인 (EDU, HR, QUIZ 등) - 크로스 매칭 방지용
 
         Returns:
             Optional[str]: 추론된 sub_intent_id, 추론 실패 시 None
@@ -1755,44 +1789,79 @@ class ChatService:
         Note:
             - 치명 액션(QUIZ_*)은 반환하되, 호출부에서 confirmation 처리 필요
             - "리포트/그래프/캘린더"는 modifier로 취급 (sub_intent 결정에 영향 없음)
+            - 도메인이 있으면 해당 도메인 sub_intent만 스코어링 (크로스 매칭 방지)
+            - 최소 점수 임계치: QUIZ=1, 기타 강한키워드=1, 일반=2
+            - HR 도메인 폴백 금지 (3개 sub_intent 중 잘못 선택 위험)
         """
         query_lower = query.lower()
 
-        # 1) 키워드 기반 매칭 (가장 많이 매칭되는 것 선택)
+        # 도메인 후보 제한 (있으면 해당 도메인만, 없으면 전체)
+        allowed_sub_intents: Optional[frozenset] = None
+        if domain and domain in self._DOMAIN_SUB_INTENT_MAP:
+            allowed_sub_intents = self._DOMAIN_SUB_INTENT_MAP[domain]
+
+        # 1) 키워드 기반 매칭 (도메인 필터링 + 점수 계산)
+        # 버그 수정: has_strong_keyword를 best_match 후보별로 추적
         best_match: Optional[str] = None
         best_score = 0
+        best_has_strong = False  # best_match 후보의 강한 키워드 여부
 
         for sub_intent_id, keywords in self._SUB_INTENT_KEYWORDS.items():
-            score = sum(1 for kw in keywords if kw in query_lower)
-            if score > best_score:
+            # 도메인 필터링: 허용된 sub_intent만 스코어링
+            if allowed_sub_intents and sub_intent_id not in allowed_sub_intents:
+                continue
+
+            score = 0
+            candidate_has_strong = False
+            for kw in keywords:
+                if kw in query_lower:
+                    score += 1
+                    if kw in self._STRONG_KEYWORDS:
+                        candidate_has_strong = True
+
+            # 동점 시 강한 키워드 있는 후보 우선 (tie-breaking)
+            if (score > best_score) or (
+                score == best_score and candidate_has_strong and not best_has_strong
+            ):
                 best_score = score
                 best_match = sub_intent_id
+                best_has_strong = candidate_has_strong
 
-        # 2) 매칭된 게 있으면 반환
-        if best_match:
+        # 2) 최소 점수 임계치 검증
+        # - QUIZ 도메인: min_score=1 (도메인 필터링이 이미 적용됨)
+        # - 강한 키워드가 있으면 1점도 OK
+        # - 그 외: 2점 이상 필요 (오분류 방지)
+        if domain == "QUIZ":
+            min_score = 1  # QUIZ는 후보가 3개뿐이라 1점도 허용
+        elif best_has_strong:
+            min_score = 1
+        else:
+            min_score = 2
+
+        if best_match and best_score >= min_score:
             logger.info(
                 f"Sub-Intent Resolver: Fallback resolved to {best_match} "
-                f"(score={best_score}, domain={domain})"
+                f"(score={best_score}, min_required={min_score}, domain={domain}, "
+                f"strong_kw={best_has_strong})"
             )
             return best_match
 
         # 3) 키워드 매칭 실패 시 domain 기반 기본값
-        if domain:
-            domain_fallback = {
-                "EDU": SubIntentId.EDU_STATUS_CHECK.value,
-                "HR": SubIntentId.HR_LEAVE_CHECK.value,
-                "QUIZ": SubIntentId.EDU_STATUS_CHECK.value,  # 퀴즈 도메인도 교육 현황으로
-            }
-            fallback = domain_fallback.get(domain)
-            if fallback:
-                logger.info(
-                    f"Sub-Intent Resolver: Domain-based fallback to {fallback} "
-                    f"(domain={domain})"
-                )
-                return fallback
+        # HR: 폴백 금지 (3개 sub_intent 중 잘못 선택 위험 → 선택지형 CLARIFY로)
+        # QUIZ: 폴백 금지 (confirmation 흐름 필요)
+        # EDU: 단일 sub_intent라 폴백 허용
+        if domain == "EDU":
+            logger.info(
+                f"Sub-Intent Resolver: Domain-based fallback to EDU_STATUS_CHECK "
+                f"(domain={domain}, keyword_score={best_score})"
+            )
+            return SubIntentId.EDU_STATUS_CHECK.value
 
         # 4) 최종 실패 - None 반환 (CLARIFY로 진행)
-        logger.debug("Sub-Intent Resolver: No fallback found, will CLARIFY")
+        logger.debug(
+            f"Sub-Intent Resolver: No fallback found (score={best_score}, "
+            f"domain={domain}), will CLARIFY"
+        )
         return None
 
     # =========================================================================

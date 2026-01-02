@@ -269,6 +269,11 @@ class ChatAnswerMeta(BaseModel):
         default=None,
         description="Matched rule ID (e.g., FR-A-001)",
     )
+    # Sub-Intent Resolver: confirmation 흐름 연결용
+    pending_sub_intent_id: Optional[str] = Field(
+        default=None,
+        description="Pending sub_intent_id for confirmation flow (QUIZ_START, QUIZ_SUBMIT, QUIZ_GENERATION)",
+    )
 
 
 class ChatResponse(BaseModel):
