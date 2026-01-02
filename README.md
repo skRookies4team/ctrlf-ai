@@ -8,21 +8,22 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 - **AI 채팅**: 사규/정책, 교육, HR 관련 질의응답 (RAG + LLM)
 - **스트리밍 응답**: 실시간 토큰 스트리밍 지원
 - **RAG 검색**: Milvus/RAGFlow 기반 문서 검색
-- **교육 영상 생성**: 스크립트 생성 → TTS → 영상 렌더링 파이프라인
+- **교육 영상 생성**: 씬 기반 RAG 스크립트 생성 → TTS → 영상 렌더링 파이프라인
 - **FAQ/퀴즈 생성**: 문서 기반 FAQ, 퀴즈 자동 생성
 - **PII 마스킹**: 개인정보 자동 탐지 및 마스킹
 - **의도 분류**: 사용자 질문 의도 분류 및 라우팅
+- **금지질문 필터**: Exact → Fuzzy → Embedding 3단계 매칭
 
 ## 연동 서비스
 
-| 서비스          | 주소                         | 설명                      |
-| --------------- | ---------------------------- | ------------------------- |
-| **vLLM**        | `your-llm-server:port`       | LLM (Qwen2.5-7B-Instruct) |
-| **Embedding**   | `your-embedding-server:port` | 임베딩 (ko-sroberta)      |
-| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                   |
-| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인            |
-| **ctrlf-back**  | Spring                       | 백엔드 API                |
-| **ctrlf-front** | React                        | 프론트엔드                |
+| 서비스          | 주소                         | 설명                             |
+| --------------- | ---------------------------- | -------------------------------- |
+| **vLLM**        | `your-llm-server:port`       | LLM (EXAONE-3.5-7.8B-Instruct)   |
+| **Embedding**   | `your-embedding-server:port` | 임베딩 (ko-sroberta-multitask)   |
+| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                          |
+| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인 (문서 처리)       |
+| **ctrlf-back**  | Spring                       | 백엔드 API                       |
+| **ctrlf-front** | React                        | 프론트엔드                       |
 
 ## 빠른 테스트 (Mock 모드)
 
@@ -288,6 +289,8 @@ echo Pillow>=10.0.0 >> requirements.txt
 echo pymilvus>=2.5.0 >> requirements.txt
 echo pandas>=2.0.0 >> requirements.txt
 echo openpyxl>=3.1.0 >> requirements.txt
+echo rapidfuzz>=3.0.0 >> requirements.txt
+echo numpy>=1.26.0 >> requirements.txt
 
 # 다시 설치
 pip install -r requirements.txt
@@ -334,10 +337,15 @@ pip install -r requirements.txt
 # AI 환경 (mock / real)
 AI_ENV=real
 
-# LLM 서버 (vLLM - 채팅 + 임베딩 통합)
+# LLM 서버 (vLLM)
 LLM_BASE_URL=http://your-llm-server:port
 LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
-EMBEDDING_MODEL_NAME=BAAI/bge-m3
+SCRIPT_LLM_MODEL=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct  # 스크립트 생성용 (미설정 시 LLM_MODEL_NAME 사용)
+
+# 임베딩 서버
+EMBEDDING_BASE_URL=http://your-embedding-server:port
+EMBEDDING_MODEL_NAME=jhgan/ko-sroberta-multitask
+EMBEDDING_DIMENSION=768
 
 # Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)
 MILVUS_ENABLED=true
@@ -354,6 +362,10 @@ TTS_PROVIDER=gtts
 
 # Storage (local / s3 / backend_presigned)
 STORAGE_PROVIDER=local
+
+# 금지질문 필터
+FORBIDDEN_QUERY_FILTER_ENABLED=true
+FORBIDDEN_QUERY_FUZZY_ENABLED=true
 ```
 
 ## 테스트
@@ -582,12 +594,22 @@ ctrlf-ai/
 ├── app/
 │   ├── main.py                 # FastAPI 진입점
 │   ├── api/v1/                 # API 엔드포인트
-│   ├── clients/                # 외부 서비스 클라이언트
+│   ├── clients/                # 외부 서비스 클라이언트 (LLM, Milvus, Backend)
 │   ├── services/               # 비즈니스 로직
+│   │   ├── chat_service.py         # 채팅 서비스
+│   │   ├── scene_based_script_generator.py  # 씬 기반 스크립트 생성
+│   │   ├── forbidden_query_filter.py        # 금지질문 필터
+│   │   └── ...
 │   ├── models/                 # Pydantic 모델
-│   └── core/                   # 설정, 로깅
+│   ├── core/                   # 설정, 로깅
+│   ├── resources/              # 금지질문 룰셋 등 정적 리소스
+│   ├── repositories/           # 데이터 저장소 추상화
+│   ├── telemetry/              # 모니터링/로깅
+│   └── utils/                  # 유틸리티
 ├── tests/                      # 테스트
 ├── docs/                       # 개발 문서
+├── elk/                        # ELK 로그 수집 설정
+├── mock_*/                     # Mock 서버들
 ├── chat_cli.py                 # 채팅 CLI 도구
 ├── requirements.txt
 └── .env
@@ -623,6 +645,16 @@ ctrlf-ai/
 3. **문서 인덱싱**: Backend가 S3에 문서 저장 → S3 URL을 AI Gateway에 전달 → AI Gateway가 RAGFlow에 URL 전달 → RAGFlow가 문서 전처리 후 Milvus에 벡터 저장
 
 ## 개발 히스토리
+
+### 스크립트 생성 고도화
+
+- **Phase 55**: 씬 기반 RAG 스크립트 생성, 한국어 검증
+- **Phase 54**: 스크립트 모델 필드 확장 (visual_type, highlight_terms 등)
+
+### 금지질문 필터
+
+- **Phase 50**: 금지질문 필터 3단계 (Exact → Fuzzy → Embedding)
+- **Phase 48-49**: Low-relevance Gate, EDUCATION dataset 필터
 
 ### 영상 생성 파이프라인
 
