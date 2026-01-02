@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.clients.llm_client import LLMClient
 from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.source_set import (
     GeneratedChapter,
@@ -191,7 +192,6 @@ class SceneBasedScriptGenerator:
     """
 
     # LLM 호출 설정
-    DEFAULT_MODEL = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
     MAX_TOKENS_OUTLINE = 1500  # 아웃라인 생성용
     MAX_TOKENS_SCENE = 800    # 씬 생성용
     MAX_TOKENS_POLISH = 1000  # 다듬기용
@@ -211,12 +211,14 @@ class SceneBasedScriptGenerator:
         Args:
             llm_client: LLM 클라이언트 (None이면 새로 생성)
             milvus_client: Milvus 클라이언트 (None이면 싱글톤 사용)
-            model: 사용할 LLM 모델 (None이면 기본값)
+            model: 사용할 LLM 모델 (None이면 환경변수에서 읽음)
             top_k: 씬당 검색할 청크 수
         """
+        settings = get_settings()
         self._llm_client = llm_client or LLMClient()
         self._milvus_client = milvus_client or get_milvus_client()
-        self._model = model or self.DEFAULT_MODEL
+        # 우선순위: 직접 지정 > SCRIPT_LLM_MODEL > LLM_MODEL_NAME
+        self._model = model or settings.SCRIPT_LLM_MODEL or settings.LLM_MODEL_NAME
         self._top_k = top_k
 
         logger.info(
