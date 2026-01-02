@@ -72,7 +72,7 @@ BACKEND_REPORT_GUIDE_PATH = "/api/incidents/report-guide"
 
 # 콜백
 BACKEND_SCRIPT_COMPLETE_PATH = "/video/script/complete"
-BACKEND_JOB_COMPLETE_PATH = "/video/job/{job_id}/complete"
+BACKEND_JOB_COMPLETE_PATH = "/internal/video/job/{job_id}/complete"
 
 # render-spec
 BACKEND_RENDER_SPEC_PATH = "/internal/scripts/{script_id}/render-spec"
@@ -190,7 +190,7 @@ class JobCompleteCallbackError(CallbackError):
         error_code: str = "JOB_COMPLETE_CALLBACK_FAILED",
     ):
         super().__init__(
-            endpoint=f"/video/job/{job_id}/complete",
+            endpoint=f"/internal/video/job/{job_id}/complete",
             status_code=status_code,
             message=message,
             error_code=error_code,
@@ -793,7 +793,7 @@ class BackendClient:
             )
             return JobCompleteResponse(saved=False)
 
-        url = f"{self._base_url}/video/job/{job_id}/complete"
+        url = f"{self._base_url}/internal/video/job/{job_id}/complete"
         headers = self._get_internal_headers()
 
         request_body = JobCompleteRequest(
