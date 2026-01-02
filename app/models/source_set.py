@@ -282,7 +282,7 @@ class GeneratedScene(BaseModel):
         None,
         description="화면 전환 효과 (fade|slide|zoom|none)",
     )
-    duration_sec: float = Field(
+    duration_sec: int = Field(
         ...,
         alias="durationSec",
         description="씬 길이 (초)",
@@ -317,7 +317,7 @@ class GeneratedChapter(BaseModel):
         ...,
         description="챕터 제목",
     )
-    duration_sec: float = Field(
+    duration_sec: int = Field(
         ...,
         alias="durationSec",
         description="챕터 길이 (초)",
@@ -356,7 +356,7 @@ class GeneratedScript(BaseModel):
         ...,
         description="스크립트 제목",
     )
-    total_duration_sec: float = Field(
+    total_duration_sec: int = Field(
         ...,
         alias="totalDurationSec",
         description="전체 길이 (초)",
@@ -489,15 +489,24 @@ class ChunkBulkUpsertRequest(BaseModel):
 
 
 class ChunkBulkUpsertResponse(BaseModel):
-    """청크 벌크 업서트 응답."""
+    """청크 벌크 업서트 응답.
+
+    Backend 호환 (RagDtos.ChunksBulkUpsertResponse):
+    - saved: 저장 성공 여부
+    - savedCount: 저장된 청크 수
+    """
     saved: bool = Field(
         ...,
         description="저장 여부",
     )
-    count: int = Field(
+    saved_count: int = Field(
         ...,
+        alias="savedCount",
         description="저장된 청크 수",
     )
+
+    class Config:
+        populate_by_name = True
 
 
 class FailChunkItem(BaseModel):
@@ -540,12 +549,21 @@ class FailChunkBulkUpsertRequest(BaseModel):
 
 
 class FailChunkBulkUpsertResponse(BaseModel):
-    """실패 청크 벌크 업서트 응답."""
+    """실패 청크 벌크 업서트 응답.
+
+    Backend 호환 (RagDtos.FailChunksBulkUpsertResponse):
+    - saved: 저장 성공 여부
+    - savedCount: 저장된 실패 로그 수
+    """
     saved: bool = Field(
         ...,
         description="저장 여부",
     )
-    count: int = Field(
+    saved_count: int = Field(
         ...,
+        alias="savedCount",
         description="저장된 실패 로그 수",
     )
+
+    class Config:
+        populate_by_name = True

@@ -91,7 +91,7 @@ from app.models.router_types import (
     TIER0_ROUTING_POLICY,
 )
 from app.clients.backend_client import BackendDataClient
-from app.clients.llm_client import LLMClient, get_llm_client
+from app.clients.llm_client import LLMClient, LLMCompletionResult, get_llm_client
 from app.clients.personalization_client import PersonalizationClient
 from app.models.personalization import AnswerGeneratorContext
 from app.services.answer_generator import AnswerGenerator
@@ -1043,17 +1043,24 @@ class ChatService:
         error_message: Optional[str] = None
         fallback_reason: Optional[str] = None
         llm_latency_ms: Optional[int] = None
+        # Backend 필수 필드 (토큰 사용량)
+        llm_prompt_tokens: Optional[int] = None
+        llm_completion_tokens: Optional[int] = None
+        llm_model_used: Optional[str] = None
 
         try:
-            # Phase 12: LLM 호출 with latency 측정
-            llm_start = time.perf_counter()
-            raw_answer = await self._llm.generate_chat_completion(
+            # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
+            llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
                 messages=llm_messages,
                 model=None,  # Use server default
                 temperature=0.2,
                 max_tokens=1024,
             )
-            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000)
+            raw_answer = llm_result.content
+            llm_latency_ms = llm_result.latency_ms
+            llm_prompt_tokens = llm_result.prompt_tokens
+            llm_completion_tokens = llm_result.completion_tokens
+            llm_model_used = llm_result.model
 
             # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
             if needs_soft_guardrail and soft_guardrail_prefix:
@@ -1242,7 +1249,7 @@ class ChatService:
         # Step 6: forbidden 관측 필드 추가
         meta = ChatAnswerMeta(
             user_role=intent_result.user_role.value,  # Phase 10: 역할 정보 포함
-            used_model="internal-llm",  # TODO: Get actual model name from LLM response
+            used_model=llm_model_used or "internal-llm",  # LLM 응답에서 가져온 실제 모델명
             route=final_route.value,
             intent=intent.value,
             domain=domain,
@@ -1359,6 +1366,11 @@ class ChatService:
 
         return ChatResponse(
             answer=final_answer,
+            # Backend 필수 필드 (ChatAiResponse.java 호환)
+            prompt_tokens=llm_prompt_tokens,
+            completion_tokens=llm_completion_tokens,
+            model=llm_model_used or meta.used_model,
+            # AI 추가 필드
             sources=sources,
             meta=meta,
         )

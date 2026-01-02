@@ -1386,15 +1386,15 @@ class BackendClient:
             )
 
             if response.status_code == 204 or not response.text.strip():
-                return ChunkBulkUpsertResponse(saved=True, count=len(request.chunks))
+                return ChunkBulkUpsertResponse(saved=True, saved_count=len(request.chunks))
 
             try:
                 data = response.json()
                 return ChunkBulkUpsertResponse(**data) if data else ChunkBulkUpsertResponse(
-                    saved=True, count=len(request.chunks)
+                    saved=True, saved_count=len(request.chunks)
                 )
             except Exception:
-                return ChunkBulkUpsertResponse(saved=True, count=len(request.chunks))
+                return ChunkBulkUpsertResponse(saved=True, saved_count=len(request.chunks))
 
         except ChunkBulkUpsertError:
             raise
@@ -1521,15 +1521,15 @@ class BackendClient:
             )
 
             if response.status_code == 204 or not response.text.strip():
-                return FailChunkBulkUpsertResponse(saved=True, count=len(request.fails))
+                return FailChunkBulkUpsertResponse(saved=True, saved_count=len(request.fails))
 
             try:
                 data = response.json()
                 return FailChunkBulkUpsertResponse(**data) if data else FailChunkBulkUpsertResponse(
-                    saved=True, count=len(request.fails)
+                    saved=True, saved_count=len(request.fails)
                 )
             except Exception:
-                return FailChunkBulkUpsertResponse(saved=True, count=len(request.fails))
+                return FailChunkBulkUpsertResponse(saved=True, saved_count=len(request.fails))
 
         except FailChunkBulkUpsertError:
             raise

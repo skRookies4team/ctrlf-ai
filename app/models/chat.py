@@ -277,13 +277,42 @@ class ChatResponse(BaseModel):
 
     Contains the generated answer, source documents, and metadata.
 
+    Backend 호환 필드 (ChatAiResponse.java):
+    - answer: 답변 텍스트
+    - prompt_tokens: 프롬프트 토큰 수
+    - completion_tokens: 생성 토큰 수
+    - model: 사용된 LLM 모델명
+
+    AI 추가 필드 (Backend에서 무시됨):
+    - sources: RAG 참조 문서 목록
+    - meta: 응답 메타데이터
+
     Attributes:
         answer: Final answer text
+        prompt_tokens: Number of tokens in prompt (Backend required)
+        completion_tokens: Number of tokens in completion (Backend required)
+        model: LLM model name used (Backend required)
         sources: List of reference documents used
         meta: Response metadata (model, route, etc.)
     """
 
     answer: str = Field(description="Final answer text")
+
+    # Backend 필수 필드 (ChatAiResponse.java 호환)
+    prompt_tokens: Optional[int] = Field(
+        default=None,
+        description="Number of tokens in prompt (for Backend compatibility)",
+    )
+    completion_tokens: Optional[int] = Field(
+        default=None,
+        description="Number of tokens in completion (for Backend compatibility)",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="LLM model name used (for Backend compatibility)",
+    )
+
+    # AI 추가 필드 (Backend에서 무시됨)
     sources: List[ChatSource] = Field(
         default_factory=list, description="List of reference documents used"
     )
