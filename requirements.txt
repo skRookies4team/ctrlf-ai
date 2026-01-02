@@ -16,9 +16,5 @@ Pillow>=10.0.0
 pymilvus>=2.5.0
 pandas>=2.0.0
 openpyxl>=3.1.0
-
-# Step 4: Fuzzy matching (금지질문 유사도 매칭)
 rapidfuzz>=3.0.0
-
-# Step 5: Embedding matching (금지질문 임베딩 매칭)
 numpy>=1.26.0
