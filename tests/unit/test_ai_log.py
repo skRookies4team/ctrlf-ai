@@ -625,10 +625,11 @@ class TestBackendClientCamelCase:
             headers = backend_client._get_bearer_headers()
             assert headers["Authorization"] == "Bearer test-secret-token"
 
-            # 토큰 없는 경우
+            # 토큰 없는 경우 (명시적으로 빈 문자열 전달)
+            # api_token=None은 설정에서 기본값을 가져오므로, 빈 문자열을 전달해야 함
             backend_client_no_token = BackendClient(
                 base_url="http://test-backend:8080",
-                api_token=None,
+                api_token="",  # 명시적으로 빈 토큰
             )
             headers_no_token = backend_client_no_token._get_bearer_headers()
             assert "Authorization" not in headers_no_token

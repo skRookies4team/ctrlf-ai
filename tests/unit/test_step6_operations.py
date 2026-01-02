@@ -349,6 +349,7 @@ class TestManifestFailClosed:
 
     def test_get_ruleset_info_includes_manifest_failed(self, forbidden_filter):
         """get_ruleset_info에 manifest_failed 상태 포함."""
+        from unittest.mock import MagicMock
         ForbiddenQueryFilter = forbidden_filter
 
         filter = ForbiddenQueryFilter(
@@ -357,6 +358,15 @@ class TestManifestFailClosed:
         )
         filter._loaded = True
         filter._manifest_failed = True
+
+        # Mock ruleset to pass the early return check in get_ruleset_info()
+        mock_ruleset = MagicMock()
+        mock_ruleset.version = "v1"
+        mock_ruleset.profile = "A"
+        mock_ruleset.mode = "strict"
+        mock_ruleset.rules = []
+        mock_ruleset.source_sha256 = "abc123456789012345678901234567890"
+        filter._ruleset = mock_ruleset
 
         info = filter.get_ruleset_info()
 

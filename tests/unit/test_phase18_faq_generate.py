@@ -7,9 +7,9 @@ Phase 18: FAQ 초안 생성 API 테스트
 3. FastAPI 엔드포인트 통합 테스트
 4. 에러 케이스 테스트
 
-Phase 19-AI-2 업데이트:
-- rag_client → milvus_client (MilvusSearchClient)
-- RAG 검색 결과 없음 → NO_DOCS_FOUND 에러 발생
+Step 7 업데이트:
+- milvus_client → rag_handler (RagHandler 사용)
+- RagHandler.perform_search_with_fallback() 사용
 """
 
 import json
@@ -28,6 +28,8 @@ from app.models.faq import (
     FaqSourceDoc,
 )
 from app.services.faq_service import FaqDraftService, FaqGenerationError
+from app.services.chat.rag_handler import RagHandler
+from app.models.chat import ChatSource
 
 
 @pytest.fixture
@@ -146,16 +148,16 @@ class TestFaqModels:
 
 
 # =============================================================================
-# Service Tests (Phase 19-AI-2 Updated)
+# Service Tests (Step 7 Updated: RagHandler 사용)
 # =============================================================================
 
 
 class TestFaqDraftService:
-    """FaqDraftService 테스트 (Phase 19-AI-2 업데이트)"""
+    """FaqDraftService 테스트 (Step 7: RagHandler 사용)"""
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_success_with_top_docs(self):
-        """top_docs 제공 시 Milvus 호출 없이 성공 테스트"""
+        """top_docs 제공 시 RagHandler 호출 없이 성공 테스트"""
         # Mock LLM client
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(
@@ -172,11 +174,11 @@ class TestFaqDraftService:
             })
         )
 
-        # Mock Milvus client (should not be called)
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock()
+        # Mock RagHandler (Step 7) - should not be called
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock()
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -193,8 +195,8 @@ class TestFaqDraftService:
 
         draft = await service.generate_faq_draft(request)
 
-        # Milvus should not be called since top_docs provided
-        mock_milvus.search.assert_not_called()
+        # RagHandler should not be called since top_docs provided
+        mock_rag_handler.perform_search_with_fallback.assert_not_called()
 
         # LLM should be called
         mock_llm.generate_chat_completion.assert_called_once()
@@ -203,14 +205,14 @@ class TestFaqDraftService:
         assert draft.domain == "SEC_POLICY"
         assert draft.cluster_id == "cluster-001"
         assert draft.question == "USB 반출 시 어떤 절차가 필요한가요?"
-        # Phase 19-AI-3: top_docs 사용 시 answer_source=TOP_DOCS
+        # top_docs 사용 시 answer_source=TOP_DOCS
         assert draft.answer_source == "TOP_DOCS"
         assert draft.ai_confidence == 0.85
         assert draft.source_doc_id == "DOC-001"
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_with_milvus_search(self):
-        """top_docs 없을 때 Milvus 검색 테스트"""
+        """top_docs 없을 때 RagHandler 검색 테스트"""
         # Mock LLM client
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(
@@ -223,53 +225,52 @@ class TestFaqDraftService:
             })
         )
 
-        # Mock Milvus client - Phase 19-AI-2 format
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(
-            return_value=[
-                {
-                    "document_name": "검색된 문서.pdf",
-                    "page_num": 10,
-                    "similarity": 0.9,
-                    "content": "검색 결과 내용...",
-                }
-            ]
+        # Mock RagHandler (Step 7) - returns ChatSource objects
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(
+                [ChatSource(doc_id="검색된 문서.pdf", title="검색된 문서.pdf", snippet="검색 결과 내용...", score=0.9)],
+                False,
+                "MILVUS"
+            )
         )
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
             cluster_id="cluster-002",
             canonical_question="테스트 질문",
-            top_docs=[],  # Empty - should trigger Milvus search
+            top_docs=[],  # Empty - should trigger RagHandler search
         )
 
         draft = await service.generate_faq_draft(request)
 
-        # Milvus should be called
-        mock_milvus.search.assert_called_once()
+        # RagHandler should be called
+        mock_rag_handler.perform_search_with_fallback.assert_called_once()
 
         # Verify draft
         assert draft.domain == "SEC_POLICY"
         assert draft.question == "테스트 질문"
-        # Milvus 검색 시 source 필드는 null
+        # RagHandler 검색 시 source 필드는 null
         assert draft.source_doc_id is None
-        # Phase 19-AI-3: Milvus 검색 시 answer_source=MILVUS
+        # RagHandler 검색 시 answer_source=MILVUS
         assert draft.answer_source == "MILVUS"
 
     @pytest.mark.anyio
     async def test_generate_faq_draft_milvus_empty_raises_error(self):
-        """Milvus 0건 시 NO_DOCS_FOUND 에러 발생 (Phase 19-AI-2)"""
+        """RagHandler 0건 시 NO_DOCS_FOUND 에러 발생"""
         # Mock LLM client (should not be called)
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock()
 
-        # Mock Milvus client - returns empty
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(return_value=[])
+        # Mock RagHandler - returns empty or failed
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=([], False, "MILVUS")
+        )
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -277,7 +278,7 @@ class TestFaqDraftService:
             canonical_question="관련 문서가 없는 질문",
         )
 
-        # Phase 19-AI-2: 검색 결과 없으면 에러 발생
+        # 검색 결과 없으면 에러 발생
         with pytest.raises(FaqGenerationError) as exc_info:
             await service.generate_faq_draft(request)
 
@@ -294,15 +295,17 @@ class TestFaqDraftService:
             side_effect=Exception("LLM connection error")
         )
 
-        # Mock Milvus client - provide results to pass doc check
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(
-            return_value=[
-                {"document_name": "test.pdf", "similarity": 0.9, "content": "test"}
-            ]
+        # Mock RagHandler - provide results to pass doc check
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(
+                [ChatSource(doc_id="test.pdf", title="test.pdf", snippet="test", score=0.9)],
+                False,
+                "MILVUS"
+            )
         )
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -324,15 +327,17 @@ class TestFaqDraftService:
             return_value="이것은 유효한 JSON이 아닙니다."
         )
 
-        # Mock Milvus client
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(
-            return_value=[
-                {"document_name": "test.pdf", "similarity": 0.9, "content": "test"}
-            ]
+        # Mock RagHandler
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(
+                [ChatSource(doc_id="test.pdf", title="test.pdf", snippet="test", score=0.9)],
+                False,
+                "MILVUS"
+            )
         )
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -358,15 +363,17 @@ class TestFaqDraftService:
             })
         )
 
-        # Mock Milvus client
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(
-            return_value=[
-                {"document_name": "test.pdf", "similarity": 0.9, "content": "test"}
-            ]
+        # Mock RagHandler
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(
+                [ChatSource(doc_id="test.pdf", title="test.pdf", snippet="test", score=0.9)],
+                False,
+                "MILVUS"
+            )
         )
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="SEC_POLICY",
@@ -377,7 +384,7 @@ class TestFaqDraftService:
         with pytest.raises(FaqGenerationError) as exc_info:
             await service.generate_faq_draft(request)
 
-        # Phase 19-AI-3: 파싱 실패 메시지
+        # 파싱 실패 메시지
         assert "파싱" in str(exc_info.value)
 
 
@@ -388,14 +395,14 @@ class TestFaqDraftServiceHelpers:
         """answer_source 정규화 테스트"""
         service = FaqDraftService.__new__(FaqDraftService)
 
-        # Phase 19-AI-3: TOP_DOCS, MILVUS 추가
+        # TOP_DOCS, MILVUS 추가
         assert service._normalize_answer_source("TOP_DOCS") == "TOP_DOCS"
         assert service._normalize_answer_source("MILVUS") == "MILVUS"
         assert service._normalize_answer_source("AI_RAG") == "AI_RAG"
         assert service._normalize_answer_source("ai_rag") == "AI_RAG"
         assert service._normalize_answer_source("LOG_REUSE") == "LOG_REUSE"
         assert service._normalize_answer_source("MIXED") == "MIXED"
-        # Phase 19-AI-3: 기본값이 MILVUS로 변경
+        # 기본값이 MILVUS로 변경
         assert service._normalize_answer_source("invalid") == "MILVUS"
         assert service._normalize_answer_source(None) == "MILVUS"
 
@@ -604,12 +611,12 @@ class TestFaqAPI:
 
 
 # =============================================================================
-# Integration Tests (Phase 19-AI-2 Updated)
+# Integration Tests (Step 7 Updated: RagHandler 사용)
 # =============================================================================
 
 
 class TestFaqIntegration:
-    """FAQ 통합 테스트 (Phase 19-AI-2 업데이트)"""
+    """FAQ 통합 테스트 (Step 7: RagHandler 사용)"""
 
     @pytest.mark.anyio
     async def test_full_faq_generation_flow(self):
@@ -630,20 +637,22 @@ class TestFaqIntegration:
             })
         )
 
-        # Mock Milvus client - Phase 19-AI-2 format
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(
-            return_value=[
-                {
-                    "document_name": "필수교육 운영규정.pdf",
-                    "page_num": 15,
-                    "similarity": 0.95,
-                    "content": "4대 필수교육을 미이수한 경우 인사고과에 반영됩니다...",
-                }
-            ]
+        # Mock RagHandler (Step 7)
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(
+                [ChatSource(
+                    doc_id="필수교육 운영규정.pdf",
+                    title="필수교육 운영규정.pdf",
+                    snippet="4대 필수교육을 미이수한 경우 인사고과에 반영됩니다...",
+                    score=0.95
+                )],
+                False,
+                "MILVUS"
+            )
         )
 
-        service = FaqDraftService(milvus_client=mock_milvus, llm_client=mock_llm)
+        service = FaqDraftService(rag_handler=mock_rag_handler, llm_client=mock_llm)
 
         request = FaqDraftGenerateRequest(
             domain="TRAINING_QUIZ",
@@ -662,15 +671,15 @@ class TestFaqIntegration:
         assert draft.cluster_id == "edu-cluster-001"
         assert "4대 필수교육" in draft.question
         assert "인사고과" in draft.answer_markdown
-        # Phase 19-AI-2: Milvus 검색 시 source 필드는 null
+        # RagHandler 검색 시 source 필드는 null
         assert draft.source_doc_id is None
-        # Phase 19-AI-3: Milvus 검색 시 answer_source=MILVUS
+        # RagHandler 검색 시 answer_source=MILVUS
         assert draft.answer_source == "MILVUS"
         assert draft.ai_confidence == 0.92
         assert draft.created_at is not None
 
-        # Verify Milvus was called
-        mock_milvus.search.assert_called_once()
+        # Verify RagHandler was called
+        mock_rag_handler.perform_search_with_fallback.assert_called_once()
 
         # Verify LLM was called
         mock_llm.generate_chat_completion.assert_called_once()

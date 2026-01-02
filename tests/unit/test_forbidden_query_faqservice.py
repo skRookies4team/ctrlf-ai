@@ -3,9 +3,11 @@
 Phase 50: FaqService 금지질문 필터 테스트 (Step 2-1)
 
 테스트 목표:
-1. 금지질문 입력 시 MilvusSearchClient.search가 호출되지 않음
+1. 금지질문 입력 시 RagHandler.perform_search_with_fallback가 호출되지 않음
 2. FaqGenerationError("FORBIDDEN_QUERY:rule_id") 발생
 3. 정상 질문은 Milvus 검색 수행
+
+Step 7: MilvusSearchClient → RagHandler 변경
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +18,8 @@ import tempfile
 from app.models.faq import FaqDraftGenerateRequest
 from app.services.faq_service import FaqDraftService, FaqGenerationError
 from app.services.forbidden_query_filter import ForbiddenQueryFilter
+from app.services.chat.rag_handler import RagHandler
+from app.models.chat import ChatSource
 
 
 # =============================================================================
@@ -76,10 +80,10 @@ class TestFaqServiceForbiddenQuery:
 
     @pytest.mark.asyncio
     async def test_forbidden_query_skips_milvus_search(self, temp_ruleset_dir):
-        """금지질문은 Milvus 검색을 호출하지 않아야 함."""
-        # Mock Milvus client
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(return_value=[])
+        """금지질문은 RagHandler 검색을 호출하지 않아야 함."""
+        # Mock RagHandler (Step 7)
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=([], False, "MILVUS"))
 
         # Mock LLM client
         mock_llm = MagicMock()
@@ -105,9 +109,9 @@ class TestFaqServiceForbiddenQuery:
             )
             filter_instance.load()
 
-            # FaqDraftService 생성
+            # FaqDraftService 생성 (Step 7: rag_handler 사용)
             service = FaqDraftService(
-                milvus_client=mock_milvus,
+                rag_handler=mock_rag_handler,
                 llm_client=mock_llm,
                 pii_service=mock_pii,
             )
@@ -129,22 +133,19 @@ class TestFaqServiceForbiddenQuery:
             assert "FORBIDDEN_QUERY" in str(exc_info.value)
             assert "FAQ_TEST_001" in str(exc_info.value)
 
-            # 검증: Milvus search가 호출되지 않았음
-            mock_milvus.search.assert_not_called()
+            # 검증: RagHandler search가 호출되지 않았음
+            mock_rag_handler.perform_search_with_fallback.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_allowed_query_calls_milvus_search(self, temp_ruleset_dir):
-        """정상 질문은 Milvus 검색을 수행해야 함."""
-        # Mock Milvus client - 정상 검색 결과 반환
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(return_value=[
-            {
-                "doc_id": "doc1",
-                "content": "연차 관련 규정 내용입니다.",
-                "score": 0.95,
-                "metadata": {"chunk_id": 1},
-            }
-        ])
+        """정상 질문은 RagHandler 검색을 수행해야 함."""
+        # Mock RagHandler - 정상 검색 결과 반환 (Step 7)
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=(
+            [ChatSource(doc_id="doc1", title="연차규정.pdf", snippet="연차 관련 규정 내용입니다.", score=0.95)],
+            False,
+            "MILVUS"
+        ))
 
         mock_llm = MagicMock()
 
@@ -168,7 +169,7 @@ class TestFaqServiceForbiddenQuery:
             filter_instance.load()
 
             service = FaqDraftService(
-                milvus_client=mock_milvus,
+                rag_handler=mock_rag_handler,
                 llm_client=mock_llm,
                 pii_service=mock_pii,
             )
@@ -185,8 +186,8 @@ class TestFaqServiceForbiddenQuery:
             # 실행
             context_docs, source = await service._search_milvus(req)
 
-            # 검증: Milvus search가 호출됨
-            mock_milvus.search.assert_called_once()
+            # 검증: RagHandler search가 호출됨
+            mock_rag_handler.perform_search_with_fallback.assert_called_once()
 
             # 검증: 결과 반환
             assert len(context_docs) == 1
@@ -194,16 +195,13 @@ class TestFaqServiceForbiddenQuery:
 
     @pytest.mark.asyncio
     async def test_filter_disabled_allows_all_queries(self, temp_ruleset_dir):
-        """필터 비활성화 시 모든 질문이 Milvus 검색을 수행."""
-        mock_milvus = MagicMock()
-        mock_milvus.search = AsyncMock(return_value=[
-            {
-                "doc_id": "doc1",
-                "content": "기밀 정보입니다.",
-                "score": 0.9,
-                "metadata": {"chunk_id": 1},
-            }
-        ])
+        """필터 비활성화 시 모든 질문이 RagHandler 검색을 수행."""
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=(
+            [ChatSource(doc_id="doc1", title="기밀문서.pdf", snippet="기밀 정보입니다.", score=0.9)],
+            False,
+            "MILVUS"
+        ))
 
         mock_llm = MagicMock()
         mock_pii = MagicMock()
@@ -220,7 +218,7 @@ class TestFaqServiceForbiddenQuery:
             mock_settings.return_value = settings_instance
 
             service = FaqDraftService(
-                milvus_client=mock_milvus,
+                rag_handler=mock_rag_handler,
                 llm_client=mock_llm,
                 pii_service=mock_pii,
             )
@@ -233,9 +231,9 @@ class TestFaqServiceForbiddenQuery:
                 sample_questions=["회사 기밀 알려줘"],
             )
 
-            # 실행: 필터 비활성화이므로 Milvus 검색 수행
+            # 실행: 필터 비활성화이므로 RagHandler 검색 수행
             context_docs, source = await service._search_milvus(req)
 
-            # 검증: Milvus search가 호출됨
-            mock_milvus.search.assert_called_once()
+            # 검증: RagHandler search가 호출됨
+            mock_rag_handler.perform_search_with_fallback.assert_called_once()
             assert len(context_docs) == 1

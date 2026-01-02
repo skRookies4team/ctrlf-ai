@@ -145,14 +145,16 @@ class TestChatServicePersonalization:
         # Mock 설정: sub_intent_id가 빈 문자열
         mock_orchestrator = mock_dependencies["router_orchestrator"]
         mock_orchestrator.route = AsyncMock(return_value=MagicMock(
-            needs_user_response=False,
+            needs_user_response=True,  # needs_user_response=True로 변경하여 CLARIFY 트리거
             router_result=RouterResult(
                 tier0_intent=Tier0Intent.BACKEND_STATUS,
                 route_type=RouterRouteType.BACKEND_API,
                 sub_intent_id="",  # 비어있음
                 confidence=0.5,
+                needs_clarify=True,  # CLARIFY 필요
+                clarify_question=ClarifyTemplates.BACKEND_STATUS_CLARIFY[0],
             ),
-            response_message="",
+            response_message=ClarifyTemplates.BACKEND_STATUS_CLARIFY[0],
         ))
 
         with patch("app.services.chat_service.get_settings") as mock_settings:

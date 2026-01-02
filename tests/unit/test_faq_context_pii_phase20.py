@@ -23,6 +23,8 @@ from app.services.faq_service import (
     FaqGenerationError,
     RagSearchResult,
 )
+from app.services.chat.rag_handler import RagHandler
+from app.models.chat import ChatSource
 
 
 class TestContextPiiDetection:
@@ -58,28 +60,22 @@ class TestContextPiiDetection:
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        # Milvus 검색 클라이언트 mock: PII가 포함된 스니펫 반환
-        mock_milvus = AsyncMock()
-        mock_milvus.search = AsyncMock(return_value=[
-            {
-                "document_name": "내부규정.pdf",
-                "page_num": 1,
-                "similarity": 0.9,
-                "content": "연차휴가 신청 시 담당자 test@example.com으로 문의하세요.",  # PII 포함
-            },
-            {
-                "document_name": "내부규정.pdf",
-                "page_num": 2,
-                "similarity": 0.85,
-                "content": "휴가 신청 절차는 다음과 같습니다.",  # PII 없음
-            },
-        ])
+        # RagHandler mock: PII가 포함된 스니펫 반환
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=(
+            [
+                ChatSource(doc_id="내부규정.pdf", title="내부규정.pdf", snippet="연차휴가 신청 시 담당자 test@example.com으로 문의하세요.", score=0.9),
+                ChatSource(doc_id="내부규정.pdf", title="내부규정.pdf", snippet="휴가 신청 절차는 다음과 같습니다.", score=0.85),
+            ],
+            False,
+            "MILVUS"
+        ))
 
         # LLM 클라이언트 mock (호출되면 안 됨)
         mock_llm_client = AsyncMock()
 
         service = FaqDraftService(
-            milvus_client=mock_milvus,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )
@@ -128,20 +124,17 @@ class TestContextPiiDetection:
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        mock_milvus = AsyncMock()
-        mock_milvus.search = AsyncMock(return_value=[
-            {
-                "document_name": "연락처.pdf",
-                "page_num": 1,
-                "similarity": 0.9,
-                "content": "담당자 연락처: 010-1234-5678",  # PII 포함
-            },
-        ])
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=(
+            [ChatSource(doc_id="연락처.pdf", title="연락처.pdf", snippet="담당자 연락처: 010-1234-5678", score=0.9)],
+            False,
+            "MILVUS"
+        ))
 
         mock_llm_client = AsyncMock()
 
         service = FaqDraftService(
-            milvus_client=mock_milvus,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )
@@ -172,15 +165,12 @@ class TestContextPiiDetection:
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        mock_milvus = AsyncMock()
-        mock_milvus.search = AsyncMock(return_value=[
-            {
-                "document_name": "휴가규정.pdf",
-                "page_num": 1,
-                "similarity": 0.9,
-                "content": "연차휴가 신청은 사내 시스템을 통해 진행합니다.",  # PII 없음
-            },
-        ])
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=(
+            [ChatSource(doc_id="휴가규정.pdf", title="휴가규정.pdf", snippet="연차휴가 신청은 사내 시스템을 통해 진행합니다.", score=0.9)],
+            False,
+            "MILVUS"
+        ))
 
         mock_llm_client = AsyncMock()
         mock_llm_client.generate_chat_completion = AsyncMock(return_value="""
@@ -197,7 +187,7 @@ ai_confidence: 0.85
 """)
 
         service = FaqDraftService(
-            milvus_client=mock_milvus,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )
@@ -233,27 +223,16 @@ ai_confidence: 0.85
 
         mock_pii_service.detect_and_mask = mock_detect_and_mask
 
-        mock_milvus = AsyncMock()
-        mock_milvus.search = AsyncMock(return_value=[
-            {
-                "document_name": "휴가규정.pdf",
-                "page_num": 1,
-                "similarity": 0.9,
-                "content": "",  # 빈 스니펫
-            },
-            {
-                "document_name": "휴가규정.pdf",
-                "page_num": 2,
-                "similarity": 0.85,
-                "content": "   ",  # 공백만 있는 스니펫
-            },
-            {
-                "document_name": "휴가규정.pdf",
-                "page_num": 3,
-                "similarity": 0.8,
-                "content": "정상적인 내용입니다.",  # 정상 스니펫
-            },
-        ])
+        mock_rag_handler = MagicMock(spec=RagHandler)
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(return_value=(
+            [
+                ChatSource(doc_id="휴가규정.pdf", title="휴가규정.pdf", snippet="", score=0.9),
+                ChatSource(doc_id="휴가규정.pdf", title="휴가규정.pdf", snippet="   ", score=0.85),
+                ChatSource(doc_id="휴가규정.pdf", title="휴가규정.pdf", snippet="정상적인 내용입니다.", score=0.8),
+            ],
+            False,
+            "MILVUS"
+        ))
 
         mock_llm_client = AsyncMock()
         mock_llm_client.generate_chat_completion = AsyncMock(return_value="""
@@ -266,7 +245,7 @@ ai_confidence: 0.85
 """)
 
         service = FaqDraftService(
-            milvus_client=mock_milvus,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
             pii_service=mock_pii_service,
         )

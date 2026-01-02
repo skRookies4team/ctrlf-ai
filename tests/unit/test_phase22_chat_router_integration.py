@@ -111,8 +111,9 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
     )
 
     # Mock other services
-    mock_llm = AsyncMock()
+    mock_llm = MagicMock()
     mock_llm.generate_chat_completion = AsyncMock(return_value="테스트 응답입니다.")
+    mock_llm.get_used_model = MagicMock(return_value="test-model")
 
     mock_pii = MagicMock()
     mock_pii.detect_and_mask = AsyncMock(return_value=MagicMock(
@@ -177,6 +178,8 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
         service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
+        # Phase 50: 금지질문 필터 mock
+        service._forbidden_filter = None
 
         # Act
         response = await service.handle_chat(mock_chat_request)
@@ -250,6 +253,8 @@ async def test_chat_returns_clarify_response(mock_chat_request):
         service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
+        # Phase 50: 금지질문 필터 mock
+        service._forbidden_filter = None
 
         # ChatRequest with 교육 관련 질문
         request = ChatRequest(
@@ -332,6 +337,8 @@ async def test_chat_returns_confirmation_response(mock_chat_request):
         service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
+        # Phase 50: 금지질문 필터 mock
+        service._forbidden_filter = None
 
         request = ChatRequest(
             session_id="test-session-003",
@@ -406,6 +413,8 @@ async def test_chat_returns_system_help(mock_chat_request):
         service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
+        # Phase 50: 금지질문 필터 mock
+        service._forbidden_filter = None
 
         request = ChatRequest(
             session_id="test-session-004",
@@ -482,6 +491,8 @@ async def test_chat_returns_unknown_response(mock_chat_request):
         service._answer_guard.get_soft_guardrail_system_instruction = MagicMock(return_value="")
         # Phase 39: last error reason
         service._last_error_reason = None
+        # Phase 50: 금지질문 필터 mock
+        service._forbidden_filter = None
 
         request = ChatRequest(
             session_id="test-session-005",

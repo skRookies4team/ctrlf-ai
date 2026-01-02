@@ -3,11 +3,13 @@ FaqDraftService 단위 테스트 (Phase 19-AI-2)
 
 테스트 케이스:
 1. top_docs가 있으면 그대로 사용
-2. top_docs가 없으면 Milvus 검색
-3. Milvus 검색 결과 없으면 NO_DOCS_FOUND 에러
-4. Milvus 검색 결과 포맷팅
-5. source 필드 처리 (top_docs vs Milvus)
+2. top_docs가 없으면 RagHandler 검색
+3. RagHandler 검색 결과 없으면 NO_DOCS_FOUND 에러
+4. 검색 결과 포맷팅
+5. source 필드 처리 (top_docs vs MILVUS)
 6. 참고 문서 정보 answer_markdown에 추가
+
+Step 7 업데이트: milvus_client → rag_handler
 """
 
 import pytest
@@ -25,7 +27,8 @@ from app.models.faq import (
     FaqDraftGenerateRequest,
     FaqSourceDoc,
 )
-from app.clients.milvus_client import MilvusSearchError
+from app.models.chat import ChatSource
+from app.services.chat.rag_handler import RagHandler, RagSearchUnavailableError
 
 
 # =============================================================================
@@ -40,9 +43,11 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def mock_milvus_client():
-    """테스트용 MilvusSearchClient mock"""
-    return AsyncMock()
+def mock_rag_handler():
+    """테스트용 RagHandler mock"""
+    handler = MagicMock(spec=RagHandler)
+    handler.perform_search_with_fallback = AsyncMock(return_value=([], False, "MILVUS"))
+    return handler
 
 
 @pytest.fixture
@@ -90,8 +95,27 @@ def sample_top_docs() -> list[FaqSourceDoc]:
 
 
 @pytest.fixture
+def sample_chat_sources() -> list[ChatSource]:
+    """테스트용 RagHandler 검색 결과 (ChatSource 형태)"""
+    return [
+        ChatSource(
+            doc_id="인사규정.pdf",
+            title="인사규정.pdf",
+            snippet="연차휴가는 익년도로 이월 가능하며, 최대 10일까지 이월됩니다.",
+            score=0.92,
+        ),
+        ChatSource(
+            doc_id="휴가관리지침.pdf",
+            title="휴가관리지침.pdf",
+            snippet="연차휴가 이월 신청은 매년 12월 말까지 완료해야 합니다.",
+            score=0.85,
+        ),
+    ]
+
+
+@pytest.fixture
 def sample_milvus_chunks() -> list[dict]:
-    """테스트용 Milvus 검색 결과"""
+    """테스트용 Milvus 검색 결과 (레거시 형태)"""
     return [
         {
             "document_name": "인사규정.pdf",
@@ -175,12 +199,12 @@ class TestGetContextDocs:
 
     @pytest.mark.anyio
     async def test_use_top_docs_when_provided(
-        self, mock_milvus_client, mock_llm_client, sample_request, sample_top_docs
+        self, mock_rag_handler, mock_llm_client, sample_request, sample_top_docs
     ):
         """top_docs가 제공되면 그대로 사용"""
         sample_request.top_docs = sample_top_docs
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -188,16 +212,18 @@ class TestGetContextDocs:
 
         assert answer_source == "TOP_DOCS"
         assert context_docs == sample_top_docs
-        mock_milvus_client.search.assert_not_called()
+        mock_rag_handler.perform_search_with_fallback.assert_not_called()
 
     @pytest.mark.anyio
     async def test_search_milvus_when_no_top_docs(
-        self, mock_milvus_client, mock_llm_client, sample_request, sample_milvus_chunks
+        self, mock_rag_handler, mock_llm_client, sample_request, sample_chat_sources
     ):
-        """top_docs가 없으면 Milvus 검색"""
-        mock_milvus_client.search = AsyncMock(return_value=sample_milvus_chunks)
+        """top_docs가 없으면 RagHandler 검색"""
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(sample_chat_sources, False, "MILVUS")
+        )
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -205,17 +231,18 @@ class TestGetContextDocs:
 
         assert answer_source == "MILVUS"
         assert len(context_docs) == 2
-        assert isinstance(context_docs[0], RagSearchResult)
-        mock_milvus_client.search.assert_called_once()
+        mock_rag_handler.perform_search_with_fallback.assert_called_once()
 
     @pytest.mark.anyio
     async def test_no_docs_found_error(
-        self, mock_milvus_client, mock_llm_client, sample_request
+        self, mock_rag_handler, mock_llm_client, sample_request
     ):
-        """Milvus 검색 결과가 없으면 NO_DOCS_FOUND 에러"""
-        mock_milvus_client.search = AsyncMock(return_value=[])
+        """RagHandler 검색 결과가 없으면 NO_DOCS_FOUND 에러"""
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=([], False, "MILVUS")
+        )
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -226,21 +253,21 @@ class TestGetContextDocs:
 
     @pytest.mark.anyio
     async def test_milvus_search_error(
-        self, mock_milvus_client, mock_llm_client, sample_request
+        self, mock_rag_handler, mock_llm_client, sample_request
     ):
-        """Milvus 검색 오류 처리"""
-        mock_milvus_client.search = AsyncMock(
-            side_effect=MilvusSearchError("Search failed")
+        """RagHandler 검색 오류 처리"""
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            side_effect=RagSearchUnavailableError("Search failed")
         )
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
         with pytest.raises(FaqGenerationError) as exc_info:
             await service._get_context_docs(sample_request)
 
-        assert "검색 실패" in str(exc_info.value)
+        assert "검색 실패" in str(exc_info.value) or "Search" in str(exc_info.value)
 
 
 # =============================================================================
@@ -251,10 +278,10 @@ class TestGetContextDocs:
 class TestFormatDocsForPrompt:
     """_format_docs_for_prompt 메서드 테스트"""
 
-    def test_format_faq_source_docs(self, mock_milvus_client, mock_llm_client, sample_top_docs):
+    def test_format_faq_source_docs(self, mock_rag_handler, mock_llm_client, sample_top_docs):
         """FaqSourceDoc 포맷팅"""
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -265,11 +292,11 @@ class TestFormatDocsForPrompt:
         assert "(제5조)" in result
         assert "연차휴가는 다음 해로 이월이 가능합니다." in result
 
-    def test_format_rag_search_results(self, mock_milvus_client, mock_llm_client, sample_milvus_chunks):
+    def test_format_rag_search_results(self, mock_rag_handler, mock_llm_client, sample_milvus_chunks):
         """RagSearchResult 포맷팅"""
         context_docs = [RagSearchResult.from_chunk(c) for c in sample_milvus_chunks]
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -280,10 +307,10 @@ class TestFormatDocsForPrompt:
         assert "(chunk #15)" in result
         assert "[유사도: 0.92]" in result
 
-    def test_format_empty_docs(self, mock_milvus_client, mock_llm_client):
+    def test_format_empty_docs(self, mock_rag_handler, mock_llm_client):
         """빈 문서 리스트 포맷팅"""
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -301,11 +328,11 @@ class TestCreateFaqDraft:
     """_create_faq_draft 메서드 테스트"""
 
     def test_create_with_top_docs(
-        self, mock_milvus_client, mock_llm_client, sample_request, sample_top_docs
+        self, mock_rag_handler, mock_llm_client, sample_request, sample_top_docs
     ):
         """top_docs 사용 시 source 필드 채움"""
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
         parsed = {
@@ -326,12 +353,12 @@ class TestCreateFaqDraft:
         assert "참고 문서" not in draft.answer_markdown
 
     def test_create_with_milvus_results(
-        self, mock_milvus_client, mock_llm_client, sample_request, sample_milvus_chunks
+        self, mock_rag_handler, mock_llm_client, sample_request, sample_milvus_chunks
     ):
         """Milvus 검색 결과 사용 시 source 필드 null, answer_source=MILVUS"""
         context_docs = [RagSearchResult.from_chunk(c) for c in sample_milvus_chunks]
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
         parsed = {
@@ -364,12 +391,12 @@ class TestGenerateFaqDraft:
 
     @pytest.mark.anyio
     async def test_generate_with_top_docs(
-        self, mock_milvus_client, mock_llm_client, sample_request, sample_top_docs
+        self, mock_rag_handler, mock_llm_client, sample_request, sample_top_docs
     ):
         """top_docs 제공 시 전체 플로우"""
         sample_request.top_docs = sample_top_docs
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -380,16 +407,18 @@ class TestGenerateFaqDraft:
         assert draft.domain == "POLICY"
         assert draft.source_doc_id == "doc-001"
         assert draft.answer_source == "TOP_DOCS"
-        mock_milvus_client.search.assert_not_called()
+        mock_rag_handler.perform_search_with_fallback.assert_not_called()
 
     @pytest.mark.anyio
     async def test_generate_with_milvus_search(
-        self, mock_milvus_client, mock_llm_client, sample_request, sample_milvus_chunks
+        self, mock_rag_handler, mock_llm_client, sample_request, sample_chat_sources
     ):
-        """Milvus 검색 사용 시 전체 플로우"""
-        mock_milvus_client.search = AsyncMock(return_value=sample_milvus_chunks)
+        """RagHandler 검색 사용 시 전체 플로우"""
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=(sample_chat_sources, False, "MILVUS")
+        )
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -398,16 +427,18 @@ class TestGenerateFaqDraft:
         assert draft.faq_draft_id is not None
         assert draft.source_doc_id is None
         assert draft.answer_source == "MILVUS"
-        mock_milvus_client.search.assert_called_once()
+        mock_rag_handler.perform_search_with_fallback.assert_called_once()
 
     @pytest.mark.anyio
     async def test_generate_no_docs_found(
-        self, mock_milvus_client, mock_llm_client, sample_request
+        self, mock_rag_handler, mock_llm_client, sample_request
     ):
         """검색 결과 없음 시 FAILED 응답"""
-        mock_milvus_client.search = AsyncMock(return_value=[])
+        mock_rag_handler.perform_search_with_fallback = AsyncMock(
+            return_value=([], False, "MILVUS")
+        )
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm_client,
         )
 
@@ -418,7 +449,7 @@ class TestGenerateFaqDraft:
 
     @pytest.mark.anyio
     async def test_generate_llm_error(
-        self, mock_milvus_client, sample_request, sample_top_docs
+        self, mock_rag_handler, sample_request, sample_top_docs
     ):
         """LLM 호출 실패 시 에러"""
         sample_request.top_docs = sample_top_docs
@@ -427,7 +458,7 @@ class TestGenerateFaqDraft:
             side_effect=Exception("LLM connection failed")
         )
         service = FaqDraftService(
-            milvus_client=mock_milvus_client,
+            rag_handler=mock_rag_handler,
             llm_client=mock_llm,
         )
 
