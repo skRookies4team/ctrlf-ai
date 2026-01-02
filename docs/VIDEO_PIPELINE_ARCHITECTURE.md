@@ -345,7 +345,7 @@ POST /api/videos/{video_id}/render-jobs
 ├─────────────────────────────────────────────────────────────────────┤
 │  POST {LLM_BASE_URL}/v1/chat/completions                            │
 │  {                                                                  │
-│    "model": "meta-llama/Meta-Llama-3-8B-Instruct",                             │
+│    "model": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",                             │
 │    "messages": [...],                                               │
 │    "temperature": 0.3,                                              │
 │    "max_tokens": 4096                                               │
@@ -628,7 +628,7 @@ POST /api/videos/{video_id}/render-jobs
 | 설정        | 값                                    |
 | ----------- | ------------------------------------- |
 | API         | OpenAI-compatible                     |
-| Model       | `meta-llama/Meta-Llama-3-8B-Instruct` |
+| Model       | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
 | Temperature | 0.3                                   |
 | Max Tokens  | 4096                                  |
 | Timeout     | 30초                                  |
@@ -819,7 +819,7 @@ WS /ws/videos/{video_id}/render-progress
 | 환경변수         | 설명           | 기본값                                |
 | ---------------- | -------------- | ------------------------------------- |
 | `LLM_BASE_URL`   | LLM 서버 URL   | -                                     |
-| `LLM_MODEL_NAME` | 모델명         | `meta-llama/Meta-Llama-3-8B-Instruct` |
+| `LLM_MODEL_NAME` | 모델명         | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
 | `AI_ENV`         | mock/real 모드 | `mock`                                |
 
 ### 9.2 Video Rendering

@@ -157,7 +157,7 @@ class AILogEntry(BaseModel):
     "route": "RAG_INTERNAL",
     "hasPiiInput": false,
     "hasPiiOutput": false,
-    "modelName": "meta-llama/Meta-Llama-3-8B-Instruct",
+    "modelName": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",
     "ragUsed": true,
     "ragSourceCount": 3,
     "latencyMs": 1250,

@@ -250,7 +250,7 @@ AI_ENV=real
 
 # LLM 서버 (vLLM - 채팅 + 임베딩 통합)
 LLM_BASE_URL=http://your-llm-server:port
-LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 EMBEDDING_MODEL_NAME=BAAI/bge-m3
 
 # Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)
