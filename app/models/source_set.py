@@ -30,8 +30,14 @@ class SourceSetStatus(str, Enum):
     """소스셋 상태 (DB: education.source_set.status)."""
     CREATED = "CREATED"
     LOCKED = "LOCKED"
+    SCRIPT_GENERATING = "SCRIPT_GENERATING"  # 씬별 패치 전송 중
     SCRIPT_READY = "SCRIPT_READY"
     FAILED = "FAILED"
+
+
+class ScriptPatchType(str, Enum):
+    """스크립트 패치 타입."""
+    SCENE_UPSERT = "SCENE_UPSERT"  # 씬 추가/수정
 
 
 class DocumentStatus(str, Enum):
@@ -248,17 +254,41 @@ class GeneratedScene(BaseModel):
     )
     narration: str = Field(
         ...,
-        description="나레이션 텍스트",
+        description="나레이션 텍스트 (TTS 입력)",
     )
     caption: Optional[str] = Field(
         None,
-        description="자막/캡션",
+        description="화면 하단 자막",
     )
     visual: Optional[str] = Field(
         None,
-        description="시각 자료 설명",
+        description="시각 자료 설명 (레거시, visual_description 권장)",
     )
-    duration_sec: float = Field(
+    visual_type: Optional[str] = Field(
+        None,
+        alias="visualType",
+        description="시각 자료 유형 (TITLE_SLIDE|KEY_POINTS|COMPARISON|DIAGRAM|EXAMPLE|WARNING|SUMMARY)",
+    )
+    visual_text: Optional[str] = Field(
+        None,
+        alias="visualText",
+        description="화면에 표시할 텍스트 (bullet point는 \\n 구분)",
+    )
+    visual_description: Optional[str] = Field(
+        None,
+        alias="visualDescription",
+        description="영상 편집자를 위한 시각 자료 상세 설명",
+    )
+    highlight_terms: List[str] = Field(
+        default_factory=list,
+        alias="highlightTerms",
+        description="강조 표시할 핵심 용어",
+    )
+    transition: Optional[str] = Field(
+        None,
+        description="화면 전환 효과 (fade|slide|zoom|none)",
+    )
+    duration_sec: int = Field(
         ...,
         alias="durationSec",
         description="씬 길이 (초)",
@@ -293,7 +323,7 @@ class GeneratedChapter(BaseModel):
         ...,
         description="챕터 제목",
     )
-    duration_sec: float = Field(
+    duration_sec: int = Field(
         ...,
         alias="durationSec",
         description="챕터 길이 (초)",
@@ -332,7 +362,7 @@ class GeneratedScript(BaseModel):
         ...,
         description="스크립트 제목",
     )
-    total_duration_sec: float = Field(
+    total_duration_sec: int = Field(
         ...,
         alias="totalDurationSec",
         description="전체 길이 (초)",
@@ -355,10 +385,63 @@ class GeneratedScript(BaseModel):
         populate_by_name = True
 
 
+class ScriptPatch(BaseModel):
+    """스크립트 패치 (씬 단위 업서트).
+
+    씬이 생성될 때마다 백엔드에 전송하여 부분 저장.
+    기존 스크립트에 병합(merge)되며, 새 버전을 만들지 않음.
+    """
+    type: str = Field(
+        default="SCENE_UPSERT",
+        description="패치 타입 (SCENE_UPSERT)",
+    )
+    script_id: Optional[str] = Field(
+        None,
+        alias="scriptId",
+        description="스크립트 ID (없으면 새로 생성)",
+    )
+    chapter_index: int = Field(
+        ...,
+        alias="chapterIndex",
+        description="챕터 인덱스 (0-based)",
+    )
+    chapter_title: Optional[str] = Field(
+        None,
+        alias="chapterTitle",
+        description="챕터 제목 (챕터 최초 생성 시 필요)",
+    )
+    scene_index: int = Field(
+        ...,
+        alias="sceneIndex",
+        description="씬 인덱스 (0-based)",
+    )
+    scene: GeneratedScene = Field(
+        ...,
+        description="씬 데이터",
+    )
+    total_scenes: Optional[int] = Field(
+        None,
+        alias="totalScenes",
+        description="전체 씬 수 (진행률 표시용)",
+    )
+    current_scene: Optional[int] = Field(
+        None,
+        alias="currentScene",
+        description="현재 씬 번호 (1-based, 진행률 표시용)",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
 class SourceSetCompleteRequest(BaseModel):
     """소스셋 완료 콜백 요청.
 
     POST /internal/callbacks/source-sets/{sourceSetId}/complete
+
+    두 가지 모드 지원:
+    1. 전체 스크립트 전송 (기존): script 필드 사용, sourceSetStatus=SCRIPT_READY
+    2. 씬별 패치 전송 (신규): scriptPatch 필드 사용, sourceSetStatus=SCRIPT_GENERATING
     """
     video_id: str = Field(
         ...,
@@ -372,7 +455,7 @@ class SourceSetCompleteRequest(BaseModel):
     source_set_status: str = Field(
         ...,
         alias="sourceSetStatus",
-        description="소스셋 DB 상태 (SCRIPT_READY | FAILED)",
+        description="소스셋 DB 상태 (SCRIPT_GENERATING | SCRIPT_READY | FAILED)",
     )
     documents: List[DocumentResult] = Field(
         default_factory=list,
@@ -380,7 +463,12 @@ class SourceSetCompleteRequest(BaseModel):
     )
     script: Optional[GeneratedScript] = Field(
         None,
-        description="생성된 스크립트 (성공 시)",
+        description="생성된 스크립트 (전체 전송 시)",
+    )
+    script_patch: Optional[ScriptPatch] = Field(
+        None,
+        alias="scriptPatch",
+        description="스크립트 패치 (씬별 전송 시)",
     )
     error_code: Optional[str] = Field(
         None,
@@ -465,15 +553,24 @@ class ChunkBulkUpsertRequest(BaseModel):
 
 
 class ChunkBulkUpsertResponse(BaseModel):
-    """청크 벌크 업서트 응답."""
+    """청크 벌크 업서트 응답.
+
+    Backend 호환 (RagDtos.ChunksBulkUpsertResponse):
+    - saved: 저장 성공 여부
+    - savedCount: 저장된 청크 수
+    """
     saved: bool = Field(
         ...,
         description="저장 여부",
     )
-    count: int = Field(
+    saved_count: int = Field(
         ...,
+        alias="savedCount",
         description="저장된 청크 수",
     )
+
+    class Config:
+        populate_by_name = True
 
 
 class FailChunkItem(BaseModel):
@@ -516,12 +613,21 @@ class FailChunkBulkUpsertRequest(BaseModel):
 
 
 class FailChunkBulkUpsertResponse(BaseModel):
-    """실패 청크 벌크 업서트 응답."""
+    """실패 청크 벌크 업서트 응답.
+
+    Backend 호환 (RagDtos.FailChunksBulkUpsertResponse):
+    - saved: 저장 성공 여부
+    - savedCount: 저장된 실패 로그 수
+    """
     saved: bool = Field(
         ...,
         description="저장 여부",
     )
-    count: int = Field(
+    saved_count: int = Field(
         ...,
+        alias="savedCount",
         description="저장된 실패 로그 수",
     )
+
+    class Config:
+        populate_by_name = True

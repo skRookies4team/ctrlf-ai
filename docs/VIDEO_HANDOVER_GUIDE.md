@@ -738,13 +738,13 @@ CREATED → LOCKED → SCRIPT_READY | FAILED
 
 ### 6.2 LLM 설정
 
-| 설정        | 값                                    |
-| ----------- | ------------------------------------- |
-| API         | OpenAI-compatible                     |
+| 설정        | 값                                     |
+| ----------- | -------------------------------------- |
+| API         | OpenAI-compatible                      |
 | Model       | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
-| Temperature | 0.3 (일관성)                          |
-| Max Tokens  | 4096                                  |
-| Timeout     | 30초                                  |
+| Temperature | 0.3 (일관성)                           |
+| Max Tokens  | 4096                                   |
+| Timeout     | 30초                                   |
 
 ### 6.3 TTS 설정
 

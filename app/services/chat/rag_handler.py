@@ -77,11 +77,16 @@ from app.core.metrics import (
 )
 from app.models.chat import ChatRequest, ChatSource
 from app.utils.debug_log import dbg_final_query, dbg_retrieval_top5, dbg_retrieval_target
+from app.core.retrieval_context import (
+    is_retrieval_blocked,
+    get_block_reason,
+    RetrievalBlockedError,
+)
 
 logger = get_logger(__name__)
 
-# retriever_used 타입 정의
-RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK"]
+# retriever_used 타입 정의 (Phase 50: BLOCKED 추가)
+RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK", "BLOCKED"]
 
 # Phase 44: 검색 설정 상수
 DEFAULT_TOP_K = 5
@@ -522,8 +527,9 @@ class RagHandler:
         self,
         query: str,
         domain: str,
-        req: ChatRequest,
+        req: Optional[ChatRequest] = None,
         request_id: Optional[str] = None,
+        top_k: Optional[int] = None,
     ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
         RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다.
@@ -536,21 +542,35 @@ class RagHandler:
         - 검색 전 쿼리 정규화 (마스킹 토큰 제거)
         - 1차 검색 결과 0건 → top_k 올려서 재시도 (5 → 15)
 
+        Step 7: req 파라미터 옵셔널화
+        - FaqService 등에서 ChatRequest 없이도 사용 가능
+        - req=None이면 user_role, department는 None으로 전달
+
         Args:
             query: 검색 쿼리 (마스킹된 상태)
             domain: 도메인
-            req: 원본 요청
+            req: 원본 요청 (선택, None이면 user_role/department 없이 검색)
             request_id: 디버그용 요청 ID
+            top_k: 검색 결과 개수 (선택, None이면 설정값 사용)
 
         Returns:
             Tuple[List[ChatSource], bool, RetrieverUsed]:
                 - 검색 결과
                 - 실패 여부 (0건도 정상=False)
-                - 사용된 retriever ("MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK")
+                - 사용된 retriever ("MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK", "BLOCKED")
 
         Raises:
             RagSearchUnavailableError: 모든 검색 서비스 장애 시 (503 반환용)
         """
+        # Phase 50: 2차 가드 - 컨텍스트 플래그 확인
+        if is_retrieval_blocked():
+            reason = get_block_reason() or "unknown"
+            logger.warning(
+                f"RagHandler: Retrieval blocked by context flag, returning empty sources. "
+                f"reason={reason}"
+            )
+            return [], False, "BLOCKED"
+
         # Phase 44: 검색용 쿼리 정규화 (마스킹 토큰 제거)
         normalized_query = normalize_query_for_search(query)
 
@@ -570,6 +590,7 @@ class RagHandler:
                 domain=domain,
                 req=req,
                 request_id=request_id,
+                top_k=top_k,
             )
         else:
             # RAGFlow만 사용
@@ -596,8 +617,9 @@ class RagHandler:
         self,
         query: str,
         domain: str,
-        req: ChatRequest,
+        req: Optional[ChatRequest] = None,
         request_id: Optional[str] = None,
+        top_k: Optional[int] = None,
     ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
         Milvus 전용 검색을 수행합니다.
@@ -610,6 +632,9 @@ class RagHandler:
         """
         settings = self._settings
 
+        # Step 7: top_k 결정 (파라미터 > 설정값)
+        effective_top_k = top_k if top_k is not None else settings.CHAT_CONTEXT_MAX_SOURCES
+
         # 디버그 로그: retrieval_target (Milvus)
         if request_id:
             dbg_retrieval_target(
@@ -617,18 +642,19 @@ class RagHandler:
                 collection=settings.MILVUS_COLLECTION_NAME,
                 partition=None,
                 filter_expr=None,
-                top_k=settings.CHAT_CONTEXT_MAX_SOURCES,
+                top_k=effective_top_k,
                 domain=domain,
             )
 
         try:
             # Milvus 검색
+            # Step 7: req가 None일 때 user_role, department는 None으로 전달
             sources = await self._milvus.search_as_sources(
                 query=query,
                 domain=domain,
-                user_role=req.user_role,
-                department=req.department,
-                top_k=settings.CHAT_CONTEXT_MAX_SOURCES,
+                user_role=req.user_role if req else None,
+                department=req.department if req else None,
+                top_k=effective_top_k,
                 request_id=request_id,
             )
 
@@ -653,6 +679,13 @@ class RagHandler:
 
             # 결과 0건도 정상 처리 (failed=False)
             return sources, False, "MILVUS"
+
+        except RetrievalBlockedError as e:
+            # Phase 50: 2차 가드 - MilvusClient에서 올라온 RetrievalBlockedError 안전 처리
+            logger.warning(
+                f"RagHandler: RetrievalBlockedError caught from Milvus | reason={e.reason}"
+            )
+            return [], False, "BLOCKED"
 
         except MilvusSearchError as e:
             logger.error(f"Milvus search failed: {e}")

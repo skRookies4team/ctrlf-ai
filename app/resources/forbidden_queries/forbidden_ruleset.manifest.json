@@ -1,0 +1,23 @@
+{
+  "generated_at": "2025-12-31T08:28:26.573764+00:00",
+  "outputs": {
+    "forbidden_ruleset.A.json": {
+      "path": "app/resources/forbidden_queries\\forbidden_ruleset.A.json",
+      "sha256": "037ef4473fea6ed5a7cb02b38f7e2b173e94bbb737213969e20e589847dc209e"
+    },
+    "forbidden_ruleset.B.json": {
+      "path": "app/resources/forbidden_queries\\forbidden_ruleset.B.json",
+      "sha256": "104a568df49b7454c262bd57a38668642eefc17fd8b75c4d06bb43151c306af2"
+    },
+    "forbidden_ruleset.all.json": {
+      "path": "app/resources/forbidden_queries\\forbidden_ruleset.all.json",
+      "sha256": "fbaecb255a54049df12fe0de4d3562a1b85f4d18c6a7f2760b43e9dd3abcdd3d"
+    }
+  },
+  "schema_version": "1.0",
+  "source_xlsx": {
+    "path": "docs/금지질문리스트.xlsx",
+    "sha256": "b96fedc6fdb7e02750bee88e516d510661cc6b1e436684fd907a4ec3973d33d6"
+  },
+  "version": "v2025.12.31"
+}

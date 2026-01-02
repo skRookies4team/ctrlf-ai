@@ -3,10 +3,15 @@ Mock RAGFlow Server for Integration Testing
 
 Phase 8: Docker Compose 환경에서 RAG 검색을 시뮬레이션하는 Mock 서버입니다.
 Phase 20: retrieval_results JSON 파일에서 실제 검색 결과를 로드하여 반환합니다.
+Phase 51: 문서 처리 API 추가 (upload, parse, status, chunks) - 백엔드/스크립트 생성 테스트용
 
 엔드포인트:
 - POST /search: RAG 문서 검색 (레거시)
 - POST /api/v1/retrieval: RAG 문서 검색 (RAGFlow 공식 API 호환)
+- POST /api/v1/datasets/{dataset_id}/documents: 문서 업로드
+- POST /api/v1/datasets/{dataset_id}/documents/{doc_id}/run: 파싱 트리거
+- GET /api/v1/datasets/{dataset_id}/documents/{doc_id}: 문서 상태 조회
+- GET /api/v1/datasets/{dataset_id}/documents/{doc_id}/chunks: 청크 조회
 - GET /health: 헬스체크
 - GET /stats: 호출 통계 (테스트 검증용)
 """
@@ -14,12 +19,13 @@ Phase 20: retrieval_results JSON 파일에서 실제 검색 결과를 로드하�
 import json
 import logging
 import os
+import uuid
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile, Query
 from pydantic import BaseModel
 
 # 로깅 설정
@@ -104,6 +110,20 @@ class StatsResponse(BaseModel):
 # =============================================================================
 
 
+class MockDocument:
+    """Mock 문서 상태."""
+
+    def __init__(self, doc_id: str, dataset_id: str, file_name: str):
+        self.id = doc_id
+        self.dataset_id = dataset_id
+        self.name = file_name
+        self.run = "UNSTART"  # UNSTART, RUNNING, DONE, FAIL, CANCEL
+        self.progress = 0.0
+        self.chunk_count = 0
+        self.created_at = datetime.now().isoformat()
+        self.chunks: List[Dict[str, Any]] = []
+
+
 class ServerState:
     """서버 상태 추적."""
 
@@ -112,14 +132,59 @@ class ServerState:
         self.last_query: Optional[str] = None
         self.last_dataset: Optional[str] = None
         self.retrieval_data: List[Dict[str, Any]] = []
+        # Phase 51: 문서 처리 상태 추적
+        self.documents: Dict[str, MockDocument] = {}  # doc_id → MockDocument
+        self.upload_count = 0
+        self.parse_count = 0
 
     def reset(self):
         self.search_call_count = 0
         self.last_query = None
         self.last_dataset = None
+        self.documents = {}
+        self.upload_count = 0
+        self.parse_count = 0
 
 
 state = ServerState()
+
+
+# =============================================================================
+# Mock 청크 생성 (문서 처리용)
+# =============================================================================
+
+
+def generate_mock_chunks(doc_id: str, file_name: str, num_chunks: int = 5) -> List[Dict[str, Any]]:
+    """Mock 청크를 생성합니다.
+
+    실제 문서 파싱 없이 테스트용 청크를 생성합니다.
+    """
+    chunks = []
+
+    # 파일명에서 주제 추출
+    topic = file_name.replace(".pdf", "").replace(".docx", "").replace("_", " ")
+
+    mock_contents = [
+        f"{topic}에 대한 개요입니다. 이 문서는 {topic}의 핵심 내용을 다룹니다.",
+        f"{topic}의 주요 정책 및 절차에 대해 설명합니다. 모든 직원은 이를 준수해야 합니다.",
+        f"{topic} 관련 법률 및 규정을 안내합니다. 관련 법률에 따라 시행됩니다.",
+        f"{topic}의 실제 사례와 적용 방법을 소개합니다. 실무에서 활용할 수 있습니다.",
+        f"{topic}에 대한 FAQ 및 문의처 안내입니다. 추가 문의는 담당부서로 연락하세요.",
+    ]
+
+    for i in range(min(num_chunks, len(mock_contents))):
+        chunk = {
+            "id": f"chunk-{doc_id}-{i}",
+            "content": mock_contents[i],
+            "document_id": doc_id,
+            "document_name": file_name,
+            "positions": [[i * 100, i * 100 + 50]],
+            "important_keywords": [topic, "정책", "규정"],
+            "questions": [f"{topic}이란 무엇인가요?"],
+        }
+        chunks.append(chunk)
+
+    return chunks
 
 
 # =============================================================================
@@ -425,6 +490,214 @@ async def reload_data():
         "status": "ok",
         "message": "Data reloaded",
         "loaded_questions": len(state.retrieval_data),
+    }
+
+
+# =============================================================================
+# Phase 51: 문서 처리 API (백엔드/스크립트 생성 테스트용)
+# =============================================================================
+
+
+@app.post("/api/v1/datasets/{dataset_id}/documents")
+async def upload_document(
+    dataset_id: str,
+    file: Optional[UploadFile] = File(None),
+    file_url: Optional[str] = Form(None),
+    file_name: Optional[str] = Form(None),
+):
+    """
+    문서 업로드 엔드포인트.
+
+    RAGFlow API 호환:
+    - 파일 직접 업로드 또는 URL로 업로드 지원
+    - 업로드 즉시 문서 ID 반환
+    """
+    state.upload_count += 1
+
+    # 파일명 결정
+    if file and file.filename:
+        name = file.filename
+    elif file_name:
+        name = file_name
+    elif file_url:
+        name = file_url.split("/")[-1].split("?")[0] or "document.pdf"
+    else:
+        name = f"document-{uuid.uuid4().hex[:8]}.pdf"
+
+    # Mock 문서 생성
+    doc_id = f"doc-{uuid.uuid4().hex[:12]}"
+    mock_doc = MockDocument(doc_id=doc_id, dataset_id=dataset_id, file_name=name)
+    state.documents[doc_id] = mock_doc
+
+    logger.info(
+        f"[Mock RAGFlow] Document uploaded: doc_id={doc_id}, "
+        f"dataset_id={dataset_id}, name={name}"
+    )
+
+    return {
+        "code": 0,
+        "data": {
+            "id": doc_id,
+            "name": name,
+            "dataset_id": dataset_id,
+            "created_at": mock_doc.created_at,
+            "status": "UNSTART",
+        },
+    }
+
+
+@app.post("/api/v1/datasets/{dataset_id}/documents/{doc_id}/run")
+async def trigger_parsing(dataset_id: str, doc_id: str):
+    """
+    문서 파싱 트리거 엔드포인트.
+
+    RAGFlow API 호환:
+    - 파싱 시작 요청
+    - Mock에서는 즉시 DONE 상태로 전환하고 청크 생성
+    """
+    state.parse_count += 1
+
+    if doc_id not in state.documents:
+        logger.warning(f"[Mock RAGFlow] Document not found: doc_id={doc_id}")
+        return {"code": 404, "message": "Document not found"}
+
+    mock_doc = state.documents[doc_id]
+
+    # Mock: 즉시 파싱 완료 처리 (실제는 비동기)
+    mock_doc.run = "DONE"
+    mock_doc.progress = 1.0
+    mock_doc.chunks = generate_mock_chunks(doc_id, mock_doc.name)
+    mock_doc.chunk_count = len(mock_doc.chunks)
+
+    logger.info(
+        f"[Mock RAGFlow] Parsing triggered and completed: doc_id={doc_id}, "
+        f"chunks={mock_doc.chunk_count}"
+    )
+
+    return {
+        "code": 0,
+        "data": {
+            "id": doc_id,
+            "run": mock_doc.run,
+            "progress": mock_doc.progress,
+            "chunk_count": mock_doc.chunk_count,
+        },
+    }
+
+
+@app.get("/api/v1/datasets/{dataset_id}/documents/{doc_id}")
+async def get_document_status(dataset_id: str, doc_id: str):
+    """
+    문서 상태 조회 엔드포인트.
+
+    RAGFlow API 호환:
+    - 파싱 진행 상태 조회 (polling용)
+    - run: UNSTART, RUNNING, DONE, FAIL, CANCEL
+    """
+    if doc_id not in state.documents:
+        logger.warning(f"[Mock RAGFlow] Document not found: doc_id={doc_id}")
+        return {"code": 404, "message": "Document not found"}
+
+    mock_doc = state.documents[doc_id]
+
+    logger.debug(
+        f"[Mock RAGFlow] Document status queried: doc_id={doc_id}, "
+        f"run={mock_doc.run}, progress={mock_doc.progress}"
+    )
+
+    return {
+        "code": 0,
+        "data": {
+            "id": mock_doc.id,
+            "name": mock_doc.name,
+            "dataset_id": mock_doc.dataset_id,
+            "run": mock_doc.run,
+            "progress": mock_doc.progress,
+            "chunk_count": mock_doc.chunk_count,
+            "created_at": mock_doc.created_at,
+        },
+    }
+
+
+@app.get("/api/v1/datasets/{dataset_id}/documents/{doc_id}/chunks")
+async def get_document_chunks(
+    dataset_id: str,
+    doc_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=1000),
+):
+    """
+    문서 청크 조회 엔드포인트.
+
+    RAGFlow API 호환:
+    - 파싱 완료된 문서의 청크 조회
+    - 페이지네이션 지원
+    """
+    if doc_id not in state.documents:
+        logger.warning(f"[Mock RAGFlow] Document not found: doc_id={doc_id}")
+        return {"code": 404, "message": "Document not found"}
+
+    mock_doc = state.documents[doc_id]
+
+    if mock_doc.run != "DONE":
+        logger.warning(
+            f"[Mock RAGFlow] Document not parsed yet: doc_id={doc_id}, "
+            f"run={mock_doc.run}"
+        )
+        return {
+            "code": 0,
+            "data": {
+                "chunks": [],
+                "total": 0,
+            },
+        }
+
+    # 페이지네이션
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_chunks = mock_doc.chunks[start_idx:end_idx]
+
+    logger.info(
+        f"[Mock RAGFlow] Chunks returned: doc_id={doc_id}, "
+        f"page={page}, count={len(paginated_chunks)}, total={len(mock_doc.chunks)}"
+    )
+
+    return {
+        "code": 0,
+        "data": {
+            "chunks": paginated_chunks,
+            "total": len(mock_doc.chunks),
+        },
+    }
+
+
+# =============================================================================
+# 확장 통계 (문서 처리 포함)
+# =============================================================================
+
+
+@app.get("/stats/documents")
+async def get_document_stats():
+    """
+    문서 처리 통계 엔드포인트.
+
+    테스트 검증용으로 업로드/파싱 횟수 및 문서 상태를 확인합니다.
+    """
+    docs_summary = [
+        {
+            "id": doc.id,
+            "name": doc.name,
+            "run": doc.run,
+            "chunk_count": doc.chunk_count,
+        }
+        for doc in state.documents.values()
+    ]
+
+    return {
+        "upload_count": state.upload_count,
+        "parse_count": state.parse_count,
+        "documents_count": len(state.documents),
+        "documents": docs_summary,
     }
 
 

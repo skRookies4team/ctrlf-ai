@@ -127,9 +127,9 @@ async def test_chat_service_calls_orchestrator(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
-    # Phase 22: app.core.config.get_settings를 패치 (import 위치)
+    # Note: get_settings는 chat_service.py 모듈 상단에서 import됨
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.core.config.get_settings', return_value=mock_settings):
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._llm = mock_llm
@@ -223,9 +223,9 @@ async def test_chat_returns_clarify_response(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
-    # Phase 22: app.core.config.get_settings를 패치
+    # Note: get_settings는 chat_service.py 모듈 상단에서 import됨
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.core.config.get_settings', return_value=mock_settings):
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -305,9 +305,9 @@ async def test_chat_returns_confirmation_response(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
-    # Phase 22: app.core.config.get_settings를 패치
+    # Note: get_settings는 chat_service.py 모듈 상단에서 import됨
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.core.config.get_settings', return_value=mock_settings):
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -379,9 +379,9 @@ async def test_chat_returns_system_help(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
-    # Phase 22: app.core.config.get_settings를 패치
+    # Note: get_settings는 chat_service.py 모듈 상단에서 import됨
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.core.config.get_settings', return_value=mock_settings):
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
@@ -455,9 +455,9 @@ async def test_chat_returns_unknown_response(mock_chat_request):
     # Phase 22 수정: Settings mock 추가
     mock_settings = get_mock_settings_with_router_enabled()
 
-    # Phase 22: app.core.config.get_settings를 패치
+    # Note: get_settings는 chat_service.py 모듈 상단에서 import됨
     with patch.object(ChatService, '__init__', lambda x, **kwargs: None), \
-         patch('app.core.config.get_settings', return_value=mock_settings):
+         patch('app.services.chat_service.get_settings', return_value=mock_settings):
         service = ChatService()
         service._router_orchestrator = mock_orchestrator
         service._pii = mock_pii
