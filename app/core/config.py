@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: Optional[HttpUrl] = None
 
     # LLM 모델명 (vLLM 등에서 필요)
-    LLM_MODEL_NAME: str = "meta-llama/Meta-Llama-3-8B-Instruct"
+    LLM_MODEL_NAME: str = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 
     # 임베딩 서비스 URL (LLM과 분리된 임베딩 서버 사용 시)
     EMBEDDING_BASE_URL: Optional[HttpUrl] = None

@@ -662,7 +662,7 @@ Content-Type: application/json
 
 Request:
 {
-  "model": "meta-llama/Meta-Llama-3-8B-Instruct",
+  "model": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",
   "messages": [
     {"role": "system", "content": "너는 기업 내부 FAQ 작성 보조자다..."},
     {"role": "user", "content": "## 도메인\nSEC_POLICY\n\n## 대표 질문..."}
@@ -726,10 +726,10 @@ Response:
 
 ### 7.4 LLM 설정
 
-| 환경변수         | 기본값                                | 설명              |
-| ---------------- | ------------------------------------- | ----------------- |
-| `LLM_BASE_URL`   | (필수)                                | LLM 서비스 URL    |
-| `LLM_MODEL_NAME` | `meta-llama/Meta-Llama-3-8B-Instruct` | 사용할 LLM 모델명 |
+| 환경변수         | 기본값                                 | 설명              |
+| ---------------- | -------------------------------------- | ----------------- |
+| `LLM_BASE_URL`   | (필수)                                 | LLM 서비스 URL    |
+| `LLM_MODEL_NAME` | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` | 사용할 LLM 모델명 |
 
 ### 7.5 .env 파일 예시
 
@@ -745,7 +745,7 @@ RAGFLOW_DATASET_MAPPING=policy:kb_policy_001,training:kb_training_001
 
 # LLM
 LLM_BASE_URL=http://llm-service:8001
-LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 
 # FAQ 설정
 FAQ_BATCH_CONCURRENCY=4

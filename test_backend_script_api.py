@@ -223,7 +223,7 @@ async def test_e2e_script_generation():
         education_id="edu-001",
         request_id=f"req-{uuid.uuid4().hex[:8]}",
         trace_id=f"trace-{uuid.uuid4().hex[:8]}",
-        llm_model_hint="meta-llama/Meta-Llama-3-8B-Instruct",  # 실제 LLM 모델명
+        llm_model_hint="LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",  # 실제 LLM 모델명
     )
 
     print(f"  source_set_id: {source_set_id}")

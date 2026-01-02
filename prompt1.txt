@@ -1,76 +1,65 @@
-응, 이제 ChatService 통합 들어가면 돼. 다만 지금 로그를 보면 app/services/forbidden_query_filter.py가 “설명 주석 1줄”만 써진 상태라서(Write 1 lines), **Step 1은 ‘필터 서비스 파일을 실제 구현 + ChatService에 1차 가드로 연결’**로 잡는 게 맞아.
+⚠️ 확인된 이슈 & 바로 적용 가능한 조치
+A) 나레이션이 영어로 나오는 문제 (우선순위: 높음)
+원인: 현재 모델이 한국어보다 영어로 “안전하게” 출력하는 경향
+내일 모델 교체 전, 오늘 바로 넣을 수 있는 임시방편(안전한 것만):
 
-아래는 **Step 1용 Claude Code 프롬프트(간단명료)**야.
+Outline/Scene 프롬프트 둘 다에 강제 문구 삽입
 
-Step 1 — Claude Code 프롬프트
-목표: 금지질문 룰셋(JSON)을 런타임에 로드해서, ChatService에서 PII 마스킹 전에 raw_query로 금지질문 체크 → RAG(Milvus/RAGFlow) 호출을 “절대” 만들지 않고 즉시 대체 응답을 반환한다. (일단 ChatService만, FaqService/2차가드는 Step 2+)
+“모든 필드(narration/caption/visual)는 반드시 한국어”
 
-작업 지시
-app/services/forbidden_query_filter.py를 “실제 동작하는 코드”로 완성해라.
+“영어 단어/문장 포함 시 실패로 간주”
 
-입력 룰셋: app/resources/forbidden_queries/forbidden_ruleset.{A|B}.json + forbidden_ruleset.manifest.json
+출력 검증(Validation) 추가
 
-로드 시 로그: ForbiddenRuleset loaded: version=..., profile=..., rules=...
+narration에 한글 비율이 일정 기준 미만이면 같은 입력으로 1회 재시도(temperature 더 낮게)
 
-ForbiddenQueryResult(dataclass 또는 pydantic) 포함:
+재시도에도 실패하면 FAILED로 명확히 처리(조용히 통과시키지 않기)
 
-is_forbidden: bool
+내일 모델 교체(EXAONE/Bllossom 등) 후에도 이 “출력 언어 검증”은 남겨두는 게 운영에 좋아.
 
-skip_rag: bool = True
+B) Windows 콘솔 한글 파일명 깨짐 (우선순위: 중간)
+증상: 테스트 출력 로그에서 doc_id가 깨져 보임
+조치(운영/개발 편의):
 
-skip_backend_api: bool = False (지금은 기본 False로만 두고, 룰에 있으면 True 가능하게)
+PowerShell(권장)
 
-reason_code: str
+chcp 65001
 
-rule_id: str | None
+$env:PYTHONUTF8="1"
 
-example_response: str | None (엑셀 “대체 응답 예시” 기반)
+Python 로깅/파일 입출력 시 UTF-8 명시(이미 하고 있다면 OK)
 
-매칭 방식은 exact match 우선:
+“실제 Milvus 검색/업서트에는 영향 없음”이라도, 로그가 깨지면 디버깅 난이도가 급상승해서 개발 경험 측면에서 개선 추천.
 
-정규화 함수 normalize(text) 구현(최소: strip, 다중 공백 1개로, 소문자화)
+C) “Potentially unsafe doc_id, escaping” 로그 (우선순위: 중간~높음)
+이건 보안적으로 좋은 경고야. 다만 doc_id가 바뀌면 추적/재현이 어려워질 수 있음.
+권장 패턴
 
-normalized_query -> rule dict 인덱스 만들어 O(1) 조회
+내부 식별자는 safe_doc_id = sha256(original_doc_id) 같은 안전한 고정 ID로 통일
 
-manifest의 version은 반드시 읽어서 로그에 포함.
+원본 파일명(original)은 메타 필드로만 저장(표시/다운로드용)
 
-파일 경로는 Path(__file__) 기준으로 repo 상대경로 안전하게 resolve.
+🚀 다음 스텝 체크리스트 (바로 진행하면 “완성도”가 확 올라감)
+1) 품질 개선(가장 체감 큼)
+ (Optional) 3단계 Polish를 “전체 1회”가 아니라 **씬별 폴리시(N회)**로 설계
 
-app/core/config.py에 설정 추가
+이유: 전체를 한 번에 넣으면 다시 컨텍스트가 커지고, 폴리시 실패 시 영향 범위가 큼
 
-FORBIDDEN_QUERY_FILTER_ENABLED: bool = True
+ 씬별로 style_guide를 고정값으로 넣고, “용어집(금지/권장 표현)”을 짧게 추가
 
-FORBIDDEN_QUERY_PROFILE: str = "A" # "A" or "B"
+2) 성능/비용 제어
+ 씬 생성 동시성 Semaphore=3~5 유지(이미 했으면 OK)
 
-FORBIDDEN_QUERY_RULESET_DIR: str = "app/resources/forbidden_queries" (또는 코드 내부 상수)
+ Top-K(현재 3) + chunk 길이 제한(문자/토큰) 값을 환경변수로 튜닝 가능하게 고정
 
-app/services/chat_service.py에 1차 가드 삽입
+ 캐시: 동일 씬 쿼리의 검색 결과(hits)를 메모리 캐시(테스트에서 특히 효과)
 
-위치: chat()에서 PII 마스킹 호출 전에 raw_query = req.question으로 체크
+3) 운영 관측(나중에 문제 터졌을 때 살길)
+ 단계별 타이밍: outline_ms / retrieve_ms / scene_llm_ms / total_ms
 
-if settings.FORBIDDEN_QUERY_FILTER_ENABLED: result = forbidden_filter.check(raw_query)
+ 씬별 입력 크기(청크 수, 잘린 길이), 출력 길이, 언어검증 통과 여부
 
-if result.is_forbidden: 이면
+ 실패 시 fail_reason 표준화 (예: OUTLINE_PARSE_ERROR, RETRIEVE_EMPTY, NON_KOREAN_OUTPUT)
 
-RAG 검색 함수/태스크 생성 금지
-
-즉시 ChatResponse 반환 (sources는 빈 리스트)
-
-응답 본문은 result.example_response가 있으면 그걸 사용하고, 없으면 안전한 기본 문구 사용
-
-debug_info에 retrieval_skipped=True, retrieval_skip_reason="FORBIDDEN_QUERY", matched_rule_id, ruleset_version 기록(필드가 없으면 최소한 로그라도 남기기)
-
-최소 테스트 1개 추가
-
-tests/unit/test_forbidden_query_chatservice.py 신규
-
-금지질문 1개를 넣고 MilvusSearchClient.search가 호출되지 않았음을 assert (AsyncMock/patch)
-
-응답 본문이 example_response 또는 기본 문구로 반환되는지 assert
-
-완료 조건
-python -m pytest -q에서 새 테스트 포함 PASS
-
-금지질문 입력 시 로그에 ForbiddenRuleset loaded: ... (최초 1회) + “FORBIDDEN_QUERY로 retrieval 스킵” 로그가 남고, RAG 관련 로그가 발생하지 않음
-
-추가로, 너 방금 requirements.txt는 echo로 붙였으니 중복 pandas 라인만 없는지 정도만 나중에 정리하면 돼(동작 자체는 크게 문제 안 생김).
+✅ 지금 상태의 “결론 한 줄”
+기능(생성/검색/콜백)은 이미 합격, 이제는 한국어 출력 강제 + ID 안정화 + 관측/튜닝 포인트만 잡으면 “발표/운영 가능한 품질”로 올라간다.
