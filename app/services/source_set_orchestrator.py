@@ -60,6 +60,7 @@ from app.models.source_set import (
     GeneratedChapter,
     GeneratedScene,
     GeneratedScript,
+    ScriptPatch,
     SourceRef,
     SourceSetCompleteRequest,
     SourceSetDocument,
@@ -992,6 +993,7 @@ class SourceSetOrchestrator:
         흐름:
         1. 아웃라인 생성: 문서 메타데이터로 씬 목차 설계 (1회 LLM)
         2. 씬별 RAG 검색 + 생성: 각 씬 키워드로 Top-K 검색 후 생성 (N회 LLM)
+           - 각 씬 생성 후 백엔드에 패치 콜백 전송 (부분 저장)
         3. 결과 병합: 씬들을 합쳐서 최종 스크립트
 
         Args:
@@ -1003,6 +1005,7 @@ class SourceSetOrchestrator:
         """
         from app.services.scene_based_script_generator import (
             SceneBasedScriptGenerator,
+            SceneCallback,
         )
 
         # 문서 정보 준비
@@ -1018,6 +1021,27 @@ class SourceSetOrchestrator:
         # LLM 모델 설정
         model = job.llm_model_hint or "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 
+        # 씬 생성 콜백 정의 (씬 생성 시마다 백엔드에 패치 전송)
+        async def on_scene_generated(
+            script_id: str,
+            chapter_index: int,
+            chapter_title: str,
+            scene_index: int,
+            scene: GeneratedScene,
+            current_scene: int,
+            total_scenes: int,
+        ) -> None:
+            await self._send_scene_patch_callback(
+                job=job,
+                chapter_index=chapter_index,
+                chapter_title=chapter_title,
+                scene_index=scene_index,
+                scene=scene,
+                script_id=script_id,
+                current_scene=current_scene,
+                total_scenes=total_scenes,
+            )
+
         # 씬 단위 RAG 스크립트 생성기
         generator = SceneBasedScriptGenerator(
             milvus_client=self._milvus_client,
@@ -1026,17 +1050,18 @@ class SourceSetOrchestrator:
         )
 
         logger.info(
-            f"Using scene-based RAG script generation: "
+            f"Using scene-based RAG script generation with patch callbacks: "
             f"source_set_id={job.source_set_id}, model={model}"
         )
 
-        # 스크립트 생성
+        # 스크립트 생성 (씬별 콜백 전달)
         script = await generator.generate_script(
             source_set_id=job.source_set_id,
             video_id=job.video_id,
             education_id=job.education_id,
             documents=documents,
             document_chunks=document_chunks,
+            on_scene_generated=on_scene_generated,
         )
 
         return script
@@ -1297,6 +1322,72 @@ JSON 스크립트:"""
     # =========================================================================
     # Callbacks
     # =========================================================================
+
+    async def _send_scene_patch_callback(
+        self,
+        job: ProcessingJob,
+        chapter_index: int,
+        chapter_title: str,
+        scene_index: int,
+        scene: GeneratedScene,
+        script_id: str,
+        current_scene: int,
+        total_scenes: int,
+    ) -> None:
+        """씬 패치 콜백을 백엔드에 전송합니다.
+
+        씬이 생성될 때마다 호출되어 부분 저장을 수행합니다.
+
+        Args:
+            job: 처리 작업 상태
+            chapter_index: 챕터 인덱스 (0-based)
+            chapter_title: 챕터 제목
+            scene_index: 씬 인덱스 (0-based)
+            scene: 생성된 씬
+            script_id: 스크립트 ID
+            current_scene: 현재 씬 번호 (1-based)
+            total_scenes: 전체 씬 수
+        """
+        # 결정적 request_id 생성 (재시도 시 중복 방지)
+        patch_request_id = f"{job.source_set_id}:{chapter_index}:{scene_index}"
+
+        patch = ScriptPatch(
+            type="SCENE_UPSERT",
+            script_id=script_id,
+            chapter_index=chapter_index,
+            chapter_title=chapter_title,
+            scene_index=scene_index,
+            scene=scene,
+            total_scenes=total_scenes,
+            current_scene=current_scene,
+        )
+
+        request = SourceSetCompleteRequest(
+            video_id=job.video_id,
+            status="COMPLETED",
+            source_set_status="SCRIPT_GENERATING",
+            documents=job.document_results,
+            script=None,
+            script_patch=patch,
+            request_id=patch_request_id,
+            trace_id=job.trace_id,
+        )
+
+        try:
+            await self._backend_client.notify_source_set_complete(
+                job.source_set_id, request
+            )
+            logger.info(
+                f"Scene patch callback sent: source_set_id={job.source_set_id}, "
+                f"chapter={chapter_index}, scene={scene_index}, "
+                f"progress={current_scene}/{total_scenes}"
+            )
+        except SourceSetCompleteCallbackError as e:
+            # 패치 전송 실패는 경고로 처리 (다음 씬 계속 진행)
+            logger.warning(
+                f"Failed to send scene patch callback: source_set_id={job.source_set_id}, "
+                f"chapter={chapter_index}, scene={scene_index}, error={e}"
+            )
 
     async def _send_success_callback(self, job: ProcessingJob) -> None:
         """성공 콜백을 백엔드에 전송합니다.
