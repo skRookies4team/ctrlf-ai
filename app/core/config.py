@@ -76,8 +76,11 @@ class Settings(BaseSettings):
     # LLM 서비스 URL (OpenAI API 호환 또는 자체 LLM 서버)
     LLM_BASE_URL: Optional[HttpUrl] = None
 
-    # LLM 모델명 (vLLM 등에서 필요)
+    # LLM 모델명 (vLLM 등에서 필요) - 채팅용
     LLM_MODEL_NAME: str = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
+
+    # 스크립트 생성용 LLM 모델 (미설정 시 LLM_MODEL_NAME 사용)
+    SCRIPT_LLM_MODEL: Optional[str] = None
 
     # 임베딩 서비스 URL (LLM과 분리된 임베딩 서버 사용 시)
     EMBEDDING_BASE_URL: Optional[HttpUrl] = None
