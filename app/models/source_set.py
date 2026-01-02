@@ -30,8 +30,14 @@ class SourceSetStatus(str, Enum):
     """소스셋 상태 (DB: education.source_set.status)."""
     CREATED = "CREATED"
     LOCKED = "LOCKED"
+    SCRIPT_GENERATING = "SCRIPT_GENERATING"  # 씬별 패치 전송 중
     SCRIPT_READY = "SCRIPT_READY"
     FAILED = "FAILED"
+
+
+class ScriptPatchType(str, Enum):
+    """스크립트 패치 타입."""
+    SCENE_UPSERT = "SCENE_UPSERT"  # 씬 추가/수정
 
 
 class DocumentStatus(str, Enum):
@@ -379,10 +385,63 @@ class GeneratedScript(BaseModel):
         populate_by_name = True
 
 
+class ScriptPatch(BaseModel):
+    """스크립트 패치 (씬 단위 업서트).
+
+    씬이 생성될 때마다 백엔드에 전송하여 부분 저장.
+    기존 스크립트에 병합(merge)되며, 새 버전을 만들지 않음.
+    """
+    type: str = Field(
+        default="SCENE_UPSERT",
+        description="패치 타입 (SCENE_UPSERT)",
+    )
+    script_id: Optional[str] = Field(
+        None,
+        alias="scriptId",
+        description="스크립트 ID (없으면 새로 생성)",
+    )
+    chapter_index: int = Field(
+        ...,
+        alias="chapterIndex",
+        description="챕터 인덱스 (0-based)",
+    )
+    chapter_title: Optional[str] = Field(
+        None,
+        alias="chapterTitle",
+        description="챕터 제목 (챕터 최초 생성 시 필요)",
+    )
+    scene_index: int = Field(
+        ...,
+        alias="sceneIndex",
+        description="씬 인덱스 (0-based)",
+    )
+    scene: GeneratedScene = Field(
+        ...,
+        description="씬 데이터",
+    )
+    total_scenes: Optional[int] = Field(
+        None,
+        alias="totalScenes",
+        description="전체 씬 수 (진행률 표시용)",
+    )
+    current_scene: Optional[int] = Field(
+        None,
+        alias="currentScene",
+        description="현재 씬 번호 (1-based, 진행률 표시용)",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
 class SourceSetCompleteRequest(BaseModel):
     """소스셋 완료 콜백 요청.
 
     POST /internal/callbacks/source-sets/{sourceSetId}/complete
+
+    두 가지 모드 지원:
+    1. 전체 스크립트 전송 (기존): script 필드 사용, sourceSetStatus=SCRIPT_READY
+    2. 씬별 패치 전송 (신규): scriptPatch 필드 사용, sourceSetStatus=SCRIPT_GENERATING
     """
     video_id: str = Field(
         ...,
@@ -396,7 +455,7 @@ class SourceSetCompleteRequest(BaseModel):
     source_set_status: str = Field(
         ...,
         alias="sourceSetStatus",
-        description="소스셋 DB 상태 (SCRIPT_READY | FAILED)",
+        description="소스셋 DB 상태 (SCRIPT_GENERATING | SCRIPT_READY | FAILED)",
     )
     documents: List[DocumentResult] = Field(
         default_factory=list,
@@ -404,7 +463,12 @@ class SourceSetCompleteRequest(BaseModel):
     )
     script: Optional[GeneratedScript] = Field(
         None,
-        description="생성된 스크립트 (성공 시)",
+        description="생성된 스크립트 (전체 전송 시)",
+    )
+    script_patch: Optional[ScriptPatch] = Field(
+        None,
+        alias="scriptPatch",
+        description="스크립트 패치 (씬별 전송 시)",
     )
     error_code: Optional[str] = Field(
         None,
