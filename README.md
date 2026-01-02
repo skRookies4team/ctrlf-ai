@@ -16,14 +16,14 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 
 ## 연동 서비스
 
-| 서비스          | 주소                         | 설명                           |
-| --------------- | ---------------------------- | ------------------------------ |
-| **vLLM**        | `your-llm-server:port`       | LLM (EXAONE-3.5-7.8B-Instruct) |
-| **Embedding**   | `your-embedding-server:port` | 임베딩 (ko-sroberta-multitask) |
-| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                        |
-| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인 (문서 처리)     |
-| **ctrlf-back**  | Spring                       | 백엔드 API                     |
-| **ctrlf-front** | React                        | 프론트엔드                     |
+| 서비스          | 주소                         | 설명                              |
+| --------------- | ---------------------------- | --------------------------------- |
+| **vLLM**        | `your-llm-server:port`       | LLM (EXAONE-3.5-7.8B-Instruct)    |
+| **Embedding**   | OpenAI API                   | 임베딩 (text-embedding-3-large)   |
+| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                           |
+| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인 (문서 처리)        |
+| **ctrlf-back**  | Spring                       | 백엔드 API                        |
+| **ctrlf-front** | React                        | 프론트엔드                        |
 
 ## 빠른 테스트 (Mock 모드)
 
@@ -342,15 +342,15 @@ LLM_BASE_URL=http://your-llm-server:port
 LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 SCRIPT_LLM_MODEL=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct  # 스크립트 생성용 (미설정 시 LLM_MODEL_NAME 사용)
 
-# 임베딩 서버
-EMBEDDING_BASE_URL=http://your-embedding-server:port
-EMBEDDING_MODEL_NAME=jhgan/ko-sroberta-multitask
-EMBEDDING_DIMENSION=768
+# 임베딩 (OpenAI API 사용)
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_EMBED_MODEL=text-embedding-3-large
+OPENAI_EMBED_DIM=3072
 
 # Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)
 MILVUS_ENABLED=true
 MILVUS_HOST=your-server-host
-MILVUS_PORT=19530
+MILVUS_PORT=19540
 MILVUS_COLLECTION_NAME=ragflow_chunks
 
 # RAGFlow (MILVUS_ENABLED=false일 때 사용)
@@ -392,13 +392,13 @@ pytest tests/test_internal_rag.py -v
 uvicorn app.main:app --reload --port 8000
 
 # 2. 배치 테스트 실행
-python qa_batch_test.py
+python scripts/test/qa_batch_test.py
 ```
 
 ### 필수 파일
 
-- **입력**: `질문리스트.xlsx` (질문 ID, 페르소나, 카테고리, 질문 등 컬럼 필요)
-- **출력**: `docs/질답리스트_EXAONE_YYYYMMDD_HHMMSS.xlsx`
+- **입력**: `scripts/test/질문리스트.xlsx` (질문 ID, 페르소나, 카테고리, 질문 등 컬럼 필요)
+- **출력**: `scripts/test/docs/질답리스트_EXAONE_YYYYMMDD_HHMMSS.xlsx`
 
 ### 출력 컬럼
 
@@ -434,7 +434,7 @@ TIMEOUT_SECONDS = 120     # 요청 타임아웃
 EXAONE 모델 질답리스트 생성 스크립트
 ============================================================
 
-1. 질문리스트 로딩: 질문리스트.xlsx
+1. 질문리스트 로딩: scripts/test/질문리스트.xlsx
    -> 총 595개 질문 로드됨
 
 2. AI 서버 연결 테스트...
@@ -447,7 +447,7 @@ EXAONE 모델 질답리스트 생성 스크립트
    -> 총 소요 시간: 1200.5초 (20.0분)
    -> 평균 응답 시간: 6050ms
 
-5. 결과 저장: docs/질답리스트_EXAONE_20250101_120000.xlsx
+5. 결과 저장: scripts/test/docs/질답리스트_EXAONE_20260101_120000.xlsx
 ```
 
 ## Mock 서버 구성 및 분리 테스트
@@ -666,6 +666,7 @@ ctrlf-ai/
 │   ├── clients/                # 외부 서비스 클라이언트 (LLM, Milvus, Backend)
 │   ├── services/               # 비즈니스 로직
 │   │   ├── chat_service.py         # 채팅 서비스
+│   │   ├── chat/                    # 채팅 서브모듈 (RAG 핸들러 등)
 │   │   ├── scene_based_script_generator.py  # 씬 기반 스크립트 생성
 │   │   ├── forbidden_query_filter.py        # 금지질문 필터
 │   │   └── ...
@@ -673,9 +674,14 @@ ctrlf-ai/
 │   ├── core/                   # 설정, 로깅
 │   ├── resources/              # 금지질문 룰셋 등 정적 리소스
 │   ├── repositories/           # 데이터 저장소 추상화
+│   ├── adapters/               # 어댑터 패턴 구현
 │   ├── telemetry/              # 모니터링/로깅
 │   └── utils/                  # 유틸리티
-├── tests/                      # 테스트
+├── scripts/
+│   └── test/                   # 테스트 스크립트
+│       ├── qa_batch_test.py        # 배치 Q&A 테스트
+│       └── 질문리스트.xlsx          # 테스트 질문 목록
+├── tests/                      # 단위/통합 테스트
 ├── docs/                       # 개발 문서
 ├── elk/                        # ELK 로그 수집 설정
 ├── mock_*/                     # Mock 서버들

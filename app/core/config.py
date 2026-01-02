@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
     # ctrlf-back infra-service 연동 URL (S3 presigned URL 등)
-    INFRA_BASE_URL: Optional[HttpUrl] = None
+    BACKEND_BASE_URL: Optional[HttpUrl] = None
 
     # =========================================================================
     # PII 마스킹 서비스 설정
@@ -316,6 +316,23 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_EMBED_MODEL: str = "text-embedding-3-large"
     OPENAI_EMBED_DIM: int = 3072
+
+    # =========================================================================
+    # A/B 테스트: SRoberta 임베딩 설정
+    # =========================================================================
+    # SRoberta 임베딩 모델 (sentence-transformers 호환)
+    SROBERTA_EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    SROBERTA_EMBED_DIM: int = 384
+
+    # SRoberta 임베딩 서버 URL (별도 서버 사용 시)
+    SROBERTA_EMBED_URL: Optional[str] = None
+
+    # SRoberta용 Milvus 컬렉션
+    MILVUS_COLLECTION_SROBERTA: str = "ragflow_chunks_sroberta"
+
+    # A/B 테스트 기본 모델 (openai | sroberta)
+    # 명시적으로 설정하지 않은 경우 사용할 기본 모델
+    AB_DEFAULT_MODEL: str = "openai"
 
     # Milvus 인증 (선택, 보안 설정된 Milvus 서버 사용 시)
     MILVUS_USER: Optional[str] = None
