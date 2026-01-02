@@ -1,59 +1,18 @@
-# ctrlf-ai-gateway dependencies
-# Python 3.12.7
-
-# Web Framework
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-
-# Configuration & Validation
 pydantic>=2.9.0
 pydantic-settings>=2.6.0
-
-# HTTP Client
 httpx>=0.27.0
-
-# Environment Variables
 python-dotenv>=1.0.0
-
-# Testing
 pytest>=8.3.0
 pytest-anyio>=0.0.0
 pytest-asyncio>=0.24.0
 anyio>=4.6.0
-
-# Document Processing (Phase 25)
 PyMuPDF>=1.24.0
 python-docx>=1.1.0
 olefile>=0.47
-
-# TTS (Phase 32)
 gTTS>=2.5.0
-
-# Image Generation (Phase 37)
 Pillow>=10.0.0
-
-# Vector Database
 pymilvus>=2.5.0
-
-# Data Processing (금지질문 룰셋 변환)
 pandas>=2.0.0
 openpyxl>=3.1.0
-
-# Step 4: Fuzzy matching (금지질문 유사도 매칭)
-rapidfuzz>=3.0.0
-
-# Step 5: Embedding matching (금지질문 임베딩 매칭)
-numpy>=1.26.0
-
-# =============================================================================
-# Optional Dependencies (선택적 의존성)
-# 설치하지 않아도 fallback 로직으로 동작함
-# =============================================================================
-
-# FAISS: 고속 벡터 검색 (없으면 numpy cosine similarity fallback)
-# pip install faiss-cpu
-# faiss-cpu>=1.7.0
-
-# MoviePy: 비디오 렌더링 (없으면 mock mode)
-# pip install moviepy
-# moviepy>=1.0.0

@@ -16,8 +16,10 @@
 """
 
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.clients.llm_client import LLMClient
@@ -103,6 +105,37 @@ KOREAN_ENFORCEMENT = """
 
 
 # =============================================================================
+# Phase 55: 실패 원인 표준화 (fail_reason)
+# =============================================================================
+
+
+class FailReason(str, Enum):
+    """스크립트 생성 실패 원인 (표준화된 코드)."""
+    OUTLINE_PARSE_ERROR = "OUTLINE_PARSE_ERROR"  # 아웃라인 JSON 파싱 실패
+    OUTLINE_EMPTY = "OUTLINE_EMPTY"              # 아웃라인 생성 결과 없음
+    RETRIEVE_EMPTY = "RETRIEVE_EMPTY"            # RAG 검색 결과 없음
+    SCENE_PARSE_ERROR = "SCENE_PARSE_ERROR"      # 씬 JSON 파싱 실패
+    NON_KOREAN_OUTPUT = "NON_KOREAN_OUTPUT"      # 한국어 검증 실패
+    LLM_ERROR = "LLM_ERROR"                      # LLM API 호출 실패
+    UNKNOWN = "UNKNOWN"                          # 기타 알 수 없는 오류
+
+
+@dataclass
+class GenerationMetrics:
+    """스크립트 생성 메트릭 (관측용)."""
+    outline_ms: float = 0.0           # 아웃라인 생성 시간
+    total_retrieve_ms: float = 0.0    # 전체 RAG 검색 시간
+    total_scene_llm_ms: float = 0.0   # 전체 씬 LLM 시간
+    total_ms: float = 0.0             # 전체 생성 시간
+    scene_count: int = 0              # 생성된 씬 수
+    failed_scene_count: int = 0       # 실패한 씬 수
+    korean_validation_pass: int = 0   # 한국어 검증 통과 수
+    korean_validation_fail: int = 0   # 한국어 검증 실패 수
+    retry_count: int = 0              # 재시도 횟수
+    fail_reasons: List[str] = field(default_factory=list)  # 실패 원인 목록
+
+
+# =============================================================================
 # 데이터 클래스
 # =============================================================================
 
@@ -158,7 +191,7 @@ class SceneBasedScriptGenerator:
     """
 
     # LLM 호출 설정
-    DEFAULT_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+    DEFAULT_MODEL = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
     MAX_TOKENS_OUTLINE = 1500  # 아웃라인 생성용
     MAX_TOKENS_SCENE = 800    # 씬 생성용
     MAX_TOKENS_POLISH = 1000  # 다듬기용
@@ -215,6 +248,10 @@ class SceneBasedScriptGenerator:
             GeneratedScript: 생성된 스크립트
         """
         script_id = f"script-{uuid.uuid4().hex[:12]}"
+        start_time = time.perf_counter()
+
+        # Phase 55: 메트릭 초기화
+        metrics = GenerationMetrics()
 
         logger.info(
             f"Starting scene-based script generation: "
@@ -231,27 +268,45 @@ class SceneBasedScriptGenerator:
         try:
             # 1단계: 아웃라인 생성
             logger.info("Step 1: Generating outline...")
+            outline_start = time.perf_counter()
             outline = await self._generate_outline(doc_titles, all_chunks)
+            metrics.outline_ms = (time.perf_counter() - outline_start) * 1000
 
             if not outline or not outline.chapters:
-                logger.warning("Outline generation failed, using fallback")
+                metrics.fail_reasons.append(FailReason.OUTLINE_EMPTY.value)
+                logger.warning(
+                    f"Outline generation failed: fail_reason={FailReason.OUTLINE_EMPTY.value}, "
+                    f"outline_ms={metrics.outline_ms:.0f}"
+                )
                 return self._generate_fallback_script(
                     script_id, source_set_id, education_id, doc_titles
                 )
 
             logger.info(
                 f"Outline generated: {len(outline.chapters)} chapters, "
-                f"{outline.total_scenes} scenes"
+                f"{outline.total_scenes} scenes, outline_ms={metrics.outline_ms:.0f}"
             )
 
             # 2단계: 씬별 스크립트 생성
             logger.info("Step 2: Generating scenes with RAG...")
-            chapters = await self._generate_scenes_with_rag(
+            chapters, scene_metrics = await self._generate_scenes_with_rag_metrics(
                 outline, all_chunks, doc_ids
             )
 
+            # 메트릭 병합
+            metrics.total_retrieve_ms = scene_metrics.total_retrieve_ms
+            metrics.total_scene_llm_ms = scene_metrics.total_scene_llm_ms
+            metrics.scene_count = scene_metrics.scene_count
+            metrics.failed_scene_count = scene_metrics.failed_scene_count
+            metrics.korean_validation_pass = scene_metrics.korean_validation_pass
+            metrics.korean_validation_fail = scene_metrics.korean_validation_fail
+            metrics.retry_count = scene_metrics.retry_count
+            metrics.fail_reasons.extend(scene_metrics.fail_reasons)
+
             if not chapters:
-                logger.warning("Scene generation failed, using fallback")
+                logger.warning(
+                    f"Scene generation failed: fail_reasons={metrics.fail_reasons}"
+                )
                 return self._generate_fallback_script(
                     script_id, source_set_id, education_id, doc_titles
                 )
@@ -261,6 +316,7 @@ class SceneBasedScriptGenerator:
 
             # 최종 스크립트 조립
             total_duration = sum(ch.duration_sec for ch in chapters)
+            metrics.total_ms = (time.perf_counter() - start_time) * 1000
 
             script = GeneratedScript(
                 script_id=script_id,
@@ -273,15 +329,29 @@ class SceneBasedScriptGenerator:
                 chapters=chapters,
             )
 
+            # Phase 55: 최종 메트릭 로그
             logger.info(
                 f"Script generation completed: script_id={script_id}, "
-                f"chapters={len(chapters)}, duration={total_duration:.0f}s"
+                f"chapters={len(chapters)}, duration={total_duration:.0f}s | "
+                f"METRICS: outline_ms={metrics.outline_ms:.0f}, "
+                f"retrieve_ms={metrics.total_retrieve_ms:.0f}, "
+                f"scene_llm_ms={metrics.total_scene_llm_ms:.0f}, "
+                f"total_ms={metrics.total_ms:.0f} | "
+                f"scenes={metrics.scene_count}, failed={metrics.failed_scene_count}, "
+                f"korean_pass={metrics.korean_validation_pass}, "
+                f"korean_fail={metrics.korean_validation_fail}, "
+                f"retries={metrics.retry_count}"
             )
 
             return script
 
         except Exception as e:
-            logger.exception(f"Script generation failed: {e}")
+            metrics.total_ms = (time.perf_counter() - start_time) * 1000
+            metrics.fail_reasons.append(FailReason.UNKNOWN.value)
+            logger.exception(
+                f"Script generation failed: {e} | "
+                f"fail_reasons={metrics.fail_reasons}, total_ms={metrics.total_ms:.0f}"
+            )
             return self._generate_fallback_script(
                 script_id, source_set_id, education_id, doc_titles
             )
@@ -440,7 +510,7 @@ JSON 아웃라인:"""
 
         for ch_outline in outline.chapters:
             scenes = []
-            chapter_duration = 0.0
+            chapter_duration = 0
 
             for sc_outline in ch_outline.scenes:
                 # 씬 키워드로 관련 청크 검색
@@ -477,6 +547,122 @@ JSON 아웃라인:"""
                 chapters.append(chapter)
 
         return chapters
+
+    async def _generate_scenes_with_rag_metrics(
+        self,
+        outline: ScriptOutline,
+        all_chunks: List[Dict[str, Any]],
+        doc_ids: List[str],
+    ) -> Tuple[List[GeneratedChapter], GenerationMetrics]:
+        """Phase 55: 메트릭 수집과 함께 씬을 생성합니다.
+
+        Args:
+            outline: 씬 아웃라인
+            all_chunks: 전체 청크 리스트
+            doc_ids: 문서 ID 리스트
+
+        Returns:
+            Tuple[GeneratedChapter 리스트, GenerationMetrics]
+        """
+        state = GenerationState()
+        chapters = []
+        metrics = GenerationMetrics()
+        global_scene_index = 0
+
+        for ch_outline in outline.chapters:
+            scenes = []
+            chapter_duration = 0
+
+            for sc_outline in ch_outline.scenes:
+                # 씬 키워드로 관련 청크 검색
+                retrieve_start = time.perf_counter()
+                relevant_chunks = await self._search_chunks_for_scene(
+                    sc_outline, all_chunks
+                )
+                retrieve_ms = (time.perf_counter() - retrieve_start) * 1000
+                metrics.total_retrieve_ms += retrieve_ms
+
+                if not relevant_chunks:
+                    metrics.fail_reasons.append(FailReason.RETRIEVE_EMPTY.value)
+                    logger.warning(
+                        f"Scene '{sc_outline.title}': RETRIEVE_EMPTY, retrieve_ms={retrieve_ms:.0f}"
+                    )
+
+                # 씬 스크립트 생성
+                scene_start = time.perf_counter()
+                scene, scene_fail_reason, retries, korean_passed = await self._generate_single_scene_with_metrics(
+                    sc_outline,
+                    relevant_chunks,
+                    state,
+                    outline.title,
+                    ch_outline.title,
+                )
+                scene_llm_ms = (time.perf_counter() - scene_start) * 1000
+                metrics.total_scene_llm_ms += scene_llm_ms
+
+                # 메트릭 업데이트
+                metrics.scene_count += 1
+                metrics.retry_count += retries
+
+                if korean_passed:
+                    metrics.korean_validation_pass += 1
+                else:
+                    metrics.korean_validation_fail += 1
+
+                if scene:
+                    scenes.append(scene)
+                    chapter_duration += scene.duration_sec
+
+                    # 상태 업데이트
+                    state.current_scene_index = global_scene_index
+                    state.last_narration_ending = scene.narration[-50:] if scene.narration else ""
+
+                    logger.debug(
+                        f"Scene '{sc_outline.title}' generated: "
+                        f"retrieve_ms={retrieve_ms:.0f}, llm_ms={scene_llm_ms:.0f}, "
+                        f"chunks={len(relevant_chunks)}, narration_len={len(scene.narration)}"
+                    )
+                else:
+                    metrics.failed_scene_count += 1
+                    if scene_fail_reason:
+                        metrics.fail_reasons.append(scene_fail_reason)
+
+                global_scene_index += 1
+
+            if scenes:
+                chapter = GeneratedChapter(
+                    chapter_index=ch_outline.chapter_index,
+                    title=ch_outline.title,
+                    duration_sec=chapter_duration,
+                    scenes=scenes,
+                )
+                chapters.append(chapter)
+
+        return chapters, metrics
+
+    async def _generate_single_scene_with_metrics(
+        self,
+        scene_outline: SceneOutline,
+        relevant_chunks: List[Dict[str, Any]],
+        state: GenerationState,
+        script_title: str,
+        chapter_title: str,
+    ) -> Tuple[Optional[GeneratedScene], Optional[str], int, bool]:
+        """Phase 55: 메트릭과 함께 단일 씬을 생성합니다.
+
+        Returns:
+            Tuple[씬 또는 None, 실패원인 또는 None, 재시도 횟수, 한국어 검증 통과 여부]
+        """
+        scene = await self._generate_single_scene(
+            scene_outline, relevant_chunks, state, script_title, chapter_title
+        )
+
+        if scene:
+            # 성공: 재시도 없이 한국어 검증 통과
+            return scene, None, 0, True
+        else:
+            # 실패: NON_KOREAN_OUTPUT으로 가정 (재시도 했으나 실패)
+            return None, FailReason.NON_KOREAN_OUTPUT.value, MAX_KOREAN_RETRY, False
 
     async def _search_chunks_for_scene(
         self,
@@ -685,7 +871,7 @@ JSON 스크립트:"""
                     visual_description=scene_json.get("visual_description"),
                     highlight_terms=scene_json.get("highlight_terms", []),
                     transition=scene_json.get("transition"),
-                    duration_sec=scene_json.get("duration_sec", scene_outline.target_duration_sec),
+                    duration_sec=int(scene_json.get("duration_sec", scene_outline.target_duration_sec)),
                     confidence_score=0.8 if attempt == 0 else 0.6,
                     source_refs=source_refs,
                 )
@@ -760,7 +946,7 @@ JSON 스크립트:"""
                 narration=f"{title}에 대한 교육을 시작합니다.",
                 caption="교육 시작",
                 visual="타이틀 슬라이드",
-                duration_sec=15.0,
+                duration_sec=15,
                 confidence_score=0.3,
                 source_refs=[],
             ),
@@ -770,7 +956,7 @@ JSON 스크립트:"""
             GeneratedChapter(
                 chapter_index=0,
                 title="교육 내용",
-                duration_sec=15.0,
+                duration_sec=15,
                 scenes=scenes,
             ),
         ]
@@ -780,7 +966,7 @@ JSON 스크립트:"""
             education_id=education_id,
             source_set_id=source_set_id,
             title=f"{title} (자동 생성 실패 - 폴백)",
-            total_duration_sec=15.0,
+            total_duration_sec=15,
             version=1,
             llm_model="fallback",
             chapters=chapters,
