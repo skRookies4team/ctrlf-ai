@@ -360,12 +360,15 @@ class ChatStreamService:
 
         logger.info(f"Starting LLM stream: request_id={request.request_id}, user_id={request.user_id}")
 
+        # 설정에서 타임아웃 가져오기 (기본값: 180초, 백엔드 SSE 타임아웃보다 길게)
+        stream_timeout = getattr(self._settings, "CHAT_STREAM_LLM_TIMEOUT_SEC", 180.0)
+
         try:
             async with self._client.stream(
                 "POST",
                 url,
                 json=payload,
-                timeout=60.0,  # 스트리밍용 긴 타임아웃
+                timeout=stream_timeout,
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
@@ -409,11 +412,16 @@ class ChatStreamService:
                 metrics.total_tokens = token_count
 
         except httpx.TimeoutException:
-            logger.error(f"LLM stream timeout: request_id={request.request_id}")
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                f"LLM stream timeout: request_id={request.request_id}, "
+                f"timeout={stream_timeout}s, elapsed={elapsed_ms}ms"
+            )
             metrics.error_code = StreamErrorCode.LLM_TIMEOUT.value
+            metrics.total_elapsed_ms = elapsed_ms
             error_event = StreamErrorEvent(
                 code=StreamErrorCode.LLM_TIMEOUT.value,
-                message="LLM 응답 시간이 초과되었습니다.",
+                message=f"LLM 응답 시간이 초과되었습니다. (타임아웃: {stream_timeout}초)",
                 request_id=request.request_id,
             )
             yield error_event.to_ndjson()

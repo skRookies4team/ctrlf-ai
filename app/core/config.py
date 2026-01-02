@@ -462,6 +462,10 @@ class Settings(BaseSettings):
     # 백엔드 API 타임아웃 (초)
     BACKEND_TIMEOUT_SEC: float = 30.0
 
+    # 스트리밍 채팅 LLM 타임아웃 (초)
+    # 백엔드 SSE 타임아웃(보통 60초)보다 길게 설정 권장 (기본값: 180초)
+    CHAT_STREAM_LLM_TIMEOUT_SEC: float = 180.0
+
     # 씬 기본 duration (duration_sec <= 0일 때 사용)
     SCENE_DEFAULT_DURATION_SEC: float = 5.0
 
