@@ -13,6 +13,7 @@ API 통합 테스트 스크립트
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -300,8 +301,9 @@ def test_source_set_api(base_url: str) -> bool:
     try:
         start = time.time()
         # Internal API는 X-Internal-Token이 필요할 수 있음
+        internal_token = os.getenv("BACKEND_INTERNAL_TOKEN", "")
         headers = {
-            "X-Internal-Token": "test-token"  # 개발환경에서는 무시될 수 있음
+            "X-Internal-Token": internal_token
         }
         response = httpx.post(
             f"{base_url}/internal/ai/source-sets/{source_set_id}/start",
