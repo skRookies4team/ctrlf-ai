@@ -20,7 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from app.clients.llm_client import LLMClient
 from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
@@ -34,6 +34,18 @@ from app.models.source_set import (
 )
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# Scene Callback Type
+# =============================================================================
+
+# 씬 생성 콜백 타입: 각 씬이 생성될 때마다 호출됨
+# (script_id, chapter_index, chapter_title, scene_index, scene, current_scene, total_scenes) -> None
+SceneCallback = Callable[
+    [str, int, str, int, GeneratedScene, int, int],
+    Awaitable[None]
+]
 
 
 # =============================================================================
@@ -236,6 +248,7 @@ class SceneBasedScriptGenerator:
         education_id: Optional[str],
         documents: List[Dict[str, Any]],
         document_chunks: Dict[str, List[Dict[str, Any]]],
+        on_scene_generated: Optional[SceneCallback] = None,
     ) -> GeneratedScript:
         """씬 단위 RAG로 스크립트를 생성합니다.
 
@@ -245,6 +258,7 @@ class SceneBasedScriptGenerator:
             education_id: 교육 ID (선택)
             documents: 문서 정보 리스트 [{document_id, title, domain}, ...]
             document_chunks: 문서별 청크 {doc_id: [{chunk_index, chunk_text}, ...]}
+            on_scene_generated: 씬 생성 콜백 (씬이 생성될 때마다 호출)
 
         Returns:
             GeneratedScript: 생성된 스크립트
@@ -257,7 +271,8 @@ class SceneBasedScriptGenerator:
 
         logger.info(
             f"Starting scene-based script generation: "
-            f"source_set_id={source_set_id}, documents={len(documents)}"
+            f"source_set_id={source_set_id}, documents={len(documents)}, "
+            f"with_callback={on_scene_generated is not None}"
         )
 
         # 문서 메타데이터 준비
@@ -289,10 +304,12 @@ class SceneBasedScriptGenerator:
                 f"{outline.total_scenes} scenes, outline_ms={metrics.outline_ms:.0f}"
             )
 
-            # 2단계: 씬별 스크립트 생성
+            # 2단계: 씬별 스크립트 생성 (콜백 전달)
             logger.info("Step 2: Generating scenes with RAG...")
             chapters, scene_metrics = await self._generate_scenes_with_rag_metrics(
-                outline, all_chunks, doc_ids
+                outline, all_chunks, doc_ids,
+                script_id=script_id,
+                on_scene_generated=on_scene_generated,
             )
 
             # 메트릭 병합
@@ -555,6 +572,8 @@ JSON 아웃라인:"""
         outline: ScriptOutline,
         all_chunks: List[Dict[str, Any]],
         doc_ids: List[str],
+        script_id: Optional[str] = None,
+        on_scene_generated: Optional[SceneCallback] = None,
     ) -> Tuple[List[GeneratedChapter], GenerationMetrics]:
         """Phase 55: 메트릭 수집과 함께 씬을 생성합니다.
 
@@ -562,6 +581,8 @@ JSON 아웃라인:"""
             outline: 씬 아웃라인
             all_chunks: 전체 청크 리스트
             doc_ids: 문서 ID 리스트
+            script_id: 스크립트 ID (콜백용)
+            on_scene_generated: 씬 생성 콜백 (씬이 생성될 때마다 호출)
 
         Returns:
             Tuple[GeneratedChapter 리스트, GenerationMetrics]
@@ -570,6 +591,7 @@ JSON 아웃라인:"""
         chapters = []
         metrics = GenerationMetrics()
         global_scene_index = 0
+        current_scene_number = 0  # 1-based 진행률 표시용
 
         for ch_outline in outline.chapters:
             scenes = []
@@ -614,6 +636,7 @@ JSON 아웃라인:"""
                 if scene:
                     scenes.append(scene)
                     chapter_duration += scene.duration_sec
+                    current_scene_number += 1
 
                     # 상태 업데이트
                     state.current_scene_index = global_scene_index
@@ -624,6 +647,25 @@ JSON 아웃라인:"""
                         f"retrieve_ms={retrieve_ms:.0f}, llm_ms={scene_llm_ms:.0f}, "
                         f"chunks={len(relevant_chunks)}, narration_len={len(scene.narration)}"
                     )
+
+                    # 씬 생성 콜백 호출 (부분 저장)
+                    if on_scene_generated and script_id:
+                        try:
+                            await on_scene_generated(
+                                script_id,
+                                ch_outline.chapter_index,
+                                ch_outline.title,
+                                sc_outline.scene_index,
+                                scene,
+                                current_scene_number,
+                                outline.total_scenes,
+                            )
+                        except Exception as e:
+                            # 콜백 실패는 경고로 처리 (씬 생성은 계속)
+                            logger.warning(
+                                f"Scene callback failed: chapter={ch_outline.chapter_index}, "
+                                f"scene={sc_outline.scene_index}, error={e}"
+                            )
                 else:
                     metrics.failed_scene_count += 1
                     if scene_fail_reason:
