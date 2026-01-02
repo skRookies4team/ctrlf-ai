@@ -142,6 +142,16 @@ test_output_script/
 test_storage/
 script.json
 test_chat.json
+generated_script.json
+
+# Test result files (temporary)
+backend_callback_result.json
+test_korean_script.json
+test_script_result.json
+test_video_script_full.json
+test_token.txt
+temp_questions.csv
+prompt1.txt
 
 # Runtime data
 data/
