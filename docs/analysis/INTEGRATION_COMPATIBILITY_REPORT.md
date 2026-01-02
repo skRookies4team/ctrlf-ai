@@ -6,6 +6,7 @@
 
 **분석 일자**: 2025-12-09
 **분석 대상**:
+
 - ctrlf-back (Spring Boot 백엔드)
 - ctrlf-ragflow (RAGFlow 기반 검색 서비스)
 - ctrlf-front (React 프론트엔드)
@@ -16,12 +17,12 @@
 
 ### 1.1 프로젝트별 기술 스택
 
-| 프로젝트 | 기술 스택 | 포트 | 역할 |
-|----------|----------|------|------|
-| **ctrlf-ai** | Python 3.12, FastAPI | 8000 | AI Gateway (PII/Intent/RAG/LLM) |
-| **ctrlf-back** | Java 17, Spring Boot | 9001~9004 | 메인 백엔드, API Gateway |
-| **ctrlf-ragflow** | Python, Flask (RAGFlow) | 8080 (예상) | RAG 문서 검색 서비스 |
-| **ctrlf-front** | React, TypeScript, Vite | 3000 (예상) | 웹 프론트엔드 |
+| 프로젝트          | 기술 스택               | 포트        | 역할                            |
+| ----------------- | ----------------------- | ----------- | ------------------------------- |
+| **ctrlf-ai**      | Python 3.12, FastAPI    | 8000        | AI Gateway (PII/Intent/RAG/LLM) |
+| **ctrlf-back**    | Java 17, Spring Boot    | 9001~9004   | 메인 백엔드, API Gateway        |
+| **ctrlf-ragflow** | Python, Flask (RAGFlow) | 8080        | RAG 문서 검색 서비스            |
+| **ctrlf-front**   | React, TypeScript, Vite | 3000 (예상) | 웹 프론트엔드                   |
 
 ### 1.2 전체 아키텍처
 
@@ -39,7 +40,7 @@
 │  ┌───────────────┐         ┌───────────────┐         ┌───────────────┐     │
 │  │ ctrlf-back    │         │ ctrlf-ai      │         │ ctrlf-ragflow │     │
 │  │ (Spring Boot) │ ──────► │ (FastAPI)     │ ──────► │ (Flask/RAG)   │     │
-│  │ :9001~9004    │         │ :8000         │         │ :8080         │     │
+│  │ :8085         │ :8000         │         │ :8080         │     │
 │  │               │ ◄────── │               │ ◄────── │               │     │
 │  └───────────────┘         └───────┬───────┘         └───────────────┘     │
 │          ▲                         │                                        │
@@ -58,27 +59,19 @@
 
 ### 2.1 백엔드 구조
 
-ctrlf-back은 **멀티 모듈 Spring Boot 프로젝트**입니다:
+| BACKEND_BASE_URL_REAL=http://host.docker.internal:8085I |
 
-| 서비스 | 포트 | 설명 |
-|--------|------|------|
-| chat-service | 9001 | 채팅 관련 API |
-| education-service | 9002 | 교육 관련 API |
-| infra-service | 9003 | 인프라 관련 API |
-| quiz-service | 9004 | 퀴즈 관련 API |
-| api-gateway | - | API 라우팅 |
-
-**인증**: Keycloak (포트 8080)
+**인증**: Keycloak (포트 8090)
 
 ### 2.2 ctrlf-ai → ctrlf-back 연동 (AI Log)
 
 #### ctrlf-ai가 전송하는 API
 
-| 항목 | 값 |
-|------|-----|
+| 항목           | 값                                    |
+| -------------- | ------------------------------------- |
 | **엔드포인트** | `POST {BACKEND_BASE_URL}/api/ai-logs` |
-| **환경변수** | `BACKEND_BASE_URL` |
-| **담당 모듈** | `app/services/ai_log_service.py` |
+| **환경변수**   | `BACKEND_BASE_URL`                    |
+| **담당 모듈**  | `app/services/ai_log_service.py`      |
 
 #### 요청 스키마 (AILogRequest)
 
@@ -120,11 +113,11 @@ ctrlf-back은 **멀티 모듈 Spring Boot 프로젝트**입니다:
 
 ### 2.3 호환성 상태
 
-| 항목 | 상태 | 설명 |
-|------|------|------|
-| 엔드포인트 존재 | ⚠️ **확인 필요** | `/api/ai-logs` 구현 여부 불명 |
-| 필드명 형식 | ⚠️ **확인 필요** | snake_case (Python) vs camelCase (Java) |
-| 인증 | ⚠️ **확인 필요** | Keycloak 토큰 필요 여부 |
+| 항목            | 상태             | 설명                                    |
+| --------------- | ---------------- | --------------------------------------- |
+| 엔드포인트 존재 | ⚠️ **확인 필요** | `/api/ai-logs` 구현 여부 불명           |
+| 필드명 형식     | ⚠️ **확인 필요** | snake_case (Python) vs camelCase (Java) |
+| 인증            | ⚠️ **확인 필요** | Keycloak 토큰 필요 여부                 |
 
 ### 2.4 권장 조치
 
@@ -134,21 +127,21 @@ ctrlf-back은 **멀티 모듈 Spring Boot 프로젝트**입니다:
 2. **필드명 매핑 확인** (아래 표 참조)
 
 | ctrlf-ai (snake_case) | ctrlf-back 예상 (camelCase) |
-|-----------------------|----------------------------|
-| `session_id` | `sessionId` |
-| `user_id` | `userId` |
-| `turn_index` | `turnIndex` |
-| `user_role` | `userRole` |
-| `has_pii_input` | `hasPiiInput` |
-| `has_pii_output` | `hasPiiOutput` |
-| `model_name` | `modelName` |
-| `rag_used` | `ragUsed` |
-| `rag_source_count` | `ragSourceCount` |
-| `latency_ms` | `latencyMs` |
-| `error_code` | `errorCode` |
-| `error_message` | `errorMessage` |
-| `question_masked` | `questionMasked` |
-| `answer_masked` | `answerMasked` |
+| --------------------- | --------------------------- |
+| `session_id`          | `sessionId`                 |
+| `user_id`             | `userId`                    |
+| `turn_index`          | `turnIndex`                 |
+| `user_role`           | `userRole`                  |
+| `has_pii_input`       | `hasPiiInput`               |
+| `has_pii_output`      | `hasPiiOutput`              |
+| `model_name`          | `modelName`                 |
+| `rag_used`            | `ragUsed`                   |
+| `rag_source_count`    | `ragSourceCount`            |
+| `latency_ms`          | `latencyMs`                 |
+| `error_code`          | `errorCode`                 |
+| `error_message`       | `errorMessage`              |
+| `question_masked`     | `questionMasked`            |
+| `answer_masked`       | `answerMasked`              |
 
 #### 백엔드에 API가 없는 경우 구현 예시
 
@@ -201,11 +194,11 @@ api/
 
 #### ctrlf-ai가 호출하는 API
 
-| 항목 | 값 |
-|------|-----|
+| 항목           | 값                               |
+| -------------- | -------------------------------- |
 | **엔드포인트** | `POST {RAGFLOW_BASE_URL}/search` |
-| **환경변수** | `RAGFLOW_BASE_URL` |
-| **담당 모듈** | `app/clients/ragflow_client.py` |
+| **환경변수**   | `RAGFLOW_BASE_URL`               |
+| **담당 모듈**  | `app/clients/ragflow_client.py`  |
 
 #### ctrlf-ai 요청 스키마
 
@@ -273,12 +266,12 @@ Response: SSE 스트림
 
 ### 3.4 호환성 상태
 
-| 항목 | 상태 | 설명 |
-|------|------|------|
-| `/search` 엔드포인트 | 🔴 **존재하지 않음** | ctrlf-ai가 기대하는 API 없음 |
-| `/retrieval_test` | ✅ 존재 | 다른 형식의 검색 API |
-| 요청 형식 | 🔴 **불일치** | `query` vs `question`, `dataset` vs `kb_id` |
-| 응답 형식 | 🔴 **불일치** | `results` vs `chunks`, 필드명 다름 |
+| 항목                 | 상태                 | 설명                                        |
+| -------------------- | -------------------- | ------------------------------------------- |
+| `/search` 엔드포인트 | 🔴 **존재하지 않음** | ctrlf-ai가 기대하는 API 없음                |
+| `/retrieval_test`    | ✅ 존재              | 다른 형식의 검색 API                        |
+| 요청 형식            | 🔴 **불일치**        | `query` vs `question`, `dataset` vs `kb_id` |
+| 응답 형식            | 🔴 **불일치**        | `results` vs `chunks`, 필드명 다름          |
 
 ### 3.5 🔴 필수 조치 (택1)
 
@@ -429,10 +422,10 @@ src/
 
 ### 4.3 호환성 상태
 
-| 항목 | 상태 | 설명 |
-|------|------|------|
-| 직접 연동 | ✅ 해당 없음 | 백엔드 통해 간접 연동 |
-| 인증 | ✅ Keycloak | 프론트/백엔드 동일 사용 |
+| 항목      | 상태         | 설명                    |
+| --------- | ------------ | ----------------------- |
+| 직접 연동 | ✅ 해당 없음 | 백엔드 통해 간접 연동   |
+| 인증      | ✅ Keycloak  | 프론트/백엔드 동일 사용 |
 
 ### 4.4 권장 조치
 
@@ -445,12 +438,12 @@ src/
 
 ### 5.1 요약 테이블
 
-| 연동 경로 | 호환성 | 심각도 | 필요 조치 |
-|----------|--------|--------|----------|
-| ctrlf-ai → ctrlf-back (AI Log) | ⚠️ 불확실 | 중간 | API 스펙 확인 필요 |
-| ctrlf-ai → ctrlf-ragflow (Search) | 🔴 불일치 | **높음** | API 래퍼 추가 필수 |
-| ctrlf-ai → 내부 LLM | ✅ 준비됨 | 낮음 | OpenAI 호환 형식 |
-| ctrlf-front → ctrlf-ai | ✅ 해당 없음 | 없음 | 백엔드 통해 간접 연동 |
+| 연동 경로                         | 호환성       | 심각도   | 필요 조치             |
+| --------------------------------- | ------------ | -------- | --------------------- |
+| ctrlf-ai → ctrlf-back (AI Log)    | ⚠️ 불확실    | 중간     | API 스펙 확인 필요    |
+| ctrlf-ai → ctrlf-ragflow (Search) | 🔴 불일치    | **높음** | API 래퍼 추가 필수    |
+| ctrlf-ai → 내부 LLM               | ✅ 준비됨    | 낮음     | OpenAI 호환 형식      |
+| ctrlf-front → ctrlf-ai            | ✅ 해당 없음 | 없음     | 백엔드 통해 간접 연동 |
 
 ### 5.2 위험도 매트릭스
 
@@ -501,13 +494,13 @@ src/
 
 ### 7.1 단계별 테스트
 
-| 단계 | 테스트 | 명령어/방법 |
-|------|--------|------------|
-| 1 | RAGFlow 헬스체크 | `curl http://localhost:9380/health` |
-| 2 | RAGFlow 검색 API | `curl -X POST http://localhost:9380/search -d '{"query":"연차"}'` |
-| 3 | LLM 헬스체크 | `curl http://llm:8001/health` |
-| 4 | 백엔드 AI Log API | `curl -X POST http://backend:9001/api/ai-logs -d '{...}'` |
-| 5 | AI Gateway E2E | `docker compose up -d && pytest -m integration` |
+| 단계 | 테스트            | 명령어/방법                                                       |
+| ---- | ----------------- | ----------------------------------------------------------------- |
+| 1    | RAGFlow 헬스체크  | `curl http://localhost:9380/health`                               |
+| 2    | RAGFlow 검색 API  | `curl -X POST http://localhost:9380/search -d '{"query":"연차"}'` |
+| 3    | LLM 헬스체크      | `curl http://llm:8001/health`                                     |
+| 4    | 백엔드 AI Log API | `curl -X POST http://backend:9001/api/ai-logs -d '{...}'`         |
+| 5    | AI Gateway E2E    | `docker compose up -d && pytest -m integration`                   |
 
 ### 7.2 Docker Compose 통합 테스트
 
@@ -542,13 +535,13 @@ curl -X POST http://localhost:8000/ai/chat/messages \
 
 ### 8.1 우선순위별 조치 사항
 
-| 우선순위 | 조치 사항 | 담당 |
-|---------|----------|------|
-| **P0 (즉시)** | ctrlf-ragflow에 `/search` API 래퍼 추가 | RAGFlow 팀 |
-| **P1 (1주 내)** | ctrlf-back에서 `/api/ai-logs` 스펙 확정 | 백엔드 팀 |
-| **P1 (1주 내)** | 필드명 매핑 (snake_case ↔ camelCase) 결정 | 전체 팀 |
-| **P2 (2주 내)** | Docker Compose 통합 환경 구축 | DevOps |
-| **P2 (2주 내)** | E2E 통합 테스트 실행 | QA |
+| 우선순위        | 조치 사항                                 | 담당       |
+| --------------- | ----------------------------------------- | ---------- |
+| **P0 (즉시)**   | ctrlf-ragflow에 `/search` API 래퍼 추가   | RAGFlow 팀 |
+| **P1 (1주 내)** | ctrlf-back에서 `/api/ai-logs` 스펙 확정   | 백엔드 팀  |
+| **P1 (1주 내)** | 필드명 매핑 (snake_case ↔ camelCase) 결정 | 전체 팀    |
+| **P2 (2주 내)** | Docker Compose 통합 환경 구축             | DevOps     |
+| **P2 (2주 내)** | E2E 통합 테스트 실행                      | QA         |
 
 ### 8.2 연동 성공 기준
 

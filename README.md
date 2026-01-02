@@ -16,14 +16,14 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 
 ## 연동 서비스
 
-| 서비스          | 주소                         | 설명                             |
-| --------------- | ---------------------------- | -------------------------------- |
-| **vLLM**        | `your-llm-server:port`       | LLM (EXAONE-3.5-7.8B-Instruct)   |
-| **Embedding**   | `your-embedding-server:port` | 임베딩 (ko-sroberta-multitask)   |
-| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                          |
-| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인 (문서 처리)       |
-| **ctrlf-back**  | Spring                       | 백엔드 API                       |
-| **ctrlf-front** | React                        | 프론트엔드                       |
+| 서비스          | 주소                         | 설명                           |
+| --------------- | ---------------------------- | ------------------------------ |
+| **vLLM**        | `your-llm-server:port`       | LLM (EXAONE-3.5-7.8B-Instruct) |
+| **Embedding**   | `your-embedding-server:port` | 임베딩 (ko-sroberta-multitask) |
+| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                        |
+| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인 (문서 처리)     |
+| **ctrlf-back**  | Spring                       | 백엔드 API                     |
+| **ctrlf-front** | React                        | 프론트엔드                     |
 
 ## 빠른 테스트 (Mock 모드)
 
@@ -402,21 +402,21 @@ python qa_batch_test.py
 
 ### 출력 컬럼
 
-| 컬럼                 | 설명                             |
-| -------------------- | -------------------------------- |
-| ID                   | 질문 ID                          |
-| 페르소나             | 사용자 역할 (EMPLOYEE, etc.)     |
-| 카테고리             | 질문 카테고리                    |
-| 질문                 | 원본 질문                        |
-| 답변                 | AI 응답                          |
-| 모델                 | 사용된 LLM 모델                  |
-| prompt_tokens        | 프롬프트 토큰 수                 |
-| completion_tokens    | 생성 토큰 수                     |
-| latency_ms           | 응답 시간 (ms)                   |
-| route                | 라우팅 경로                      |
-| rag_used             | RAG 사용 여부                    |
-| rag_source_count     | 참조 문서 수                     |
-| error                | 오류 메시지 (실패 시)            |
+| 컬럼              | 설명                         |
+| ----------------- | ---------------------------- |
+| ID                | 질문 ID                      |
+| 페르소나          | 사용자 역할 (EMPLOYEE, etc.) |
+| 카테고리          | 질문 카테고리                |
+| 질문              | 원본 질문                    |
+| 답변              | AI 응답                      |
+| 모델              | 사용된 LLM 모델              |
+| prompt_tokens     | 프롬프트 토큰 수             |
+| completion_tokens | 생성 토큰 수                 |
+| latency_ms        | 응답 시간 (ms)               |
+| route             | 라우팅 경로                  |
+| rag_used          | RAG 사용 여부                |
+| rag_source_count  | 참조 문서 수                 |
+| error             | 오류 메시지 (실패 시)        |
 
 ### 설정
 
@@ -483,7 +483,7 @@ docker compose --profile mock up -d ragflow llm-internal
 # 환경변수 설정
 export RAGFLOW_BASE_URL=http://localhost:8080      # Mock RAGFlow
 export LLM_BASE_URL=http://localhost:8001          # Mock LLM
-export BACKEND_BASE_URL=http://real-backend:8080   # 실제 백엔드
+export BACKEND_BASE_URL=http://real-backend:8085   # 실제 백엔드
 
 # AI Gateway 실행
 uvicorn app.main:app --reload --port 8000

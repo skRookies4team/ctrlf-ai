@@ -1,5 +1,7 @@
 # Personalization Implementation Report
 
+**Last Updated:** 2026-01-02
+
 개인화(Personalization) 기능 구현에 관한 상세 보고서입니다.
 
 ---
@@ -348,7 +350,7 @@ LLM 호출 실패 시 Q별 전용 포맷터로 답변을 생성합니다:
 
 ### 7.1 개인화 분기 조건
 
-`chat_service.py` 라인 787-839:
+`chat_service.py` 라인 908-929:
 
 ```python
 elif route in backend_api_routes:
@@ -378,7 +380,7 @@ elif route in backend_api_routes:
 
 ### 7.2 _handle_personalization 메서드
 
-`chat_service.py` 라인 1568-1647:
+`chat_service.py` 라인 1871-1970:
 
 ```python
 async def _handle_personalization(self, q, user_query, period, ...):
@@ -521,7 +523,33 @@ ChatAnswerMeta(
 
 - Q2, Q4, Q7, Q8, Q10, Q12, Q13, Q15, Q16, Q17, Q18, Q19
 
-### 11.2 부서 비교 (Q5)
+### 11.2 Q5/Q6 라우팅 경로 미구현 (QUIZ 도메인)
+
+> **주의**: Q5(평균 비교), Q6(취약 토픽 TOP3)는 우선순위 8개에 포함되어 있으나,
+> 현재 `personalization_mapper.py`에서 이들로 도달하는 라우팅 경로가 없습니다.
+
+**현재 상태:**
+- `PersonalizationClient`에 Q5, Q6 mock 데이터 존재
+- `AnswerGenerator`에 Q5, Q6 fallback 포맷터 존재
+- **BUT** `rule_router`/`llm_router`에서 Q5, Q6로 매핑하는 SubIntentId 없음
+
+**필요한 작업:**
+```python
+# personalization_mapper.py에 추가 필요
+SUBINTENT_TO_Q = {
+    "HR_WELFARE_CHECK": "Q14",
+    "HR_ATTENDANCE_CHECK": "Q10",
+    # TODO: QUIZ 도메인 매핑 추가
+    # "QUIZ_SCORE_CHECK": "Q5",      # 평균 비교
+    # "QUIZ_WEAKNESS_CHECK": "Q6",   # 취약 토픽
+}
+```
+
+또는 `rule_router.py`에서 Q5/Q6 관련 키워드 매핑 추가:
+- "평균 점수", "부서 평균", "전사 평균" → Q5
+- "많이 틀린", "약한 부분", "취약 토픽" → Q6
+
+### 11.3 부서 비교 (Q5)
 
 현재 Q5의 `target_dept_id`는 `None`으로 고정:
 
@@ -530,7 +558,7 @@ ChatAnswerMeta(
 target_dept_id=None,
 ```
 
-### 11.3 캐싱
+### 11.4 캐싱
 
 자주 조회되는 facts에 대한 캐싱 전략 필요:
 - 연차/포인트 잔액은 일정 시간 캐시 가능

@@ -1,8 +1,8 @@
 # Personalization Backend API Specification
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Base URL:** `http://ctrlf-back:8081`
-**Last Updated:** 2025-01-18
+**Last Updated:** 2026-01-02
 
 ---
 
