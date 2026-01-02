@@ -451,7 +451,7 @@ if status == "LOW_RELEVANCE":
 │ POST {LLM_BASE_URL}/v1/chat/completions                                  │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ {                                                                        │
-│   "model": "meta-llama/Meta-Llama-3-8B-Instruct",                                   │
+│   "model": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",                                   │
 │   "messages": [                                                          │
 │     {                                                                   │
 │       "role": "system",                                                 │
@@ -665,7 +665,7 @@ MILVUS_PORT=19530
 
 # LLM
 LLM_BASE_URL=http://llm-server:8000/v1
-LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 ```
 
 ---
