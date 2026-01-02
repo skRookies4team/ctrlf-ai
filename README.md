@@ -48,12 +48,14 @@ curl http://localhost:8000/health
 ```
 
 **Swagger UI에서 테스트:**
+
 ```
 브라우저에서 http://localhost:8000/docs 접속
 → /ai/chat/messages 선택 → Try it out → Execute
 ```
 
 **예상 응답 (Mock 모드):**
+
 ```json
 {
   "answer": "[Mock] 연차휴가는 근로기준법에 따라...",
@@ -253,6 +255,45 @@ curl -X POST http://localhost:8000/internal/ai/render-jobs `
 | `LLM timeout`        | .env의 LLM_BASE_URL 확인     |
 | `Milvus error`       | .env의 MILVUS_HOST/PORT 확인 |
 | `Callback failed`    | 백엔드 서비스 실행 확인      |
+| `UnicodeDecodeError` | 아래 인코딩 오류 해결 참고   |
+
+#### requirements.txt 인코딩 오류
+
+`pip install -r requirements.txt` 실행 시 다음 오류가 발생하는 경우:
+
+```
+UnicodeDecodeError: 'cp949' codec can't decode byte ...
+```
+
+**해결 방법:**
+
+```cmd
+# 기존 파일 삭제 후 새로 생성 (Windows CMD)
+del requirements.txt
+echo fastapi>=0.115.0 > requirements.txt
+echo uvicorn[standard]>=0.32.0 >> requirements.txt
+echo pydantic>=2.9.0 >> requirements.txt
+echo pydantic-settings>=2.6.0 >> requirements.txt
+echo httpx>=0.27.0 >> requirements.txt
+echo python-dotenv>=1.0.0 >> requirements.txt
+echo pytest>=8.3.0 >> requirements.txt
+echo pytest-anyio>=0.0.0 >> requirements.txt
+echo pytest-asyncio>=0.24.0 >> requirements.txt
+echo anyio>=4.6.0 >> requirements.txt
+echo PyMuPDF>=1.24.0 >> requirements.txt
+echo python-docx>=1.1.0 >> requirements.txt
+echo olefile>=0.47 >> requirements.txt
+echo gTTS>=2.5.0 >> requirements.txt
+echo Pillow>=10.0.0 >> requirements.txt
+echo pymilvus>=2.5.0 >> requirements.txt
+echo pandas>=2.0.0 >> requirements.txt
+echo openpyxl>=3.1.0 >> requirements.txt
+
+# 다시 설치
+pip install -r requirements.txt
+```
+
+> **원인**: Git에서 파일을 받을 때 UTF-8 BOM이나 다른 인코딩이 섞여서 발생합니다.
 
 ## API 엔드포인트
 
@@ -295,7 +336,7 @@ AI_ENV=real
 
 # LLM 서버 (vLLM - 채팅 + 임베딩 통합)
 LLM_BASE_URL=http://your-llm-server:port
-LLM_MODEL_NAME=meta-llama/Meta-Llama-3-8B-Instruct
+LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 EMBEDDING_MODEL_NAME=BAAI/bge-m3
 
 # Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)
@@ -332,10 +373,10 @@ pytest tests/test_internal_rag.py -v
 
 ### Mock 서버 목록
 
-| Mock 서버 | 포트 | 용도 |
-|-----------|------|------|
-| `mock_ragflow/` | 8080 | RAG 문서 검색 API 시뮬레이션 |
-| `mock_llm/` | 8001 | OpenAI 호환 LLM API 시뮬레이션 |
+| Mock 서버       | 포트 | 용도                                   |
+| --------------- | ---- | -------------------------------------- |
+| `mock_ragflow/` | 8080 | RAG 문서 검색 API 시뮬레이션           |
+| `mock_llm/`     | 8001 | OpenAI 호환 LLM API 시뮬레이션         |
 | `mock_backend/` | 8081 | Spring 백엔드 로그 수집 API 시뮬레이션 |
 
 ### URL 우선순위
@@ -462,6 +503,7 @@ Mock RAGFlow 스크립트 생성 테스트
 ```
 
 **Mock 청크 생성 규칙:**
+
 - 파일명에서 주제를 추출하여 Mock 청크 내용 자동 생성
 - 예: `장애인식개선교육.pdf` → "장애인식개선교육에 대한 개요입니다..."
 - 기본 5개 청크 생성 (개요, 정책/절차, 법률/규정, 사례, FAQ)
@@ -491,12 +533,12 @@ docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile rea
 docker ps
 ```
 
-| 컨테이너 | 포트 | 설명 |
-|----------|------|------|
-| ctrlf-ai-gateway | 8000 | AI Gateway |
+| 컨테이너            | 포트 | 설명        |
+| ------------------- | ---- | ----------- |
+| ctrlf-ai-gateway    | 8000 | AI Gateway  |
 | ctrlf-elasticsearch | 9200 | 로그 저장소 |
-| ctrlf-kibana | 5601 | 로그 시각화 |
-| ctrlf-fluent-bit | - | 로그 수집기 |
+| ctrlf-kibana        | 5601 | 로그 시각화 |
+| ctrlf-fluent-bit    | -    | 로그 수집기 |
 
 ### 3. ES 초기 설정 (최초 1회)
 
@@ -575,6 +617,7 @@ ctrlf-ai/
 ```
 
 **요청 흐름:**
+
 1. **채팅 (RAG 검색)**: Frontend → Backend → AI Gateway → **Milvus 직접 검색** → vLLM → 응답 반환
 2. **개인화**: AI Gateway → Backend API 호출 → Backend가 DB 조회 → AI Gateway에 데이터 반환
 3. **문서 인덱싱**: Backend가 S3에 문서 저장 → S3 URL을 AI Gateway에 전달 → AI Gateway가 RAGFlow에 URL 전달 → RAGFlow가 문서 전처리 후 Milvus에 벡터 저장

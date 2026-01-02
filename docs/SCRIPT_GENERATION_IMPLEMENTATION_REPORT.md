@@ -3,22 +3,25 @@
 ## 1. 시스템 개요
 
 ### 1.1 목적
+
 법정의무교육 문서를 기반으로 교육 영상 스크립트를 자동 생성하는 시스템입니다. 문서를 통째로 LLM에 전달하지 않고, **씬 단위 RAG(Retrieval-Augmented Generation)** 방식을 사용하여 LLM 컨텍스트 제한(8K 토큰)을 우회합니다.
 
 ### 1.2 핵심 기술
+
 - **씬 단위 RAG**: 각 씬에 필요한 청크만 검색하여 컨텍스트 8K 이내 유지
 - **Milvus 벡터 검색**: 의미 기반 청크 검색
 - **한국어 출력 강제**: 프롬프트 엔지니어링 + 검증 로직
 - **출처 추적(Source Refs)**: 각 씬이 어느 청크에서 생성되었는지 추적
 
 ### 1.3 주요 파일
-| 파일 | 역할 |
-|------|------|
-| `app/services/scene_based_script_generator.py` | 씬 단위 RAG 스크립트 생성기 |
-| `app/services/source_set_orchestrator.py` | 전체 파이프라인 오케스트레이션 |
-| `app/models/source_set.py` | 데이터 모델 정의 |
-| `app/clients/milvus_client.py` | Milvus 벡터 검색 클라이언트 |
-| `app/clients/llm_client.py` | LLM API 클라이언트 |
+
+| 파일                                           | 역할                           |
+| ---------------------------------------------- | ------------------------------ |
+| `app/services/scene_based_script_generator.py` | 씬 단위 RAG 스크립트 생성기    |
+| `app/services/source_set_orchestrator.py`      | 전체 파이프라인 오케스트레이션 |
+| `app/models/source_set.py`                     | 데이터 모델 정의               |
+| `app/clients/milvus_client.py`                 | Milvus 벡터 검색 클라이언트    |
+| `app/clients/llm_client.py`                    | LLM API 클라이언트             |
 
 ---
 
@@ -192,7 +195,7 @@
 │  │   "script_id": "script-4cf2b5d956fc",                               │   │
 │  │   "title": "사내 보안형 AI 챗봇 사용 안내",                          │   │
 │  │   "total_duration_sec": 100.0,                                       │   │
-│  │   "llm_model": "meta-llama/Meta-Llama-3-8B-Instruct",               │   │
+│  │   "llm_model": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",               │   │
 │  │   "chapters": [                                                      │   │
 │  │     {                                                                │   │
 │  │       "chapter_index": 0,                                            │   │
@@ -217,17 +220,20 @@
 **파일**: `scene_based_script_generator.py` - `_generate_outline()` (라인 363-485)
 
 #### 입력
+
 ```python
 doc_titles: List[str]  # 문서 제목 리스트
 all_chunks: List[Dict[str, Any]]  # 전체 청크 (샘플 추출용)
 ```
 
 #### 처리 로직
+
 1. 문서 제목 목록 구성
 2. 처음 3개 청크에서 각 300자씩 샘플 추출 (총 900자)
 3. LLM에 아웃라인 생성 요청
 
 #### 프롬프트 구성
+
 ```
 시스템 프롬프트:
 - 역할: 법정의무교육 영상 스크립트 기획 전문가
@@ -240,6 +246,7 @@ all_chunks: List[Dict[str, Any]]  # 전체 청크 (샘플 추출용)
 ```
 
 #### 출력
+
 ```python
 @dataclass
 class ScriptOutline:
@@ -263,11 +270,12 @@ class SceneOutline:
 ```
 
 #### LLM 설정
-| 파라미터 | 값 |
-|---------|-----|
-| model | meta-llama/Meta-Llama-3-8B-Instruct |
-| temperature | 0.3 |
-| max_tokens | 1,500 |
+
+| 파라미터    | 값                                   |
+| ----------- | ------------------------------------ |
+| model       | LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct |
+| temperature | 0.3                                  |
+| max_tokens  | 1,500                                |
 
 ---
 
@@ -310,6 +318,7 @@ def _keyword_search_fallback(self, keywords, all_chunks):
 **메서드**: `_generate_single_scene()` (라인 732-888)
 
 **프롬프트 구성**:
+
 ```
 시스템 프롬프트:
 - 역할: 법정의무교육 영상 스크립트 작성 전문가
@@ -324,11 +333,12 @@ def _keyword_search_fallback(self, keywords, all_chunks):
 ```
 
 #### LLM 설정
-| 파라미터 | 값 |
-|---------|-----|
-| model | meta-llama/Meta-Llama-3-8B-Instruct |
-| temperature | 0.4 (재시도 시 0.2) |
-| max_tokens | 800 |
+
+| 파라미터    | 값                                   |
+| ----------- | ------------------------------------ |
+| model       | LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct |
+| temperature | 0.4 (재시도 시 0.2)                  |
+| max_tokens  | 800                                  |
 
 #### 한국어 검증 로직
 
@@ -346,6 +356,7 @@ def _has_english_start(text: str) -> bool:
 ```
 
 **재시도 로직**:
+
 1. 첫 시도 (temperature=0.4)
 2. 한국어 검증 실패 시 재시도 (temperature=0.2)
 3. 최대 2회 시도 후 실패 처리
@@ -387,7 +398,7 @@ class GeneratedScene(BaseModel):
     scene_index: int           # 씬 순서 (0-based)
     purpose: str               # 씬 목적 (도입/설명/사례/정리)
     narration: str             # TTS 나레이션 텍스트 (150-250자)
-    duration_sec: float        # 씬 길이 (초)
+    duration_sec: int          # 씬 길이 (초)
 
     # 시각 자료 필드 (영상 렌더링용)
     caption: Optional[str]                # 화면 하단 자막 (30자 이내)
@@ -404,15 +415,15 @@ class GeneratedScene(BaseModel):
 
 ### 4.2 visual_type 종류
 
-| 타입 | 용도 | 매핑되는 씬 목적 |
-|------|------|-----------------|
-| `TITLE_SLIDE` | 제목/타이틀 슬라이드 | 도입 |
-| `KEY_POINTS` | 핵심 포인트 목록 | 설명 |
-| `COMPARISON` | 비교 테이블 | 비교 |
-| `DIAGRAM` | 다이어그램/흐름도 | 설명 |
-| `EXAMPLE` | 사례 카드 | 사례 |
-| `WARNING` | 경고/주의 화면 | 주의 |
-| `SUMMARY` | 요약 슬라이드 | 정리 |
+| 타입          | 용도                 | 매핑되는 씬 목적 |
+| ------------- | -------------------- | ---------------- |
+| `TITLE_SLIDE` | 제목/타이틀 슬라이드 | 도입             |
+| `KEY_POINTS`  | 핵심 포인트 목록     | 설명             |
+| `COMPARISON`  | 비교 테이블          | 비교             |
+| `DIAGRAM`     | 다이어그램/흐름도    | 설명             |
+| `EXAMPLE`     | 사례 카드            | 사례             |
+| `WARNING`     | 경고/주의 화면       | 주의             |
+| `SUMMARY`     | 요약 슬라이드        | 정리             |
 
 ### 4.3 GeneratedChapter (챕터)
 
@@ -420,7 +431,7 @@ class GeneratedScene(BaseModel):
 class GeneratedChapter(BaseModel):
     chapter_index: int         # 챕터 순서 (0-based)
     title: str                 # 챕터 제목
-    duration_sec: float        # 챕터 총 길이 (초)
+    duration_sec: int          # 챕터 총 길이 (초)
     scenes: List[GeneratedScene]  # 씬 목록
 ```
 
@@ -432,7 +443,7 @@ class GeneratedScript(BaseModel):
     education_id: Optional[str]  # 교육 ID
     source_set_id: str         # 소스셋 ID
     title: str                 # 스크립트 제목
-    total_duration_sec: float  # 전체 길이 (초)
+    total_duration_sec: int    # 전체 길이 (초)
     version: int               # 버전 (기본 1)
     llm_model: Optional[str]   # 사용된 LLM 모델
     chapters: List[GeneratedChapter]  # 챕터 목록
@@ -528,18 +539,18 @@ class GeneratedScript(BaseModel):
 
 ### 5.2 토큰 사용량 분석
 
-| 단계 | LLM 호출 | 입력 토큰 | 출력 토큰 | 합계 |
-|------|---------|----------|----------|------|
-| 1단계: 아웃라인 | 1회 | ~3,000 | ~500 | ~3,500 |
-| 2단계: 씬 생성 (N개) | N회 | N × 3,400 | N × 400 | N × 3,800 |
-| **총계 (씬 5개)** | **6회** | **~20,000** | **~2,500** | **~22,500** |
+| 단계                 | LLM 호출 | 입력 토큰   | 출력 토큰  | 합계        |
+| -------------------- | -------- | ----------- | ---------- | ----------- |
+| 1단계: 아웃라인      | 1회      | ~3,000      | ~500       | ~3,500      |
+| 2단계: 씬 생성 (N개) | N회      | N × 3,400   | N × 400    | N × 3,800   |
+| **총계 (씬 5개)**    | **6회**  | **~20,000** | **~2,500** | **~22,500** |
 
 ### 5.3 컨텍스트 제한 우회 효과
 
-| 방식 | 문서 크기 | 필요 토큰 | 8K 제한 |
-|------|----------|----------|---------|
-| **기존 (전체 문서)** | 6,241자 | ~4,000 토큰 | ❌ 초과 위험 |
-| **씬 단위 RAG** | 1,500자/씬 | ~1,000 토큰/씬 | ✅ 제한 내 |
+| 방식                 | 문서 크기  | 필요 토큰      | 8K 제한      |
+| -------------------- | ---------- | -------------- | ------------ |
+| **기존 (전체 문서)** | 6,241자    | ~4,000 토큰    | ❌ 초과 위험 |
+| **씬 단위 RAG**      | 1,500자/씬 | ~1,000 토큰/씬 | ✅ 제한 내   |
 
 ---
 
@@ -550,17 +561,19 @@ class GeneratedScript(BaseModel):
 **POST** `/internal/ai/source-sets/{sourceSetId}/start`
 
 **Request Body**:
+
 ```json
 {
   "videoId": "video-001",
   "educationId": "edu-001",
   "requestId": "req-xxx",
   "traceId": "trace-xxx",
-  "llmModelHint": "meta-llama/Meta-Llama-3-8B-Instruct"
+  "llmModelHint": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 }
 ```
 
 **Response (202 Accepted)**:
+
 ```json
 {
   "received": true,
@@ -574,6 +587,7 @@ class GeneratedScript(BaseModel):
 **POST** `/internal/callbacks/source-sets/{sourceSetId}/complete`
 
 **Request Body (성공)**:
+
 ```json
 {
   "videoId": "video-001",
@@ -583,7 +597,7 @@ class GeneratedScript(BaseModel):
     "scriptId": "script-4cf2b5d956fc",
     "title": "사내 보안형 AI 챗봇 사용 안내",
     "totalDurationSec": 100.0,
-    "llmModel": "meta-llama/Meta-Llama-3-8B-Instruct",
+    "llmModel": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",
     "chapters": [
       {
         "chapterIndex": 0,
@@ -603,8 +617,8 @@ class GeneratedScript(BaseModel):
             "durationSec": 30.0,
             "confidenceScore": 0.8,
             "sourceRefs": [
-              {"documentId": "doc-001", "chunkIndex": 2},
-              {"documentId": "doc-001", "chunkIndex": 5}
+              { "documentId": "doc-001", "chunkIndex": 2 },
+              { "documentId": "doc-001", "chunkIndex": 5 }
             ]
           }
         ]
@@ -612,7 +626,7 @@ class GeneratedScript(BaseModel):
     ]
   },
   "documents": [
-    {"documentId": "doc-001", "status": "COMPLETED", "failReason": null}
+    { "documentId": "doc-001", "status": "COMPLETED", "failReason": null }
   ],
   "requestId": "req-xxx",
   "traceId": "trace-xxx"
@@ -625,14 +639,14 @@ class GeneratedScript(BaseModel):
 
 ### 7.1 실패 원인 코드 (FailReason)
 
-| 코드 | 설명 | 처리 |
-|------|------|------|
-| `OUTLINE_PARSE_ERROR` | 아웃라인 JSON 파싱 실패 | 폴백 스크립트 |
-| `OUTLINE_EMPTY` | 아웃라인 생성 결과 없음 | 폴백 스크립트 |
-| `RETRIEVE_EMPTY` | RAG 검색 결과 없음 | 키워드 폴백 검색 |
-| `SCENE_PARSE_ERROR` | 씬 JSON 파싱 실패 | 해당 씬 스킵 |
-| `NON_KOREAN_OUTPUT` | 한국어 검증 실패 | 재시도 후 스킵 |
-| `LLM_ERROR` | LLM API 호출 실패 | 재시도 후 폴백 |
+| 코드                  | 설명                    | 처리             |
+| --------------------- | ----------------------- | ---------------- |
+| `OUTLINE_PARSE_ERROR` | 아웃라인 JSON 파싱 실패 | 폴백 스크립트    |
+| `OUTLINE_EMPTY`       | 아웃라인 생성 결과 없음 | 폴백 스크립트    |
+| `RETRIEVE_EMPTY`      | RAG 검색 결과 없음      | 키워드 폴백 검색 |
+| `SCENE_PARSE_ERROR`   | 씬 JSON 파싱 실패       | 해당 씬 스킵     |
+| `NON_KOREAN_OUTPUT`   | 한국어 검증 실패        | 재시도 후 스킵   |
+| `LLM_ERROR`           | LLM API 호출 실패       | 재시도 후 폴백   |
 
 ### 7.2 폴백 스크립트
 
@@ -689,14 +703,14 @@ class GenerationMetrics:
 
 ### 8.2 실제 테스트 결과
 
-| 항목 | 값 |
-|------|-----|
-| 문서 | 1개 (23 청크, 6,241자) |
-| 생성 시간 | 20-25초 |
-| 챕터 수 | 2개 |
-| 씬 수 | 3-5개 |
-| 총 영상 길이 | 100초 (1.7분) |
-| LLM 호출 | 4-6회 |
+| 항목         | 값                     |
+| ------------ | ---------------------- |
+| 문서         | 1개 (23 청크, 6,241자) |
+| 생성 시간    | 20-25초                |
+| 챕터 수      | 2개                    |
+| 씬 수        | 3-5개                  |
+| 총 영상 길이 | 100초 (1.7분)          |
+| LLM 호출     | 4-6회                  |
 
 ### 8.3 로그 출력 예시
 
@@ -715,7 +729,7 @@ scenes=5, failed=0, korean_pass=5, korean_fail=0, retries=0
 ### 9.1 LLM 설정 (SceneBasedScriptGenerator)
 
 ```python
-DEFAULT_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+DEFAULT_MODEL = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 MAX_TOKENS_OUTLINE = 1500   # 아웃라인 생성용
 MAX_TOKENS_SCENE = 800      # 씬 생성용
 MAX_TOKENS_POLISH = 1000    # 다듬기용 (미사용)
@@ -767,8 +781,14 @@ RETRY_TEMPERATURE = 0.2     # 재시도 시 temperature
           "duration_sec": 30.0,
           "confidence_score": 0.8,
           "source_refs": [
-            {"document_id": "인사팀_추가교육자료_재택·유연근무 제도 운영 실무 가이드.docx", "chunk_index": 30},
-            {"document_id": "(1교시)법령위반_사례과정_개인정보_보호법_위반사례.pdf", "chunk_index": 2}
+            {
+              "document_id": "인사팀_추가교육자료_재택·유연근무 제도 운영 실무 가이드.docx",
+              "chunk_index": 30
+            },
+            {
+              "document_id": "(1교시)법령위반_사례과정_개인정보_보호법_위반사례.pdf",
+              "chunk_index": 2
+            }
           ]
         }
       ]
@@ -791,7 +811,10 @@ RETRY_TEMPERATURE = 0.2     # 재시도 시 temperature
           "duration_sec": 40.0,
           "confidence_score": 0.8,
           "source_refs": [
-            {"document_id": "전체공통_추가교육자료_사내 보안형 AI 챗봇 사용 안내.docx", "chunk_index": 3}
+            {
+              "document_id": "전체공통_추가교육자료_사내 보안형 AI 챗봇 사용 안내.docx",
+              "chunk_index": 3
+            }
           ]
         }
       ]
