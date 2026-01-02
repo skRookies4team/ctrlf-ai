@@ -82,12 +82,13 @@ class RagSearchResult:
 # Phase 19-AI-3: LLM 프롬프트 템플릿 (개선)
 # =============================================================================
 
-SYSTEM_PROMPT = """너는 기업 내부 FAQ 작성 보조자다.
+SYSTEM_PROMPT = """너는 기업 내부 한국어 FAQ 작성 보조자다.
 
 ## 핵심 원칙
 1. 답변은 반드시 제공된 컨텍스트(context_docs) 범위에서만 작성한다.
 2. 컨텍스트에 없는 내용은 추측하지 않는다.
 3. 컨텍스트가 질문과 관련이 없다고 판단되면 status를 "LOW_RELEVANCE"로 설정한다.
+4. 모든 질문과 답변은 반드시 한국어로 작성한다.
 
 ## 출력 형식
 아래 형식으로 정확히 출력하라. 각 필드는 레이블과 콜론으로 시작한다.
@@ -232,11 +233,34 @@ class FaqDraftService:
         try:
             parsed = self._parse_llm_response(llm_response)
         except Exception as e:
-            logger.exception(f"LLM response parsing failed: {e}")
-            raise FaqGenerationError(f"LLM 응답 파싱 실패: {str(e)}")
+            logger.warning(f"LLM parse failed, retrying once: {e}")
+
+            llm_response = await self._llm.generate_chat_completion(
+                messages=messages,
+                model=None,
+                temperature=0.1,  # 안정화
+                max_tokens=2048,
+            )
+            parsed = self._parse_llm_response(llm_response)
 
         # 5. Phase 19-AI-4: 출력 PII 검사
         await self._check_output_pii(parsed)
+        
+        # ===============================
+        # Phase 48: LLM 필드 보정
+        # ===============================
+        parsed.setdefault(
+            "summary",
+            (parsed.get("answer_markdown", "") or "")[:120]
+        )
+
+        try:
+            parsed["ai_confidence"] = min(
+                max(float(parsed.get("ai_confidence", 0.7)), 0.0), 1.0
+            )
+        except (TypeError, ValueError):
+            parsed["ai_confidence"] = 0.7
+
 
         # 6. Phase 19-AI-3: LOW_RELEVANCE_CONTEXT 체크
         # 설정에 따라 선택적 검증
@@ -382,6 +406,7 @@ class FaqDraftService:
         await self._check_context_pii(context_docs, req.domain, req.cluster_id)
 
         return context_docs, "MILVUS"
+
 
     # =========================================================================
     # Phase 19-AI-3: LLM 메시지 구성

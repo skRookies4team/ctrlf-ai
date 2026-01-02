@@ -35,7 +35,7 @@ async def test_full_faq_generation():
 
     print("\n[1] FaqDraftService 초기화")
     service = FaqDraftService()
-    print(f"   ✅ 초기화 완료 (Milvus: {service._milvus_enabled})")
+    print(f"   ✅ 초기화 완료 (Milvus client: {bool(service._milvus_client)})")
 
     print("\n[2] FAQ 초안 생성 요청")
     req = FaqDraftGenerateRequest(
