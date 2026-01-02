@@ -13,12 +13,21 @@ contextvars에서 RequestContext를 읽어 모든 LogRecord에 자동 주입합�
 - exception_type, stacktrace: 예외 정보 (있을 경우)
 """
 
+import io
 import json
 import logging
 import sys
 import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
+
+# Windows 콘솔 UTF-8 인코딩 설정 (한글 깨짐 방지)
+if sys.platform == "win32":
+    # stdout/stderr를 UTF-8로 재설정
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -163,8 +172,20 @@ def setup_logging(settings: "Settings") -> None:
     # RequestContext 필터 생성
     context_filter = RequestContextFilter()
 
-    # 콘솔 핸들러 설정 (stdout)
-    console_handler = logging.StreamHandler(sys.stdout)
+    # 콘솔 핸들러 설정 (stdout, UTF-8 인코딩)
+    # Windows에서 한글이 깨지지 않도록 UTF-8 스트림 사용
+    if sys.platform == "win32":
+        # UTF-8 인코딩된 TextIOWrapper 사용
+        stream = io.TextIOWrapper(
+            sys.stdout.buffer,
+            encoding="utf-8",
+            errors="replace",
+            line_buffering=True,
+        )
+        console_handler = logging.StreamHandler(stream)
+    else:
+        console_handler = logging.StreamHandler(sys.stdout)
+
     console_handler.setFormatter(formatter)
     console_handler.setLevel(log_level)
     console_handler.addFilter(context_filter)

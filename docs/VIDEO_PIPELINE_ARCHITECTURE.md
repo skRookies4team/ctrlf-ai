@@ -345,7 +345,7 @@ POST /api/videos/{video_id}/render-jobs
 ├─────────────────────────────────────────────────────────────────────┤
 │  POST {LLM_BASE_URL}/v1/chat/completions                            │
 │  {                                                                  │
-│    "model": "meta-llama/Meta-Llama-3-8B-Instruct",                             │
+│    "model": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",                             │
 │    "messages": [...],                                               │
 │    "temperature": 0.3,                                              │
 │    "max_tokens": 4096                                               │
@@ -625,14 +625,14 @@ POST /api/videos/{video_id}/render-jobs
 
 **위치**: `app/clients/llm_client.py`
 
-| 설정        | 값                                    |
-| ----------- | ------------------------------------- |
-| API         | OpenAI-compatible                     |
-| Model       | `meta-llama/Meta-Llama-3-8B-Instruct` |
-| Temperature | 0.3                                   |
-| Max Tokens  | 4096                                  |
-| Timeout     | 30초                                  |
-| Retry       | 1회                                   |
+| 설정        | 값                                     |
+| ----------- | -------------------------------------- |
+| API         | OpenAI-compatible                      |
+| Model       | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
+| Temperature | 0.3                                    |
+| Max Tokens  | 4096                                   |
+| Timeout     | 30초                                   |
+| Retry       | 1회                                    |
 
 ### 5.3 TTS Provider
 
@@ -816,11 +816,11 @@ WS /ws/videos/{video_id}/render-progress
 
 ### 9.1 Script Generation
 
-| 환경변수         | 설명           | 기본값                                |
-| ---------------- | -------------- | ------------------------------------- |
-| `LLM_BASE_URL`   | LLM 서버 URL   | -                                     |
-| `LLM_MODEL_NAME` | 모델명         | `meta-llama/Meta-Llama-3-8B-Instruct` |
-| `AI_ENV`         | mock/real 모드 | `mock`                                |
+| 환경변수         | 설명           | 기본값                                 |
+| ---------------- | -------------- | -------------------------------------- |
+| `LLM_BASE_URL`   | LLM 서버 URL   | -                                      |
+| `LLM_MODEL_NAME` | 모델명         | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
+| `AI_ENV`         | mock/real 모드 | `mock`                                 |
 
 ### 9.2 Video Rendering
 

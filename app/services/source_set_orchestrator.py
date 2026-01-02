@@ -1016,7 +1016,7 @@ class SourceSetOrchestrator:
         ]
 
         # LLM 모델 설정
-        model = job.llm_model_hint or "meta-llama/Meta-Llama-3-8B-Instruct"
+        model = job.llm_model_hint or "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 
         # 씬 단위 RAG 스크립트 생성기
         generator = SceneBasedScriptGenerator(
@@ -1136,7 +1136,7 @@ JSON 스크립트:"""
 
         # 3. LLM 호출
         llm_client = LLMClient()
-        model = job.llm_model_hint or "meta-llama/Meta-Llama-3-8B-Instruct"
+        model = job.llm_model_hint or "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 
         try:
             response = await llm_client.generate_chat_completion(

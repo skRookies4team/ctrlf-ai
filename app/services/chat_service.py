@@ -85,8 +85,10 @@ from app.models.chat import (
 from app.models.intent import Domain, IntentType, MaskingStage, RouteType, UserRole
 from app.models.router_types import (
     ClarifyTemplates,
+    CRITICAL_ACTION_SUB_INTENTS,
     RouterResult,
     RouterRouteType,
+    SubIntentId,
     Tier0Intent,
     TIER0_ROUTING_POLICY,
 )
@@ -840,23 +842,61 @@ class ChatService:
             if orchestration_result is not None:
                 sub_intent_id = orchestration_result.router_result.sub_intent_id or ""
 
-            # 1) sub_intent_id가 비어 있으면 needs_clarify 응답
+            # 1) sub_intent_id가 비어 있으면 Sub-Intent Resolver로 자동 보정 시도
             if not sub_intent_id:
-                logger.info("BACKEND_STATUS without sub_intent_id, returning clarify response")
-                latency_ms = int((time.perf_counter() - start_time) * 1000)
-                clarify_msg = ClarifyTemplates.BACKEND_STATUS_CLARIFY[0]
-                return ChatResponse(
-                    answer=clarify_msg,
-                    sources=[],
-                    meta=ChatAnswerMeta(
-                        route="CLARIFY",
-                        intent=Tier0Intent.BACKEND_STATUS.value,
-                        domain=domain,
-                        masked=pii_input.has_pii,
-                        has_pii_input=pii_input.has_pii,
-                        latency_ms=latency_ms,
-                    ),
+                logger.info("BACKEND_STATUS without sub_intent_id, trying Sub-Intent Resolver")
+                resolved_sub_intent = self._resolve_sub_intent_fallback(
+                    query=masked_query,
+                    domain=domain,
                 )
+
+                if resolved_sub_intent:
+                    # 치명 액션(QUIZ_*)인 경우 confirmation 응답 반환
+                    if resolved_sub_intent in CRITICAL_ACTION_SUB_INTENTS:
+                        logger.info(
+                            f"Sub-Intent Resolver: Critical action detected ({resolved_sub_intent}), "
+                            "returning confirmation prompt"
+                        )
+                        latency_ms = int((time.perf_counter() - start_time) * 1000)
+                        # QUIZ_START/SUBMIT에 맞는 confirmation prompt
+                        if resolved_sub_intent == SubIntentId.QUIZ_START.value:
+                            confirm_msg = "퀴즈를 지금 시작할까요? (예/아니오)"
+                        elif resolved_sub_intent == SubIntentId.QUIZ_SUBMIT.value:
+                            confirm_msg = "답안을 제출하고 채점할까요? (예/아니오)"
+                        else:
+                            confirm_msg = "이 작업을 진행할까요? (예/아니오)"
+                        return ChatResponse(
+                            answer=confirm_msg,
+                            sources=[],
+                            meta=ChatAnswerMeta(
+                                route="CONFIRM",
+                                intent=Tier0Intent.BACKEND_STATUS.value,
+                                domain=domain,
+                                masked=pii_input.has_pii,
+                                has_pii_input=pii_input.has_pii,
+                                latency_ms=latency_ms,
+                            ),
+                        )
+                    # 조회성 sub_intent는 바로 사용
+                    sub_intent_id = resolved_sub_intent
+                    logger.info(f"Sub-Intent Resolver: Using fallback sub_intent_id={sub_intent_id}")
+                else:
+                    # Resolver도 실패하면 CLARIFY 응답
+                    logger.info("BACKEND_STATUS: Sub-Intent Resolver failed, returning clarify response")
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    clarify_msg = ClarifyTemplates.BACKEND_STATUS_CLARIFY[0]
+                    return ChatResponse(
+                        answer=clarify_msg,
+                        sources=[],
+                        meta=ChatAnswerMeta(
+                            route="CLARIFY",
+                            intent=Tier0Intent.BACKEND_STATUS.value,
+                            domain=domain,
+                            masked=pii_input.has_pii,
+                            has_pii_input=pii_input.has_pii,
+                            latency_ms=latency_ms,
+                        ),
+                    )
 
             # 2) 개인화 Q 확정 (매퍼 사용)
             personalization_q = to_personalization_q(sub_intent_id, masked_query)
@@ -1658,6 +1698,102 @@ class ChatService:
             intent=intent,
             soft_guardrail_instruction=soft_guardrail_instruction,
         )
+
+    # =========================================================================
+    # Sub-Intent Resolver: CLARIFY 줄이기 위한 자동 보정
+    # =========================================================================
+
+    # Sub-Intent 자동 보정용 키워드 매핑
+    # "표현 형식" 단어(리포트/그래프/캘린더)는 sub_intent를 막지 않음 (modifier로 분리)
+    _SUB_INTENT_KEYWORDS = {
+        # HR 관련
+        SubIntentId.HR_LEAVE_CHECK.value: frozenset([
+            "연차", "휴가", "잔여", "남은 연차", "남은 휴가", "휴가 일수",
+            "연차 며칠", "휴가 며칠", "연차 잔액", "연차 현황",
+        ]),
+        SubIntentId.HR_ATTENDANCE_CHECK.value: frozenset([
+            "근태", "출근", "퇴근", "지각", "조퇴", "결근",
+            "이번달 근태", "이번 달 근태", "출퇴근", "근무시간",
+        ]),
+        SubIntentId.HR_WELFARE_CHECK.value: frozenset([
+            "복지", "포인트", "복지포인트", "식대", "복지 잔액",
+            "남은 포인트", "복지 현황",
+        ]),
+        # 교육 관련
+        SubIntentId.EDU_STATUS_CHECK.value: frozenset([
+            "이수", "미이수", "수료", "미수료", "이수율", "수료율",
+            "진도", "진행률", "교육 현황", "학습 현황",
+            "마감", "데드라인", "기한", "언제까지",
+            "교육 일정", "수강", "듣", "들은",
+        ]),
+        # 퀴즈 관련 (치명 액션 - confirmation 유지 필요)
+        SubIntentId.QUIZ_START.value: frozenset([
+            "퀴즈 시작", "시험 시작", "테스트 시작",
+        ]),
+        SubIntentId.QUIZ_SUBMIT.value: frozenset([
+            "답안 제출", "퀴즈 제출", "채점", "정답 제출",
+        ]),
+    }
+
+    def _resolve_sub_intent_fallback(
+        self,
+        query: str,
+        domain: Optional[str] = None,
+    ) -> Optional[str]:
+        """CLARIFY 전에 sub_intent_id를 키워드 기반으로 자동 보정합니다.
+
+        BACKEND_STATUS인데 sub_intent_id가 비어있을 때 호출됩니다.
+        키워드 매칭으로 적절한 sub_intent_id를 추론합니다.
+
+        Args:
+            query: 사용자 질문 (마스킹 처리된 것)
+            domain: 도메인 (EDU, HR, QUIZ 등) - 힌트로 사용
+
+        Returns:
+            Optional[str]: 추론된 sub_intent_id, 추론 실패 시 None
+
+        Note:
+            - 치명 액션(QUIZ_*)은 반환하되, 호출부에서 confirmation 처리 필요
+            - "리포트/그래프/캘린더"는 modifier로 취급 (sub_intent 결정에 영향 없음)
+        """
+        query_lower = query.lower()
+
+        # 1) 키워드 기반 매칭 (가장 많이 매칭되는 것 선택)
+        best_match: Optional[str] = None
+        best_score = 0
+
+        for sub_intent_id, keywords in self._SUB_INTENT_KEYWORDS.items():
+            score = sum(1 for kw in keywords if kw in query_lower)
+            if score > best_score:
+                best_score = score
+                best_match = sub_intent_id
+
+        # 2) 매칭된 게 있으면 반환
+        if best_match:
+            logger.info(
+                f"Sub-Intent Resolver: Fallback resolved to {best_match} "
+                f"(score={best_score}, domain={domain})"
+            )
+            return best_match
+
+        # 3) 키워드 매칭 실패 시 domain 기반 기본값
+        if domain:
+            domain_fallback = {
+                "EDU": SubIntentId.EDU_STATUS_CHECK.value,
+                "HR": SubIntentId.HR_LEAVE_CHECK.value,
+                "QUIZ": SubIntentId.EDU_STATUS_CHECK.value,  # 퀴즈 도메인도 교육 현황으로
+            }
+            fallback = domain_fallback.get(domain)
+            if fallback:
+                logger.info(
+                    f"Sub-Intent Resolver: Domain-based fallback to {fallback} "
+                    f"(domain={domain})"
+                )
+                return fallback
+
+        # 4) 최종 실패 - None 반환 (CLARIFY로 진행)
+        logger.debug("Sub-Intent Resolver: No fallback found, will CLARIFY")
+        return None
 
     # =========================================================================
     # Personalization: 개인화 처리 핸들러
