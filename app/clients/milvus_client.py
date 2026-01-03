@@ -848,11 +848,11 @@ class MilvusSearchClient:
             safe_doc_id = doc_id
 
         try:
-            # 필터 표현식 구성
-            expr = f'doc_id == "{safe_doc_id}"'
+            # 필터 표현식 구성 (in 연산자 사용 - 한글 && == 조합 버그 우회)
+            expr = f'doc_id in ["{safe_doc_id}"]'
             if dataset_id:
                 safe_dataset_id = escape_milvus_string(dataset_id)
-                expr = f'{expr} && dataset_id == "{safe_dataset_id}"'
+                expr = f'{expr} && dataset_id in ["{safe_dataset_id}"]'
 
             output_fields = ["chunk_id", "text", "doc_id", "dataset_id"]
             all_chunks: List[Dict[str, Any]] = []
