@@ -1570,6 +1570,7 @@ class BackendClient:
         version: int,
         processed_at: Optional[str] = None,
         fail_reason: Optional[str] = None,
+        content: Optional[str] = None,
     ) -> bool:
         """RAG 문서 상태를 백엔드에 업데이트합니다.
 
@@ -1582,6 +1583,7 @@ class BackendClient:
             version: 문서 버전
             processed_at: 처리 완료 시간 (ISO-8601)
             fail_reason: 실패 사유 (status=FAILED인 경우)
+            content: Milvus에서 조회한 문서 전체 텍스트 (COMPLETED인 경우)
 
         Returns:
             bool: 업데이트 성공 여부
@@ -1607,6 +1609,8 @@ class BackendClient:
             payload["processedAt"] = processed_at
         if fail_reason:
             payload["failReason"] = fail_reason
+        if content:
+            payload["content"] = content
 
         logger.info(
             f"Updating RAG document status: rag_document_pk={rag_document_pk}, "
