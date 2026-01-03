@@ -30,6 +30,7 @@ from app.clients.backend_client import (
     RAGDocumentStatusUpdateError,
     get_backend_client,
 )
+from app.clients.milvus_client import get_milvus_client
 from app.clients.ragflow_ingest_client import (
     RAGFlowIngestError,
     RAGFlowUnavailableError,
@@ -585,6 +586,32 @@ async def ingest_callback(
     # 캐시에 완료 상태 저장 (멱등성: 다음 동일 요청 시 200 + COMPLETED 반환)
     _mark_request_completed(request.docId, request.version, request.status)
 
+    # COMPLETED 상태인 경우 Milvus에서 문서 전체 텍스트 조회
+    content: Optional[str] = None
+    if request.status == "COMPLETED":
+        try:
+            milvus_client = get_milvus_client()
+            content = await milvus_client.get_full_document_text(
+                doc_id=request.docId,
+                dataset_id="사내규정",  # POLICY 도메인
+            )
+            if content:
+                logger.info(
+                    f"Retrieved document content from Milvus: doc_id={request.docId}, "
+                    f"content_length={len(content)}, trace_id={request.meta.traceId}"
+                )
+            else:
+                logger.warning(
+                    f"No content found in Milvus for doc_id={request.docId}, "
+                    f"trace_id={request.meta.traceId}"
+                )
+        except Exception as e:
+            # Milvus 조회 실패해도 Backend 상태 업데이트는 진행
+            logger.error(
+                f"Failed to retrieve content from Milvus: doc_id={request.docId}, "
+                f"error={e}, trace_id={request.meta.traceId}"
+            )
+
     # Backend 상태 업데이트
     try:
         backend_client = get_backend_client()
@@ -595,10 +622,12 @@ async def ingest_callback(
             version=request.version,
             processed_at=request.processedAt,
             fail_reason=request.failReason,
+            content=content,
         )
         logger.info(
             f"Backend status updated: rag_document_pk={request.meta.ragDocumentPk}, "
-            f"status={request.status}, trace_id={request.meta.traceId}"
+            f"status={request.status}, content_included={content is not None}, "
+            f"trace_id={request.meta.traceId}"
         )
     except RAGDocumentStatusUpdateError as e:
         # Backend 호출 실패해도 200 반환 (에러 로그만)
