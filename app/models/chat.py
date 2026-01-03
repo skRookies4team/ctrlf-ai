@@ -234,6 +234,46 @@ class ChatAnswerMeta(BaseModel):
         default=None,
         description="Personalization sub-intent ID (Q1-Q20) if this is a personalization request",
     )
+    # Phase 50: 금지질문 필터 정보
+    retrieval_skipped: bool = Field(
+        default=False,
+        description="Whether RAG retrieval was skipped (e.g., forbidden query)",
+    )
+    retrieval_skip_reason: Optional[str] = Field(
+        default=None,
+        description="Reason for skipping retrieval (e.g., FORBIDDEN_QUERY:rule_id)",
+    )
+    # Step 3: Backend API 차단 정보
+    backend_skipped: bool = Field(
+        default=False,
+        description="Whether Backend API was skipped (e.g., forbidden query)",
+    )
+    backend_skip_reason: Optional[str] = Field(
+        default=None,
+        description="Reason for skipping Backend API (e.g., FORBIDDEN_BACKEND:rule_id)",
+    )
+    # Step 6: 금지질문 필터 상세 관측 필드 (임계값 튜닝/오탐 분석용)
+    forbidden_match_type: Optional[str] = Field(
+        default=None,
+        description="Match engine type: exact, fuzzy, embedding (null if not forbidden)",
+    )
+    forbidden_score: Optional[float] = Field(
+        default=None,
+        description="Match score: fuzzy(0-100) or embedding(0-1) (null if exact or not forbidden)",
+    )
+    forbidden_ruleset_version: Optional[str] = Field(
+        default=None,
+        description="Ruleset version used for matching",
+    )
+    forbidden_rule_id: Optional[str] = Field(
+        default=None,
+        description="Matched rule ID (e.g., FR-A-001)",
+    )
+    # Sub-Intent Resolver: confirmation 흐름 연결용
+    pending_sub_intent_id: Optional[str] = Field(
+        default=None,
+        description="Pending sub_intent_id for confirmation flow (QUIZ_START, QUIZ_SUBMIT, QUIZ_GENERATION)",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -242,13 +282,42 @@ class ChatResponse(BaseModel):
 
     Contains the generated answer, source documents, and metadata.
 
+    Backend 호환 필드 (ChatAiResponse.java):
+    - answer: 답변 텍스트
+    - prompt_tokens: 프롬프트 토큰 수
+    - completion_tokens: 생성 토큰 수
+    - model: 사용된 LLM 모델명
+
+    AI 추가 필드 (Backend에서 무시됨):
+    - sources: RAG 참조 문서 목록
+    - meta: 응답 메타데이터
+
     Attributes:
         answer: Final answer text
+        prompt_tokens: Number of tokens in prompt (Backend required)
+        completion_tokens: Number of tokens in completion (Backend required)
+        model: LLM model name used (Backend required)
         sources: List of reference documents used
         meta: Response metadata (model, route, etc.)
     """
 
     answer: str = Field(description="Final answer text")
+
+    # Backend 필수 필드 (ChatAiResponse.java 호환)
+    prompt_tokens: Optional[int] = Field(
+        default=None,
+        description="Number of tokens in prompt (for Backend compatibility)",
+    )
+    completion_tokens: Optional[int] = Field(
+        default=None,
+        description="Number of tokens in completion (for Backend compatibility)",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="LLM model name used (for Backend compatibility)",
+    )
+
+    # AI 추가 필드 (Backend에서 무시됨)
     sources: List[ChatSource] = Field(
         default_factory=list, description="List of reference documents used"
     )

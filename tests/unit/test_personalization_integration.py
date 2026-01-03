@@ -24,7 +24,6 @@ from app.services.chat_service import ChatService
 # =============================================================================
 
 
-@pytest.mark.skip(reason="Personalization feature not fully integrated yet")
 class TestChatServicePersonalization:
     """ChatService 개인화 분기 테스트."""
 
@@ -35,13 +34,12 @@ class TestChatServicePersonalization:
         mock_llm = MagicMock()
         mock_llm.generate_chat_completion = AsyncMock(return_value="테스트 응답")
 
-        # PII Service
+        # PII Service - 기본 동작: 입력 텍스트를 그대로 반환 (키워드 기반 라우팅 테스트 호환)
+        async def pii_passthrough(text, **kwargs):
+            return MagicMock(masked_text=text, has_pii=False, tags=[])
+
         mock_pii = MagicMock()
-        mock_pii.detect_and_mask = AsyncMock(return_value=MagicMock(
-            masked_text="테스트 질문",
-            has_pii=False,
-            tags=[],
-        ))
+        mock_pii.detect_and_mask = AsyncMock(side_effect=pii_passthrough)
 
         # Intent Service
         mock_intent = MagicMock()
@@ -115,6 +113,7 @@ class TestChatServicePersonalization:
         mock_answer_gen.generate = AsyncMock(return_value="남은 연차: 7일")
 
         # ChatService 생성 (모든 의존성 주입)
+        # Note: get_settings는 chat_service.py 모듈 상단에서 import됨
         with patch("app.services.chat_service.get_settings") as mock_settings:
             mock_settings.return_value = MagicMock(ROUTER_ORCHESTRATOR_ENABLED=True)
 
@@ -146,14 +145,16 @@ class TestChatServicePersonalization:
         # Mock 설정: sub_intent_id가 빈 문자열
         mock_orchestrator = mock_dependencies["router_orchestrator"]
         mock_orchestrator.route = AsyncMock(return_value=MagicMock(
-            needs_user_response=False,
+            needs_user_response=True,  # needs_user_response=True로 변경하여 CLARIFY 트리거
             router_result=RouterResult(
                 tier0_intent=Tier0Intent.BACKEND_STATUS,
                 route_type=RouterRouteType.BACKEND_API,
                 sub_intent_id="",  # 비어있음
                 confidence=0.5,
+                needs_clarify=True,  # CLARIFY 필요
+                clarify_question=ClarifyTemplates.BACKEND_STATUS_CLARIFY[0],
             ),
-            response_message="",
+            response_message=ClarifyTemplates.BACKEND_STATUS_CLARIFY[0],
         ))
 
         with patch("app.services.chat_service.get_settings") as mock_settings:
@@ -179,14 +180,18 @@ class TestChatServicePersonalization:
         self, mock_dependencies
     ):
         """EDU_STATUS_CHECK 시 올바른 Q로 변환되어 호출되는지 확인."""
+        user_query = "미이수 교육 조회해줘"
         chat_request = ChatRequest(
             session_id="test-session-002",
             user_id="emp002",
             user_role="EMPLOYEE",
             messages=[
-                ChatMessage(role="user", content="미이수 교육 조회해줘"),
+                ChatMessage(role="user", content=user_query),
             ],
         )
+
+        # Note: PII mock은 fixture에서 pass-through로 설정됨 (입력 텍스트 그대로 반환)
+        # 따라서 "미이수" 키워드가 보존되어 Q1으로 매핑됨
 
         mock_orchestrator = mock_dependencies["router_orchestrator"]
         mock_orchestrator.route = AsyncMock(return_value=MagicMock(

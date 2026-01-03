@@ -490,7 +490,7 @@ class QuizGenerateService:
         for q in questions:
             normalized_stem = self._normalize_text(q.stem)
             if normalized_stem in exclude_stems:
-                logger.info(f"Filtering duplicate question: {q.stem[:50]}...")
+                logger.info(f"Filtering duplicate question: stem_len={len(q.stem)}")
             else:
                 filtered.append(q)
 

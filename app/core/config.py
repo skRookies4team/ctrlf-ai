@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     # 로깅 설정
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"  # "json" (ELK용) 또는 "text" (개발용)
 
     # =========================================================================
     # Phase 9: AI 환경 모드 설정 (mock / real)
@@ -75,8 +76,11 @@ class Settings(BaseSettings):
     # LLM 서비스 URL (OpenAI API 호환 또는 자체 LLM 서버)
     LLM_BASE_URL: Optional[HttpUrl] = None
 
-    # LLM 모델명 (vLLM 등에서 필요)
+    # LLM 모델명 (vLLM 등에서 필요) - 채팅용
     LLM_MODEL_NAME: str = "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
+
+    # 스크립트 생성용 LLM 모델 (미설정 시 LLM_MODEL_NAME 사용)
+    SCRIPT_LLM_MODEL: Optional[str] = None
 
     # 임베딩 서비스 URL (LLM과 분리된 임베딩 서버 사용 시)
     EMBEDDING_BASE_URL: Optional[HttpUrl] = None
@@ -85,7 +89,7 @@ class Settings(BaseSettings):
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
     # ctrlf-back infra-service 연동 URL (S3 presigned URL 등)
-    INFRA_BASE_URL: Optional[HttpUrl] = None
+    BACKEND_BASE_URL: Optional[HttpUrl] = None
 
     # =========================================================================
     # PII 마스킹 서비스 설정
@@ -252,6 +256,54 @@ class Settings(BaseSettings):
     # False: 기존 로직 유지 (POLICY_QA/EDUCATION_QA로 분류)
     SUMMARY_INTENT_ENABLED: bool = False
 
+    # =========================================================================
+    # Phase 50: 금지질문 필터 설정 (Forbidden Query Filter)
+    # =========================================================================
+    # 금지질문 필터 활성화 여부
+    # True: 금지질문 룰셋 검사 후 매칭 시 RAG 검색 스킵
+    # False: 금지질문 필터 비활성화 (모든 질문 통과)
+    FORBIDDEN_QUERY_FILTER_ENABLED: bool = True
+
+    # 사용할 금지질문 프로필 ("A" = strict, "B" = practical)
+    FORBIDDEN_QUERY_PROFILE: str = "A"
+
+    # 금지질문 룰셋 JSON 디렉토리 (app/ 기준 상대경로)
+    FORBIDDEN_QUERY_RULESET_DIR: str = "resources/forbidden_queries"
+
+    # Step 4: Fuzzy matching 설정 (rapidfuzz 사용)
+    # True: exact miss 시 fuzzy matching 시도
+    # False: exact match만 사용
+    FORBIDDEN_QUERY_FUZZY_ENABLED: bool = True
+
+    # Fuzzy matching 임계값 (0-100, 높을수록 엄격)
+    # 92 이상이면 오탈자/조사 변형 허용, 85 미만은 너무 느슨함
+    FORBIDDEN_QUERY_FUZZY_THRESHOLD: int = 92
+
+    # Step 5: Embedding matching 설정 (FAISS 로컬 인덱스)
+    # True: fuzzy miss 시 embedding matching 시도
+    # False: embedding matching 비활성화 (Step 4까지만 사용)
+    # 운영 데이터(미탐/오탐 로그) 충분히 쌓인 후 활성화 권장
+    FORBIDDEN_QUERY_EMBEDDING_ENABLED: bool = False
+
+    # Embedding matching 임계값 (0.0-1.0, 코사인 유사도)
+    # 0.85 이상이면 의미적으로 유사한 질문 매칭
+    FORBIDDEN_QUERY_EMBEDDING_THRESHOLD: float = 0.85
+
+    # Embedding matching 후보 수 (top-K)
+    FORBIDDEN_QUERY_EMBEDDING_TOP_K: int = 3
+
+    # Step 6: Embedding provider 검증 설정
+    # 로컬 임베딩만 허용 (원격 API 호출 차단)
+    FORBIDDEN_QUERY_EMBEDDING_REQUIRE_LOCAL: bool = True
+
+    # FAISS 인덱스 필수 여부 (brute-force 대신 FAISS 강제)
+    # True이면 FAISS 미설치 시 embedding 기능 OFF
+    FORBIDDEN_QUERY_EMBEDDING_REQUIRE_INDEX: bool = False
+
+    # 룰 개수 임계치 (이 이상이면 brute-force 경고 또는 embedding OFF)
+    # 0이면 비활성화
+    FORBIDDEN_QUERY_EMBEDDING_RULE_COUNT_THRESHOLD: int = 1000
+
     # Embedding 모델 설정 (vLLM 서버에서 사용)
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-m3"
     EMBEDDING_DIMENSION: int = 1024  # BGE-M3 기본 차원
@@ -264,6 +316,23 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_EMBED_MODEL: str = "text-embedding-3-large"
     OPENAI_EMBED_DIM: int = 3072
+
+    # =========================================================================
+    # A/B 테스트: SRoberta 임베딩 설정
+    # =========================================================================
+    # SRoberta 임베딩 모델 (sentence-transformers 호환)
+    SROBERTA_EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    SROBERTA_EMBED_DIM: int = 384
+
+    # SRoberta 임베딩 서버 URL (별도 서버 사용 시)
+    SROBERTA_EMBED_URL: Optional[str] = None
+
+    # SRoberta용 Milvus 컬렉션
+    MILVUS_COLLECTION_SROBERTA: str = "ragflow_chunks_sroberta"
+
+    # A/B 테스트 기본 모델 (openai | sroberta)
+    # 명시적으로 설정하지 않은 경우 사용할 기본 모델
+    AB_DEFAULT_MODEL: str = "openai"
 
     # Milvus 인증 (선택, 보안 설정된 Milvus 서버 사용 시)
     MILVUS_USER: Optional[str] = None
@@ -409,6 +478,10 @@ class Settings(BaseSettings):
 
     # 백엔드 API 타임아웃 (초)
     BACKEND_TIMEOUT_SEC: float = 30.0
+
+    # 스트리밍 채팅 LLM 타임아웃 (초)
+    # 백엔드 SSE 타임아웃(보통 60초)보다 길게 설정 권장 (기본값: 180초)
+    CHAT_STREAM_LLM_TIMEOUT_SEC: float = 180.0
 
     # 씬 기본 duration (duration_sec <= 0일 때 사용)
     SCENE_DEFAULT_DURATION_SEC: float = 5.0

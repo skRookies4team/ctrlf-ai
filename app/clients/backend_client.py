@@ -72,7 +72,7 @@ BACKEND_REPORT_GUIDE_PATH = "/api/incidents/report-guide"
 
 # 콜백
 BACKEND_SCRIPT_COMPLETE_PATH = "/video/script/complete"
-BACKEND_JOB_COMPLETE_PATH = "/video/job/{job_id}/complete"
+BACKEND_JOB_COMPLETE_PATH = "/internal/video/job/{job_id}/complete"
 
 # render-spec
 BACKEND_RENDER_SPEC_PATH = "/internal/scripts/{script_id}/render-spec"
@@ -190,7 +190,7 @@ class JobCompleteCallbackError(CallbackError):
         error_code: str = "JOB_COMPLETE_CALLBACK_FAILED",
     ):
         super().__init__(
-            endpoint=f"/video/job/{job_id}/complete",
+            endpoint=f"/internal/video/job/{job_id}/complete",
             status_code=status_code,
             message=message,
             error_code=error_code,
@@ -793,7 +793,7 @@ class BackendClient:
             )
             return JobCompleteResponse(saved=False)
 
-        url = f"{self._base_url}/video/job/{job_id}/complete"
+        url = f"{self._base_url}/internal/video/job/{job_id}/complete"
         headers = self._get_internal_headers()
 
         request_body = JobCompleteRequest(
@@ -1386,15 +1386,15 @@ class BackendClient:
             )
 
             if response.status_code == 204 or not response.text.strip():
-                return ChunkBulkUpsertResponse(saved=True, count=len(request.chunks))
+                return ChunkBulkUpsertResponse(saved=True, saved_count=len(request.chunks))
 
             try:
                 data = response.json()
                 return ChunkBulkUpsertResponse(**data) if data else ChunkBulkUpsertResponse(
-                    saved=True, count=len(request.chunks)
+                    saved=True, saved_count=len(request.chunks)
                 )
             except Exception:
-                return ChunkBulkUpsertResponse(saved=True, count=len(request.chunks))
+                return ChunkBulkUpsertResponse(saved=True, saved_count=len(request.chunks))
 
         except ChunkBulkUpsertError:
             raise
@@ -1521,15 +1521,15 @@ class BackendClient:
             )
 
             if response.status_code == 204 or not response.text.strip():
-                return FailChunkBulkUpsertResponse(saved=True, count=len(request.fails))
+                return FailChunkBulkUpsertResponse(saved=True, saved_count=len(request.fails))
 
             try:
                 data = response.json()
                 return FailChunkBulkUpsertResponse(**data) if data else FailChunkBulkUpsertResponse(
-                    saved=True, count=len(request.fails)
+                    saved=True, saved_count=len(request.fails)
                 )
             except Exception:
-                return FailChunkBulkUpsertResponse(saved=True, count=len(request.fails))
+                return FailChunkBulkUpsertResponse(saved=True, saved_count=len(request.fails))
 
         except FailChunkBulkUpsertError:
             raise

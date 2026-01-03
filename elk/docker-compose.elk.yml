@@ -1,0 +1,113 @@
+# =============================================================================
+# ELK Stack Docker Compose (Elasticsearch + Kibana + Fluent Bit)
+# ctrlf-ai 로그 중앙화를 위한 설정
+# =============================================================================
+#
+# 환경변수:
+#   ELASTIC_VERSION: ES/Kibana 버전 (기본값: 8.11.0)
+#   FLUENT_BIT_VERSION: Fluent Bit 버전 (기본값: 2.2)
+#
+# 사용법:
+#   1. ELK 스택 시작:
+#      docker compose -f elk/docker-compose.elk.yml up -d
+#
+#   2. 특정 버전으로 시작:
+#      ELASTIC_VERSION=8.12.0 docker compose -f elk/docker-compose.elk.yml up -d
+#
+#   3. AI Gateway와 함께 실행 (로그 수집):
+#      docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile mock up -d
+#
+#   4. Kibana 접속: http://localhost:5601
+#
+#   5. 인덱스 템플릿 적용 (최초 1회):
+#      ./elk/setup-elasticsearch.sh
+#
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # Elasticsearch - 로그 저장소
+  # ===========================================================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-8.11.0}
+    container_name: ctrlf-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false  # 개발 환경용 (프로덕션은 true)
+      - xpack.security.enrollment.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - cluster.name=ctrlf-cluster
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - ctrlf-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ===========================================================================
+  # Kibana - 로그 시각화/검색 UI
+  # ===========================================================================
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-8.11.0}
+    container_name: ctrlf-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    networks:
+      - ctrlf-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # ===========================================================================
+  # Fluent Bit - 로그 수집기 (Docker 컨테이너 로그 → ES)
+  # ===========================================================================
+  fluent-bit:
+    image: fluent/fluent-bit:${FLUENT_BIT_VERSION:-2.2}
+    container_name: ctrlf-fluent-bit
+    volumes:
+      # Fluent Bit 설정 파일
+      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      # Docker 컨테이너 로그 접근 (Linux/EC2)
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - ctrlf-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+# =============================================================================
+# 볼륨 (ES 데이터 영속화)
+# =============================================================================
+volumes:
+  elasticsearch-data:
+    driver: local
+
+# =============================================================================
+# 네트워크 (기존 ctrlf-network 사용)
+# =============================================================================
+networks:
+  ctrlf-net:
+    external: true
+    name: ctrlf-network

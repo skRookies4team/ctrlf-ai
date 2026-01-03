@@ -360,16 +360,19 @@ class ChatStreamService:
 
         logger.info(f"Starting LLM stream: request_id={request.request_id}, user_id={request.user_id}")
 
+        # 설정에서 타임아웃 가져오기 (기본값: 180초, 백엔드 SSE 타임아웃보다 길게)
+        stream_timeout = getattr(self._settings, "CHAT_STREAM_LLM_TIMEOUT_SEC", 180.0)
+
         try:
             async with self._client.stream(
                 "POST",
                 url,
                 json=payload,
-                timeout=60.0,  # 스트리밍용 긴 타임아웃
+                timeout=stream_timeout,
             ) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
-                    logger.error(f"LLM stream error: status={response.status_code}, body={error_text[:200]}")
+                    logger.error(f"LLM stream error: status={response.status_code}, body_len={len(error_text)}")
                     error_event = StreamErrorEvent(
                         code=StreamErrorCode.LLM_ERROR.value,
                         message=f"LLM 서비스 오류 (HTTP {response.status_code})",
@@ -403,17 +406,22 @@ class ChatStreamService:
                                     yield token_event.to_ndjson()
                                     token_count += 1
                         except json.JSONDecodeError:
-                            logger.warning(f"Failed to parse LLM stream data: {data_str[:100]}")
+                            logger.warning(f"Failed to parse LLM stream data: len={len(data_str)}")
                             continue
 
                 metrics.total_tokens = token_count
 
         except httpx.TimeoutException:
-            logger.error(f"LLM stream timeout: request_id={request.request_id}")
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                f"LLM stream timeout: request_id={request.request_id}, "
+                f"timeout={stream_timeout}s, elapsed={elapsed_ms}ms"
+            )
             metrics.error_code = StreamErrorCode.LLM_TIMEOUT.value
+            metrics.total_elapsed_ms = elapsed_ms
             error_event = StreamErrorEvent(
                 code=StreamErrorCode.LLM_TIMEOUT.value,
-                message="LLM 응답 시간이 초과되었습니다.",
+                message=f"LLM 응답 시간이 초과되었습니다. (타임아웃: {stream_timeout}초)",
                 request_id=request.request_id,
             )
             yield error_event.to_ndjson()
@@ -438,7 +446,8 @@ class ChatStreamService:
         # 대소문자 구분 없이 매칭
         role_lower = user_role.lower()
         # Phase 52: Llama 대응 - 한국어 강제 (긍정형 지시)
-        korean_instruction = " 모든 응답은 반드시 한국어로만 작성하세요."
+        # Phase 53: 한국어 강제 강화
+        korean_instruction = " 반드시 한국어로만 답변하세요. 영어로 답변하지 마세요. 참고 자료가 영어라도 답변은 한국어로 번역해서 제공하세요."
         prompts = {
             "employee": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 직원들의 사규, 교육, 업무 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,
             "manager": "당신은 한국어로 답변하는 CTRL+F 기업 AI 어시스턴트입니다. 관리자의 팀 관리, 사규, 교육 관련 질문에 친절하고 정확하게 답변합니다." + korean_instruction,

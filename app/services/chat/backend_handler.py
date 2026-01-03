@@ -15,6 +15,7 @@ Phase 2 리팩토링:
 from typing import Optional
 
 from app.clients.backend_client import BackendDataClient
+from app.core.backend_context import check_backend_allowed
 from app.core.logging import get_logger
 from app.models.intent import IntentType, UserRole
 from app.services.backend_context_formatter import BackendContextFormatter
@@ -77,7 +78,13 @@ class BackendHandler:
         - EMPLOYEE × EDU_STATUS → get_employee_edu_status(user_id)
         - EMPLOYEE × INCIDENT_REPORT → get_report_guide()
         - ADMIN × EDU_STATUS → get_department_edu_stats(department)
+
+        Raises:
+            BackendBlockedError: Backend API가 차단된 경우 (금지질문)
         """
+        # Step 3: 2차 가드 - Backend API 차단 여부 확인
+        check_backend_allowed("BackendHandler.fetch_for_api")
+
         try:
             # EMPLOYEE × EDU_STATUS: 본인 교육 현황
             if user_role == UserRole.EMPLOYEE and intent == IntentType.EDU_STATUS:
@@ -139,7 +146,13 @@ class BackendHandler:
         - ADMIN × INCIDENT → get_incident_overview()
         - ADMIN × EDU_STATUS → get_department_edu_stats()
         - INCIDENT_MANAGER × INCIDENT → get_incident_overview()
+
+        Raises:
+            BackendBlockedError: Backend API가 차단된 경우 (금지질문)
         """
+        # Step 3: 2차 가드 - Backend API 차단 여부 확인
+        check_backend_allowed("BackendHandler.fetch_for_mixed")
+
         try:
             # ADMIN × INCIDENT: 사고 현황 통계
             if user_role == UserRole.ADMIN and domain == "INCIDENT":

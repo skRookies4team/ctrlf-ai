@@ -372,6 +372,7 @@ def test_internal_endpoint_enqueues_feedback_event(stub_publisher, valid_headers
     """내부 엔드포인트를 호출하면 FEEDBACK 이벤트가 enqueue된다."""
     from fastapi.testclient import TestClient
     from app.main import app
+    from app.core.config import get_settings
 
     # Publisher 설정
     set_telemetry_publisher(stub_publisher)
@@ -391,10 +392,17 @@ def test_internal_endpoint_enqueues_feedback_event(stub_publisher, valid_headers
         "turnId": 5,
     }
 
+    # 인증 헤더 설정
+    settings = get_settings()
+    headers = {}
+    if settings.BACKEND_INTERNAL_TOKEN:
+        headers["X-Internal-Token"] = settings.BACKEND_INTERNAL_TOKEN
+
     # When: POST /internal/ai/feedback 호출
     response = client.post(
         "/internal/ai/feedback",
         json=request_body,
+        headers=headers,
     )
 
     # Then: 202 Accepted
@@ -417,6 +425,7 @@ def test_feedback_payload_has_no_text_fields(stub_publisher, valid_headers):
     """payload에 질문/답변 텍스트 필드가 없다."""
     from fastapi.testclient import TestClient
     from app.main import app
+    from app.core.config import get_settings
 
     # Publisher 설정
     set_telemetry_publisher(stub_publisher)
@@ -435,8 +444,14 @@ def test_feedback_payload_has_no_text_fields(stub_publisher, valid_headers):
         "turnId": 1,
     }
 
+    # 인증 헤더 설정
+    settings = get_settings()
+    headers = {}
+    if settings.BACKEND_INTERNAL_TOKEN:
+        headers["X-Internal-Token"] = settings.BACKEND_INTERNAL_TOKEN
+
     # When
-    response = client.post("/internal/ai/feedback", json=request_body)
+    response = client.post("/internal/ai/feedback", json=request_body, headers=headers)
 
     # Then
     assert response.status_code == 202

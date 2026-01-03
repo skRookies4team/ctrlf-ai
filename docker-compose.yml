@@ -22,16 +22,14 @@ version: "3.8"
 
 services:
   # =============================================================================
-  # AI Gateway (ctrlf-ai) - 메인 서비스
-  # Mock/Real 모드 공통으로 사용
+  # AI Gateway (ctrlf-ai) - 베이스 서비스 (직접 실행 X, extends용)
+  # Mock/Real 프로필에서 상속받아 사용
   # =============================================================================
   ai-gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ctrlf-ai-gateway
-    ports:
-      - "8000:8000"
+    # 포트는 프로필별 서비스에서 설정 (충돌 방지)
     environment:
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
@@ -52,6 +50,11 @@ services:
       # PII 마스킹은 내장 규칙 사용 (외부 서비스 없음)
       - PII_BASE_URL=
       - PII_ENABLED=true
+      # 내부 API 인증 토큰
+      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-ctrlf-b2a-x7k9m2p4q8r1}
+      - RAGFLOW_CALLBACK_TOKEN=${RAGFLOW_CALLBACK_TOKEN:-ctrlf-r2a-w3e5t7y9u2i4}
+      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-ctrlf-a2b-z6x8c1v3b5n7}
+      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-ctrlf-a2b-h4j6k8l0m2n4}
     networks:
       - ctrlf-net
     healthcheck:
@@ -69,10 +72,13 @@ services:
     extends:
       service: ai-gateway
     container_name: ctrlf-ai-gateway-mock
+    ports:
+      - "8000:8000"
     profiles:
       - mock
     environment:
       - AI_ENV=mock
+      - MILVUS_ENABLED=true
       - RAGFLOW_BASE_URL_MOCK=http://ragflow:8080
       - LLM_BASE_URL_MOCK=http://llm-internal:8001
       - BACKEND_BASE_URL_MOCK=http://backend-mock:8081
@@ -92,14 +98,28 @@ services:
     extends:
       service: ai-gateway
     container_name: ctrlf-ai-gateway-real
+    ports:
+      - "8000:8000"
     profiles:
       - real
     environment:
       - AI_ENV=real
+      # Milvus 설정
+      - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
+      - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
+      - MILVUS_PORT=${MILVUS_PORT:-19540}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks}
+      - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
+      # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
+      - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
       # Real URL은 반드시 외부에서 환경변수로 설정해야 함
       - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:?RAGFLOW_BASE_URL_REAL must be set for real mode}
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://58.127.241.84:1237}
     # Real 모드에서는 Mock 서비스 의존성 없음
 
   # =============================================================================

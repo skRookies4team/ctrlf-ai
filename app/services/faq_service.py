@@ -2,13 +2,14 @@
 FAQ Draft Service (Phase 18+)
 
 FAQ 후보 클러스터를 기반으로 FAQ 초안을 생성하는 서비스.
-Milvus + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
+RagHandler + LLM을 사용하여 질문/답변/근거 문서를 생성합니다.
 
-Note:
-    RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+Step 7: MilvusSearchClient 직접 사용 제거
+- RagHandler를 통한 Milvus 검색 수행
+- CI 규칙으로 서비스 레이어에서 직접 Milvus 호출 금지
 
 주요 기능:
-- MilvusSearchClient로 벡터 검색 + text 직접 조회
+- RagHandler를 통한 벡터 검색 (2차 가드, 쿼리 정규화 포함)
 - NO_DOCS_FOUND 에러 처리
 - 프롬프트 템플릿 (근거 기반 + 짧고 명확 + 마크다운)
 - answer_source: TOP_DOCS / MILVUS 구분
@@ -25,11 +26,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.clients.llm_client import LLMClient
-from app.clients.milvus_client import (
-    MilvusSearchClient,
-    MilvusSearchError,
-    get_milvus_client,
-)
+# Step 7: MilvusSearchClient 직접 사용 제거, RagHandler 사용
+from app.services.chat.rag_handler import RagHandler, RagSearchUnavailableError
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
@@ -39,6 +37,10 @@ from app.models.faq import (
 )
 from app.models.intent import MaskingStage
 from app.services.pii_service import PiiService
+from app.services.forbidden_query_filter import (
+    ForbiddenQueryFilter,
+    get_forbidden_query_filter,
+)
 
 logger = get_logger(__name__)
 
@@ -144,10 +146,11 @@ class FaqDraftService:
     """
     FAQ 초안 생성 서비스.
 
-    Milvus 벡터 검색 + LLM을 사용하여 FAQ 초안을 생성합니다.
+    RagHandler를 통한 벡터 검색 + LLM을 사용하여 FAQ 초안을 생성합니다.
 
-    Note:
-        RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+    Step 7: MilvusSearchClient 직접 사용 제거
+    - RagHandler를 통해 Milvus 검색 수행
+    - CI 규칙으로 직접 Milvus 호출 금지
 
     주요 기능:
     - 프롬프트 템플릿 (근거 기반)
@@ -158,21 +161,32 @@ class FaqDraftService:
 
     def __init__(
         self,
-        milvus_client: Optional[MilvusSearchClient] = None,
+        rag_handler: Optional[RagHandler] = None,
         llm_client: Optional[LLMClient] = None,
         pii_service: Optional[PiiService] = None,
     ) -> None:
         """
         FaqDraftService 초기화.
 
-        Note:
-            RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+        Step 7: RagHandler를 통한 Milvus 검색
+        - MilvusSearchClient 직접 사용 제거
+        - RagHandler가 2차 가드, 쿼리 정규화 등 담당
         """
-        self._milvus_client = milvus_client or get_milvus_client()
+        # Step 7: RagHandler 사용 (MilvusSearchClient 직접 사용 제거)
+        self._rag_handler = rag_handler or RagHandler()
         self._llm = llm_client or LLMClient()
         self._pii_service = pii_service or PiiService()
 
-        logger.info("FaqDraftService: Milvus search enabled (RAGFlow removed)")
+        # Phase 50: 금지질문 필터 초기화
+        settings = get_settings()
+        if settings.FORBIDDEN_QUERY_FILTER_ENABLED:
+            self._forbidden_filter = get_forbidden_query_filter(
+                profile=settings.FORBIDDEN_QUERY_PROFILE
+            )
+        else:
+            self._forbidden_filter = None
+
+        logger.info("FaqDraftService: Using RagHandler for Milvus search (Step 7)")
 
     async def generate_faq_draft(
         self,
@@ -209,7 +223,7 @@ class FaqDraftService:
                 temperature=0.3,
                 max_tokens=2048,
             )
-            logger.debug(f"LLM response: {llm_response[:500]}...")
+            logger.debug(f"LLM response received: len={len(llm_response)}")
 
         except Exception as e:
             logger.exception(f"LLM call failed: {e}")
@@ -255,13 +269,13 @@ class FaqDraftService:
         if status == "LOW_RELEVANCE":
             if settings.FAQ_LOW_RELEVANCE_BLOCK:
                 # 차단 모드: 에러 발생
-                logger.warning(f"Low relevance context for query: '{req.canonical_question[:50]}...'")
+                logger.warning(f"Low relevance context: cluster_id={req.cluster_id}, query_len={len(req.canonical_question)}")
                 raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
             else:
                 # 경고 모드: 경고만 출력하고 계속 진행
                 logger.warning(
                     f"Low relevance context detected but continuing "
-                    f"(cluster_id={req.cluster_id}, question='{req.canonical_question[:50]}...')"
+                    f"(cluster_id={req.cluster_id}, query_len={len(req.canonical_question)})"
                 )
                 # status를 SUCCESS로 강제 변경하여 FAQ 생성 허용
                 parsed["status"] = "SUCCESS"
@@ -292,7 +306,7 @@ class FaqDraftService:
 
         우선순위:
         1. request.top_docs가 비어있지 않으면 그대로 사용
-        2. MilvusSearchClient로 벡터 검색
+        2. RagHandler를 통한 Milvus 벡터 검색
 
         Note:
             RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
@@ -320,10 +334,11 @@ class FaqDraftService:
         req: FaqDraftGenerateRequest,
     ) -> Tuple[DocContext, str]:
         """
-        Milvus에서 직접 벡터 검색 + text 조회.
+        RagHandler를 통한 Milvus 벡터 검색.
 
-        Note:
-            RAGFlow 클라이언트는 제거되었습니다. Milvus만 사용합니다.
+        Step 7: MilvusSearchClient 직접 호출 제거
+        - RagHandler.perform_search_with_fallback() 사용
+        - ChatSource → RagSearchResult 변환
 
         Args:
             req: FAQ 초안 생성 요청
@@ -334,68 +349,58 @@ class FaqDraftService:
         Raises:
             FaqGenerationError: 검색 실패 또는 결과 없음
         """
-        logger.info(f"Searching Milvus for: '{req.canonical_question[:50]}...'")
+        logger.info(f"Searching via RagHandler: cluster_id={req.cluster_id}, query_len={len(req.canonical_question)}")
 
-        # ===============================
-        # Phase 48: Multi-query Milvus search
-        # ===============================
-        queries = [req.canonical_question]
-        if req.sample_questions:
-            queries.extend(req.sample_questions[:2])  # 최대 2개
-
-        raw_results: List[dict] = []
-
-        for q in queries:
-            try:
-                partial = await self._milvus_client.search(
-                    query=q,
-                    domain=req.domain,
-                    top_k=3,
+        # Phase 50: 금지질문 필터 체크 (검색 호출 전)
+        if self._forbidden_filter is not None:
+            forbidden_result = self._forbidden_filter.check(req.canonical_question)
+            if forbidden_result.is_forbidden:
+                logger.warning(
+                    f"FaqService: Forbidden query detected, skipping search: "
+                    f"rule_id={forbidden_result.matched_rule_id}, "
+                    f"query_hash={forbidden_result.query_hash}"
                 )
-                raw_results.extend(partial)
-            except MilvusSearchError as e:
-                logger.error(f"Milvus search error (query='{q[:30]}...'): {e}")
-                continue
+                raise FaqGenerationError(
+                    f"FORBIDDEN_QUERY:{forbidden_result.matched_rule_id}"
+                )
 
-        if not raw_results:
-            logger.warning("No documents found in Milvus (multi-query)")
+        try:
+            # Step 7: RagHandler를 통한 검색 (MilvusSearchClient 직접 호출 제거)
+            sources, failed, retriever = await self._rag_handler.perform_search_with_fallback(
+                query=req.canonical_question,
+                domain=req.domain,
+                req=None,  # FaqService는 ChatRequest 없음
+                request_id=None,
+                top_k=5,
+            )
+        except RagSearchUnavailableError as e:
+            logger.error(f"RagHandler search error: {e}")
+            raise FaqGenerationError(f"Milvus 검색 실패: {str(e)}")
+        except Exception as e:
+            logger.error(f"RagHandler unexpected error: {e}")
+            raise FaqGenerationError(f"Milvus 검색 오류: {type(e).__name__}: {str(e)}")
+
+        # 검색 실패 또는 차단된 경우
+        if failed:
+            logger.warning(f"Search failed: cluster_id={req.cluster_id}")
             raise FaqGenerationError("NO_DOCS_FOUND")
 
-        # ===============================
-        # dedup + RagSearchResult 변환
-        # ===============================
-        merged: Dict[tuple, RagSearchResult] = {}
+        # 결과가 없으면 NO_DOCS_FOUND 에러
+        if not sources:
+            logger.warning(f"No documents found: cluster_id={req.cluster_id}, query_len={len(req.canonical_question)}")
+            raise FaqGenerationError("NO_DOCS_FOUND")
 
-        for r in raw_results:
-            key = (r.get("doc_id"), r.get("metadata", {}).get("chunk_id"))
-            score = float(r.get("score", 0.0))
+        # Step 7: ChatSource → RagSearchResult 변환
+        context_docs = []
+        for source in sources:
+            context_docs.append(RagSearchResult(
+                title=source.title or source.doc_id or "",
+                page=source.page,
+                score=source.score or 0.0,
+                snippet=(source.snippet or "")[:500],
+            ))
 
-            candidate = RagSearchResult(
-                title=r.get("doc_id", ""),
-                page=r.get("metadata", {}).get("chunk_id"),
-                score=score,
-                snippet=(r.get("content") or "")[:500],
-            )
-
-            if key not in merged or merged[key].score < score:
-                merged[key] = candidate
-
-        context_docs = sorted(
-            merged.values(), key=lambda x: x.score, reverse=True
-        )[:5]
-
-        # ===============================
-        # 🔥 점수 기반 사전 차단 (LLM 호출 전)
-        # ===============================
-        settings = get_settings()
-        min_score = getattr(settings, "FAQ_MIN_MILVUS_SCORE", 0.55)
-
-        top_score = context_docs[0].score if context_docs else 0.0
-        if top_score < min_score:
-            logger.warning(
-                f"LOW_RELEVANCE before LLM: top_score={top_score:.2f} < {min_score}"
-            )
-            raise FaqGenerationError("LOW_RELEVANCE_CONTEXT")
+        logger.info(f"Found {len(context_docs)} documents via RagHandler (retriever={retriever})")
 
         # 컨텍스트 PII 검사
         await self._check_context_pii(context_docs, req.domain, req.cluster_id)

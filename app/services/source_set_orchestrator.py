@@ -42,6 +42,12 @@ from app.clients.milvus_client import (
     MilvusError,
     get_milvus_client,
 )
+from app.clients.ragflow_client import (
+    RagflowClient,
+    RagflowError,
+    RagflowConnectionError,
+    get_ragflow_client,
+)
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.source_set import (
@@ -54,6 +60,7 @@ from app.models.source_set import (
     GeneratedChapter,
     GeneratedScene,
     GeneratedScript,
+    ScriptPatch,
     SourceRef,
     SourceSetCompleteRequest,
     SourceSetDocument,
@@ -124,24 +131,21 @@ class SourceSetOrchestrator:
         _backend_client: 백엔드 API 클라이언트
         _processing_jobs: 진행 중인 작업 상태 (in-memory)
         _running_tasks: 비동기 태스크 관리
-    
-    Note:
-        RAGFlow 클라이언트는 제거되었습니다 (재개발 예정).
+        _ragflow_client: RAGFlow API 클라이언트 (Phase 51 복구)
     """
 
     def __init__(
         self,
         backend_client: Optional[BackendClient] = None,
         milvus_client: Optional[MilvusSearchClient] = None,
+        ragflow_client: Optional[RagflowClient] = None,
     ):
         """초기화.
 
         Args:
             backend_client: 백엔드 클라이언트 (None이면 싱글톤 사용)
             milvus_client: Milvus 클라이언트 (None이면 싱글톤 사용, Option 3)
-        
-        Note:
-            RAGFlow 클라이언트는 제거되었습니다 (재개발 예정).
+            ragflow_client: RAGFlow 클라이언트 (None이면 싱글톤 사용, Phase 51)
         """
         self._backend_client = backend_client or get_backend_client()
         self._processing_jobs: Dict[str, ProcessingJob] = {}
@@ -161,8 +165,17 @@ class SourceSetOrchestrator:
             )
         else:
             self._milvus_client = None
+
+        # Phase 51: RAGFlow 클라이언트 (Milvus fallback 또는 단독 사용)
+        self._ragflow_client = ragflow_client or get_ragflow_client()
+        if self._ragflow_client.is_configured:
+            logger.info(
+                f"SourceSetOrchestrator initialized with RAGFlow "
+                f"(RAGFLOW_BASE_URL configured)"
+            )
+        else:
             logger.warning(
-                f"SourceSetOrchestrator: RAGFlow removed, document processing unavailable "
+                f"SourceSetOrchestrator: RAGFlow not configured "
                 f"(SCRIPT_RETRIEVER_BACKEND={self._settings.script_retriever_backend})"
             )
 
@@ -407,20 +420,18 @@ class SourceSetOrchestrator:
         from app.core.config import get_settings
 
         settings = get_settings()
-        
-        # RAGFlow 클라이언트가 제거되었으므로 항상 실패 반환
-        logger.error(
-            f"RAGFlow client removed - document processing unavailable: "
-            f"source_set_id={source_set_id}, doc_id={doc.document_id}"
-        )
-        return DocumentProcessingResult(
-            document_id=doc.document_id,
-            success=False,
-            fail_reason="RAGFLOW_REMOVED: RAGFlow 클라이언트가 제거되었습니다. 재개발 예정.",
-        )
-        
-        # --- 아래 코드는 RAGFlow 재개발 후 활성화 ---
-        _ = settings  # unused
+
+        # Phase 51: RAGFlow 클라이언트 사용 가능 여부 확인
+        if not self._ragflow_client.is_configured:
+            logger.error(
+                f"RAGFlow not configured - document processing unavailable: "
+                f"source_set_id={source_set_id}, doc_id={doc.document_id}"
+            )
+            return DocumentProcessingResult(
+                document_id=doc.document_id,
+                success=False,
+                fail_reason="RAGFLOW_NOT_CONFIGURED: RAGFLOW_BASE_URL을 설정하세요.",
+            )
 
         # source_url null 체크
         if not doc.source_url or not doc.source_url.strip():
@@ -966,7 +977,7 @@ class SourceSetOrchestrator:
             # 실패 로그 저장 실패는 전체 처리를 중단하지 않음
 
     # =========================================================================
-    # Script Generation
+    # Script Generation (씬 단위 RAG 방식)
     # =========================================================================
 
     async def _generate_script(
@@ -974,7 +985,99 @@ class SourceSetOrchestrator:
         job: ProcessingJob,
         document_chunks: Dict[str, List[Dict[str, Any]]],
     ) -> GeneratedScript:
-        """스크립트를 생성합니다 (Step 3: LLM 연동).
+        """스크립트를 생성합니다 (씬 단위 RAG 방식).
+
+        문서를 통째로 프롬프트에 싣지 않고, 씬 단위로 필요한 청크만 검색하여
+        컨텍스트 제한을 우회합니다.
+
+        흐름:
+        1. 아웃라인 생성: 문서 메타데이터로 씬 목차 설계 (1회 LLM)
+        2. 씬별 RAG 검색 + 생성: 각 씬 키워드로 Top-K 검색 후 생성 (N회 LLM)
+           - 각 씬 생성 후 백엔드에 패치 콜백 전송 (부분 저장)
+        3. 결과 병합: 씬들을 합쳐서 최종 스크립트
+
+        Args:
+            job: 처리 작업 상태
+            document_chunks: 문서별 청크 (doc_id → chunks)
+
+        Returns:
+            GeneratedScript: 생성된 스크립트
+        """
+        from app.services.scene_based_script_generator import (
+            SceneBasedScriptGenerator,
+            SceneCallback,
+        )
+
+        # 문서 정보 준비
+        documents = [
+            {
+                "document_id": doc.document_id,
+                "title": doc.title,
+                "domain": doc.domain,
+            }
+            for doc in job.documents
+        ]
+
+        # LLM 모델 설정
+        model = job.llm_model_hint or "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
+
+        # 씬 생성 콜백 정의 (씬 생성 시마다 백엔드에 패치 전송)
+        async def on_scene_generated(
+            script_id: str,
+            chapter_index: int,
+            chapter_title: str,
+            scene_index: int,
+            scene: GeneratedScene,
+            current_scene: int,
+            total_scenes: int,
+        ) -> None:
+            await self._send_scene_patch_callback(
+                job=job,
+                chapter_index=chapter_index,
+                chapter_title=chapter_title,
+                scene_index=scene_index,
+                scene=scene,
+                script_id=script_id,
+                current_scene=current_scene,
+                total_scenes=total_scenes,
+            )
+
+        # 씬 단위 RAG 스크립트 생성기
+        generator = SceneBasedScriptGenerator(
+            milvus_client=self._milvus_client,
+            model=model,
+            top_k=3,  # 씬당 검색할 청크 수
+        )
+
+        logger.info(
+            f"Using scene-based RAG script generation with patch callbacks: "
+            f"source_set_id={job.source_set_id}, model={model}"
+        )
+
+        # 스크립트 생성 (씬별 콜백 전달)
+        script = await generator.generate_script(
+            source_set_id=job.source_set_id,
+            video_id=job.video_id,
+            education_id=job.education_id,
+            documents=documents,
+            document_chunks=document_chunks,
+            on_scene_generated=on_scene_generated,
+        )
+
+        return script
+
+    # =========================================================================
+    # Legacy Script Generation (기존 방식 - 백업용)
+    # =========================================================================
+
+    async def _generate_script_legacy(
+        self,
+        job: ProcessingJob,
+        document_chunks: Dict[str, List[Dict[str, Any]]],
+    ) -> GeneratedScript:
+        """스크립트를 생성합니다 (기존 방식 - 전체 문서를 프롬프트에 포함).
+
+        Note: 컨텍스트 제한으로 긴 문서 처리 불가. 씬 단위 RAG 방식 권장.
 
         Args:
             job: 처리 작업 상태
@@ -1042,15 +1145,23 @@ class SourceSetOrchestrator:
 4. 전체 영상 길이는 3-10분 목표
 5. 반드시 유효한 JSON만 출력 (설명 없이)"""
 
+        # 컨텍스트 길이 제한 (LLM 8192 토큰 제한 고려)
+        max_context_chars = 8000
+        truncated_context = full_context[:max_context_chars]
+        if len(full_context) > max_context_chars:
+            logger.info(
+                f"Context truncated: {len(full_context)} -> {max_context_chars} chars"
+            )
+
         user_prompt = f"""다음 교육 자료를 바탕으로 교육 영상 스크립트를 생성해주세요:
 
-{full_context[:15000]}  # 토큰 제한 고려
+{truncated_context}
 
 JSON 스크립트:"""
 
         # 3. LLM 호출
         llm_client = LLMClient()
-        model = job.llm_model_hint or "qwen2.5-14b-instruct"
+        model = job.llm_model_hint or "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 
         try:
             response = await llm_client.generate_chat_completion(
@@ -1060,7 +1171,7 @@ JSON 스크립트:"""
                 ],
                 model=model,
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=2500,  # 8192 - 입력토큰(~5000) = ~3000 여유
             )
 
             # 4. JSON 파싱
@@ -1211,6 +1322,72 @@ JSON 스크립트:"""
     # =========================================================================
     # Callbacks
     # =========================================================================
+
+    async def _send_scene_patch_callback(
+        self,
+        job: ProcessingJob,
+        chapter_index: int,
+        chapter_title: str,
+        scene_index: int,
+        scene: GeneratedScene,
+        script_id: str,
+        current_scene: int,
+        total_scenes: int,
+    ) -> None:
+        """씬 패치 콜백을 백엔드에 전송합니다.
+
+        씬이 생성될 때마다 호출되어 부분 저장을 수행합니다.
+
+        Args:
+            job: 처리 작업 상태
+            chapter_index: 챕터 인덱스 (0-based)
+            chapter_title: 챕터 제목
+            scene_index: 씬 인덱스 (0-based)
+            scene: 생성된 씬
+            script_id: 스크립트 ID
+            current_scene: 현재 씬 번호 (1-based)
+            total_scenes: 전체 씬 수
+        """
+        # 결정적 request_id 생성 (재시도 시 중복 방지)
+        patch_request_id = f"{job.source_set_id}:{chapter_index}:{scene_index}"
+
+        patch = ScriptPatch(
+            type="SCENE_UPSERT",
+            script_id=script_id,
+            chapter_index=chapter_index,
+            chapter_title=chapter_title,
+            scene_index=scene_index,
+            scene=scene,
+            total_scenes=total_scenes,
+            current_scene=current_scene,
+        )
+
+        request = SourceSetCompleteRequest(
+            video_id=job.video_id,
+            status="COMPLETED",
+            source_set_status="SCRIPT_GENERATING",
+            documents=job.document_results,
+            script=None,
+            script_patch=patch,
+            request_id=patch_request_id,
+            trace_id=job.trace_id,
+        )
+
+        try:
+            await self._backend_client.notify_source_set_complete(
+                job.source_set_id, request
+            )
+            logger.info(
+                f"Scene patch callback sent: source_set_id={job.source_set_id}, "
+                f"chapter={chapter_index}, scene={scene_index}, "
+                f"progress={current_scene}/{total_scenes}"
+            )
+        except SourceSetCompleteCallbackError as e:
+            # 패치 전송 실패는 경고로 처리 (다음 씬 계속 진행)
+            logger.warning(
+                f"Failed to send scene patch callback: source_set_id={job.source_set_id}, "
+                f"chapter={chapter_index}, scene={scene_index}, error={e}"
+            )
 
     async def _send_success_callback(self, job: ProcessingJob) -> None:
         """성공 콜백을 백엔드에 전송합니다.
