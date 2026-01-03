@@ -368,6 +368,12 @@ class BackendClient:
         self._timeout = timeout or settings.BACKEND_TIMEOUT_SEC
         self._external_client = client
         self._last_latency_ms: Optional[int] = None
+        
+        # 초기화 로그 출력
+        if self._base_url:
+            logger.info(f"BackendClient 초기화: base_url={self._base_url}, timeout={self._timeout}s")
+        else:
+            logger.warning("BackendClient 초기화: BACKEND_BASE_URL이 설정되지 않았습니다. 백엔드 API 호출이 실패할 수 있습니다.")
 
     @property
     def is_configured(self) -> bool:
@@ -1065,7 +1071,7 @@ class BackendClient:
         url = f"{self._base_url}/internal/source-sets/{source_set_id}/documents"
         headers = self._get_internal_headers()
 
-        logger.info(f"Fetching source-set documents: source_set_id={source_set_id}")
+        logger.info(f"Fetching source-set documents: source_set_id={source_set_id}, url={url}, base_url={self._base_url}")
 
         try:
             if self._external_client:

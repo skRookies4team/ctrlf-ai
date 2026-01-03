@@ -18,8 +18,6 @@
 #
 # =============================================================================
 
-version: "3.8"
-
 services:
   # =============================================================================
   # AI Gateway (ctrlf-ai) - 베이스 서비스 (직접 실행 X, extends용)
@@ -120,6 +118,7 @@ services:
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://58.127.241.84:1237}
+      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
     # Real 모드에서는 Mock 서비스 의존성 없음
 
   # =============================================================================
