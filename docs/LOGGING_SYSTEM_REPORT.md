@@ -491,4 +491,4 @@ root_logger.addHandler(file_handler)
 
 ---
 
-*작성일: 2024-12-30*
+*작성일: 2025-12-30*
