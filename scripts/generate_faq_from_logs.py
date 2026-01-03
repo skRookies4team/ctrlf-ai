@@ -80,6 +80,17 @@ async def fetch_ai_logs() -> List[LogEntry]:
             params={"limit": LOG_FETCH_LIMIT},
             headers=headers,
         )
+        
+        if resp.status_code == 401:
+            logger.error(
+                "인증 실패 (401 Unauthorized)\n"
+                "  - .env 파일의 BACKEND_ACCESS_TOKEN이 올바른지 확인하세요\n"
+                "  - 토큰이 만료되었는지 확인하세요"
+            )
+            raise RuntimeError(
+                "Backend API 인증 실패: BACKEND_ACCESS_TOKEN을 확인하세요"
+            )
+        
         resp.raise_for_status()
 
     body = resp.json()
@@ -146,7 +157,13 @@ def cluster_questions(logs: List[LogEntry]) -> Dict[str, List[str]]:
 async def generate_faq(
     canonical_question: str,
     sample_questions: List[str],
-) -> None:
+) -> bool:
+    """
+    FAQ를 생성합니다.
+    
+    Returns:
+        bool: 성공 여부 (True: 성공, False: 실패)
+    """
     payload = {
         "domain": "POLICY",
         "cluster_id": f"auto-log-{uuid.uuid4().hex[:8]}",
@@ -156,21 +173,51 @@ async def generate_faq(
         "avg_intent_confidence": 0.8,
     }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{AI_BASE_URL}/ai/faq/generate",
-            json=payload,
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{AI_BASE_URL}/ai/faq/generate",
+                json=payload,
+            )
+            resp.raise_for_status()
+
+        data = resp.json()
+        status = data.get("status")
+        draft = data.get("faq_draft") or {}
+        error_message = data.get("error_message")
+
+        if status == "SUCCESS" and draft:
+            logger.info(
+                "FAQ generated | "
+                f"question='{canonical_question[:50]}...' | "
+                f"confidence={draft.get('ai_confidence', 'N/A')} | "
+                f"id={draft.get('faq_draft_id', 'N/A')}"
+            )
+            return True
+        else:
+            logger.warning(
+                f"FAQ generation failed | "
+                f"question='{canonical_question[:50]}...' | "
+                f"error={error_message or 'Unknown error'}"
+            )
+            return False
+
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"FAQ generation API error | "
+            f"question='{canonical_question[:50]}...' | "
+            f"status={e.response.status_code} | "
+            f"response={e.response.text[:200]}"
         )
-        resp.raise_for_status()
-
-    data = resp.json()
-    draft = data.get("faq_draft") or {}
-
-    logger.info(
-        "FAQ generated | "
-        f"question='{canonical_question}' | "
-        f"confidence={draft.get('ai_confidence')}"
-    )
+        return False
+    
+    except Exception as e:
+        logger.error(
+            f"FAQ generation unexpected error | "
+            f"question='{canonical_question[:50]}...' | "
+            f"error={type(e).__name__}: {str(e)}"
+        )
+        return False
 
 # =========================================================
 # Main
@@ -187,13 +234,28 @@ async def main():
         logger.info("No FAQ candidates found. Exit.")
         return
 
-    for canonical, questions in clusters.items():
-        await generate_faq(
+    # 통계 수집
+    total = len(clusters)
+    success_count = 0
+    failed_count = 0
+
+    logger.info(f"Processing {total} FAQ clusters...")
+
+    for idx, (canonical, questions) in enumerate(clusters.items(), 1):
+        logger.info(f"[{idx}/{total}] Processing: {canonical[:50]}...")
+        
+        success = await generate_faq(
             canonical_question=canonical,
             sample_questions=questions,
         )
+        
+        if success:
+            success_count += 1
+        else:
+            failed_count += 1
 
     logger.info("=== FAQ AUTO GENERATION END ===")
+    logger.info(f"Summary: Total={total}, Success={success_count}, Failed={failed_count}")
 
 if __name__ == "__main__":
     asyncio.run(main())
