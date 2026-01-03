@@ -368,6 +368,58 @@ FORBIDDEN_QUERY_FILTER_ENABLED=true
 FORBIDDEN_QUERY_FUZZY_ENABLED=true
 ```
 
+## 로깅 설정
+
+### 로그 포맷
+
+| 환경변수 | 값 | 설명 |
+|---------|-----|------|
+| `LOG_FORMAT` | `json` | ELK 수집용 JSON 1라인 포맷 (기본값) |
+| `LOG_FORMAT` | `text` | 개발용 텍스트 포맷 (읽기 쉬움) |
+| `LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | 로그 레벨 |
+
+### 개발 환경에서 로그 보기
+
+`.env`에 다음 설정 추가:
+
+```env
+LOG_FORMAT=text
+LOG_LEVEL=DEBUG
+```
+
+**텍스트 로그 출력 예시:**
+
+```
+2026-01-03 09:50:00 | INFO     | app.main | Starting ctrlf-ai-gateway...
+2026-01-03 09:50:01 | DEBUG    | app.services.chat | [trace_id=abc123] Processing request
+```
+
+### 서버 실행 시 로그 확인
+
+```bash
+# 방법 1: .env 설정 후 실행
+uvicorn app.main:app --reload --port 8000
+
+# 방법 2: 환경변수 직접 지정 (Windows PowerShell)
+$env:LOG_FORMAT="text"; uvicorn app.main:app --reload --port 8000
+
+# 방법 3: 환경변수 직접 지정 (Windows CMD)
+set LOG_FORMAT=text && uvicorn app.main:app --reload --port 8000
+```
+
+### Docker 로그 확인
+
+```bash
+# 실시간 로그 보기
+docker logs -f <container_name>
+
+# docker-compose 사용 시
+docker-compose logs -f ai
+```
+
+> **Note**: JSON 포맷(`LOG_FORMAT=json`)은 ELK 스택에서 수집/분석에 최적화되어 있습니다.
+> 로컬 개발 시에는 `LOG_FORMAT=text`를 권장합니다.
+
 ## 테스트
 
 ```bash
@@ -392,8 +444,18 @@ pytest tests/test_internal_rag.py -v
 uvicorn app.main:app --reload --port 8000
 
 # 2. 배치 테스트 실행
-python scripts/test/qa_batch_test.py
+python scripts/test/qa_batch_test.py              # 전체 테스트
+python scripts/test/qa_batch_test.py -n 50        # 50개만 랜덤 샘플링
+python scripts/test/qa_batch_test.py --sample 100 # 100개만 랜덤 샘플링
+python scripts/test/qa_batch_test.py -n 50 --seed 123  # 다른 시드로 샘플링
 ```
+
+### 옵션
+
+| 옵션 | 설명 | 기본값 |
+|------|------|--------|
+| `-n`, `--sample` | 테스트할 질문 수 (미지정 시 전체) | 전체 |
+| `--seed` | 랜덤 시드 (재현 가능한 샘플링) | 42 |
 
 ### 필수 파일
 
@@ -423,9 +485,11 @@ python scripts/test/qa_batch_test.py
 스크립트 상단에서 조정 가능:
 
 ```python
-CONCURRENT_REQUESTS = 3   # 동시 요청 수
+CONCURRENT_REQUESTS = 1   # 동시 요청 수 (LLM 타임아웃 방지를 위해 1 권장)
 TIMEOUT_SECONDS = 120     # 요청 타임아웃
 ```
+
+> **Note**: 동시 요청 수를 늘리면 LLM 서버 과부하로 타임아웃이 발생할 수 있습니다.
 
 ### 예시 출력
 
@@ -436,19 +500,22 @@ EXAONE 모델 질답리스트 생성 스크립트
 
 1. 질문리스트 로딩: scripts/test/질문리스트.xlsx
    -> 총 595개 질문 로드됨
+   -> 50개 랜덤 샘플링 (seed=42)
 
 2. AI 서버 연결 테스트...
    -> 연결 성공! 모델: LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 
-3. 배치 처리 시작 (동시 요청: 3개)
-[595/595] (100.0%) EMP-001: OK
+3. 배치 처리 시작 (동시 요청: 1개)
+[50/50] (100.0%) EMP-001: OK
 
 4. 처리 완료!
-   -> 총 소요 시간: 1200.5초 (20.0분)
-   -> 평균 응답 시간: 6050ms
+   -> 총 소요 시간: 600.5초 (10.0분)
+   -> 평균 응답 시간: 12000ms
 
-5. 결과 저장: scripts/test/docs/질답리스트_EXAONE_20260101_120000.xlsx
+5. 결과 저장: scripts/test/docs/질답리스트_EXAONE_n50_20260101_120000.xlsx
 ```
+
+> **출력 파일명**: 샘플링 시 `_n50` 형태로 샘플 수가 파일명에 포함됩니다.
 
 ## Mock 서버 구성 및 분리 테스트
 
