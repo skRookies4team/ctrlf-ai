@@ -51,15 +51,13 @@ class PersonalizationSubIntentId(str, Enum):
     """개인화 세부 의도 식별자 (Q1-Q20).
 
     prompt.txt에 정의된 개인화 스코프입니다.
-    데모 "완전 구현" 우선순위 8개: Q1, Q3, Q5, Q6, Q9, Q11, Q14, Q20
+    데모 "완전 구현" 우선순위 5개: Q1, Q3, Q9, Q11, Q14
 
     Attributes:
         Q1: 미이수 필수 교육 조회
         Q2: 내 교육 수료 현황 조회
         Q3: 이번 달 데드라인 필수 교육
         Q4: 특정 교육 진도율/시청률 조회
-        Q5: 내 평균 vs 부서 평균 vs 전사 평균 (타부서 선택 가능)
-        Q6: 가장 많이 틀린 보안 토픽 TOP3
         Q7: 특정 교육 퀴즈 결과 조회
         Q8: 내 퀴즈 점수 이력 조회
         Q9: 이번 주 교육/퀴즈 할 일 1줄 (통합)
@@ -80,8 +78,6 @@ class PersonalizationSubIntentId(str, Enum):
     Q2 = "Q2"   # 내 교육 수료 현황 조회
     Q3 = "Q3"   # 이번 달 데드라인 필수 교육
     Q4 = "Q4"   # 특정 교육 진도율/시청률 조회
-    Q5 = "Q5"   # 내 평균 vs 부서 평균 vs 전사 평균
-    Q6 = "Q6"   # 가장 많이 틀린 보안 토픽 TOP3
     Q7 = "Q7"   # 특정 교육 퀴즈 결과 조회
     Q8 = "Q8"   # 내 퀴즈 점수 이력 조회
     Q9 = "Q9"   # 이번 주 교육/퀴즈 할 일 1줄
@@ -98,24 +94,19 @@ class PersonalizationSubIntentId(str, Enum):
     Q20 = "Q20"  # 올해 HR 할 일 (미완료)
 
 
-# 데모 완전 구현 대상 (8개)
+# 데모 완전 구현 대상 (5개)
 PRIORITY_SUB_INTENTS = frozenset([
     PersonalizationSubIntentId.Q1.value,
     PersonalizationSubIntentId.Q3.value,
-    PersonalizationSubIntentId.Q5.value,
-    PersonalizationSubIntentId.Q6.value,
     PersonalizationSubIntentId.Q9.value,
     PersonalizationSubIntentId.Q11.value,
     PersonalizationSubIntentId.Q14.value,
-    PersonalizationSubIntentId.Q20.value,
 ])
 
 
 # Q별 기본 period 매핑 (기간 미지정 시 사용)
 DEFAULT_PERIOD_FOR_INTENT: Dict[str, PeriodType] = {
     "Q3": PeriodType.THIS_MONTH,
-    "Q5": PeriodType.THIS_YEAR,
-    "Q6": PeriodType.THREE_MONTHS,
     "Q9": PeriodType.THIS_WEEK,
     "Q11": PeriodType.THIS_YEAR,
     "Q14": PeriodType.THIS_YEAR,  # 기간 없음이지만 기본값
@@ -188,7 +179,7 @@ class PersonalizationResolveRequest(BaseModel):
     Attributes:
         sub_intent_id: Q1-Q20 인텐트 ID
         period: 기간 유형 (옵션, 기본값 사용 가능)
-        target_dept_id: 부서 비교 대상 ID (Q5에서만 사용)
+        target_dept_id: 부서 비교 대상 ID (향후 사용 예정)
     """
 
     sub_intent_id: str = Field(..., description="Q1-Q20 인텐트 ID")
@@ -299,20 +290,6 @@ SUB_INTENT_METADATA: Dict[str, SubIntentMetadata] = {
         description="특정 교육 진도율/시청률 조회",
         keywords=["진도율", "시청률", "얼마나 봤", "몇 퍼센트"],
         domain="EDU",
-    ),
-    "Q5": SubIntentMetadata(
-        sub_intent_id="Q5",
-        description="내 평균 vs 부서 평균 vs 전사 평균",
-        keywords=["평균", "비교", "부서 평균", "전사 평균", "우리 부서", "다른 부서"],
-        default_period=PeriodType.THIS_YEAR,
-        domain="QUIZ",  # 퀴즈/평가 지표 성격
-    ),
-    "Q6": SubIntentMetadata(
-        sub_intent_id="Q6",
-        description="가장 많이 틀린 보안 토픽 TOP3",
-        keywords=["많이 틀린", "약한 부분", "취약", "TOP", "보안 토픽"],
-        default_period=PeriodType.THREE_MONTHS,
-        domain="QUIZ",  # 퀴즈/평가 지표 성격
     ),
     "Q7": SubIntentMetadata(
         sub_intent_id="Q7",

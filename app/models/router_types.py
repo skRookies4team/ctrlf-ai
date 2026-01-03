@@ -129,6 +129,7 @@ class SubIntentId(str, Enum):
         HR_LEAVE_CHECK: 연차/휴가 잔여 조회
         HR_ATTENDANCE_CHECK: 근태 현황 조회
         HR_WELFARE_CHECK: 복지 포인트/혜택 조회
+        HR_TODO_CHECK: HR 할 일/미완료 항목 조회 (Q20)
     """
 
     # 치명 액션 (확인 게이트 필요)
@@ -141,6 +142,15 @@ class SubIntentId(str, Enum):
     HR_LEAVE_CHECK = "HR_LEAVE_CHECK"
     HR_ATTENDANCE_CHECK = "HR_ATTENDANCE_CHECK"
     HR_WELFARE_CHECK = "HR_WELFARE_CHECK"
+
+    # 개인화 조회 - QUIZ 도메인: 미완료/재응시 필요 퀴즈 조회
+    QUIZ_PENDING_CHECK = "QUIZ_PENDING_CHECK"
+
+    # 개인화 조회 - EDU 도메인: 교육 이어보기/재생 위치 조회
+    EDU_RESUME_CHECK = "EDU_RESUME_CHECK"
+
+    # 개인화 조회 - HR 도메인 (Q20)
+    HR_TODO_CHECK = "HR_TODO_CHECK"
 
 
 # 치명 액션 목록 (requires_confirmation=true 대상)

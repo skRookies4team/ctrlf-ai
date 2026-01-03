@@ -101,14 +101,19 @@ class TestRuleRouterAmbiguousBoundaries:
             assert result.tier0_intent == Tier0Intent.BACKEND_STATUS
 
     def test_boundary_b_leave_ambiguous(self):
-        """경계 B: '연차 알려줘' - 규정인지 내 잔여인지 애매함."""
+        """경계 B: '연차 알려줘' - 규정인지 내 잔여인지 애매함.
+
+        Phase 50 업데이트:
+        - '휴가 확인해줘'는 HR_PERSONAL_KEYWORDS에 '휴가 확인'이 추가되어 명확한 개인화로 분류됨
+        - 진짜 애매한 패턴만 테스트 (알려줘, 어떻게 되어있어 등)
+        """
         router = RuleRouter()
 
         ambiguous_queries = [
             "연차 알려줘",
-            "휴가 확인해줘",
             "연차 어떻게 되어있어?",
             "휴가 있어?",
+            # Note: "휴가 확인해줘"는 Phase 50에서 명확한 개인화로 분류됨
         ]
 
         for query in ambiguous_queries:
@@ -169,19 +174,48 @@ class TestRuleRouterCriticalActions:
             assert ConfirmationTemplates.QUIZ_START in result.confirmation_prompt
 
     def test_quiz_submit_requires_confirmation(self):
-        """QUIZ_SUBMIT은 requires_confirmation=true."""
+        """QUIZ_SUBMIT은 requires_confirmation=true (퀴즈 문맥 필수).
+
+        Phase 50 업데이트:
+        - 오탐 방지를 위해 "채점해줘", "점수 확인" 등 범용 키워드는
+          퀴즈/시험/테스트 문맥이 있어야만 QUIZ_SUBMIT으로 분류됨
+        """
         router = RuleRouter()
 
-        queries = [
+        # 퀴즈 문맥이 있는 쿼리만 QUIZ_SUBMIT으로 분류
+        queries_with_context = [
             "퀴즈 제출해줘",
-            "답안 제출",
-            "채점해줘",
+            "시험 채점해줘",
+            "테스트 점수 확인",
+            "퀴즈 완료",
         ]
 
-        for query in queries:
+        for query in queries_with_context:
             result = router.route(query)
             assert result.requires_confirmation is True, f"Query '{query}' should require confirmation"
             assert result.sub_intent_id == SubIntentId.QUIZ_SUBMIT.value
+
+    def test_quiz_submit_skipped_without_context(self):
+        """퀴즈 문맥 없이 범용 키워드만 있으면 QUIZ_SUBMIT으로 분류되지 않음.
+
+        Phase 50 추가: 오탐 방지 테스트
+        - "채점해줘", "점수 확인" 등은 퀴즈 외 맥락에서도 사용 가능
+        - 퀴즈 문맥 없이는 치명 액션으로 판정하지 않음
+        """
+        router = RuleRouter()
+
+        queries_without_context = [
+            "채점해줘",
+            "점수 확인해줘",
+            "제출할게",
+        ]
+
+        for query in queries_without_context:
+            result = router.route(query)
+            # 퀴즈 문맥 없음 → 치명 액션이 아님
+            assert result.requires_confirmation is False, \
+                f"Query '{query}' should NOT require confirmation (no quiz context)"
+            assert result.sub_intent_id != SubIntentId.QUIZ_SUBMIT.value
 
     def test_quiz_generation_requires_confirmation(self):
         """QUIZ_GENERATION은 requires_confirmation=true."""
@@ -605,3 +639,108 @@ class TestExampleInputs:
         assert result.domain == RouterDomain.GENERAL
         assert result.route_type == RouterRouteType.LLM_ONLY
         assert result.confidence >= 0.7
+
+
+# =============================================================================
+# Phase 50: Q20 라우팅 테스트
+# =============================================================================
+
+
+class TestPersonalizationRouting:
+    """개인화 Q20 라우팅 테스트.
+
+    Phase 50 추가:
+    - Q20: HR 할 일/미완료 항목 (HR_TODO_CHECK)
+
+    Note: Q5(평균비교), Q6(보안토픽TOP3)는 프로젝트 범위에서 제외됨.
+    """
+
+    def test_hr_todo_check_q20(self):
+        """Q20: HR 할 일/미완료 항목 → HR_TODO_CHECK."""
+        router = RuleRouter()
+
+        queries = [
+            "HR 할 일 뭐야",
+            "인사 업무 알려줘",
+            "연말정산 해야해?",
+            "미완료 HR 업무",
+        ]
+
+        for query in queries:
+            result = router.route(query)
+            assert result.sub_intent_id == SubIntentId.HR_TODO_CHECK.value, \
+                f"Query '{query}' should be HR_TODO_CHECK"
+            assert result.domain == RouterDomain.HR
+
+
+# =============================================================================
+# Phase 50: 키워드 충돌 회귀 테스트
+# =============================================================================
+
+
+class TestKeywordCollisionRegression:
+    """키워드 부분문자열 충돌 회귀 테스트.
+
+    Phase 50 추가:
+    - "완료" ↔ "미완료" 충돌 방지
+    - 부정 접두어 충돌 케이스 검증
+    """
+
+    def test_complete_vs_incomplete_collision(self):
+        """'완료' vs '미완료' 부분문자열 충돌 방지.
+
+        버그 재현: QUIZ_SUBMIT_KEYWORDS에 "완료"가 있으면
+        "미완료 HR 업무"도 QUIZ_SUBMIT으로 잘못 분류됨.
+
+        해결: "완료" 대신 "퀴즈 완료", "시험 완료" 등 문맥 포함 키워드 사용
+        """
+        router = RuleRouter()
+
+        # "미완료 HR 업무" → HR_TODO_CHECK (NOT QUIZ_SUBMIT)
+        result = router.route("미완료 HR 업무")
+        assert result.sub_intent_id == SubIntentId.HR_TODO_CHECK.value, \
+            "'미완료 HR 업무' should be HR_TODO_CHECK, not QUIZ_SUBMIT"
+        assert result.requires_confirmation is False
+
+        # "퀴즈 제출 완료" → QUIZ_SUBMIT
+        result2 = router.route("퀴즈 완료")
+        assert result2.sub_intent_id == SubIntentId.QUIZ_SUBMIT.value
+        assert result2.requires_confirmation is True
+
+    def test_edu_vs_hr_todo_priority(self):
+        """EDU_STATUS vs HR_TODO 우선순위 충돌 방지.
+
+        버그 재현: "할 일" 키워드가 EDU_STATUS_KEYWORDS와 HR_TODO_KEYWORDS
+        둘 다에 있으면 먼저 체크되는 쪽으로 분류됨.
+
+        해결: HR_TODO는 "hr/인사" 명시 키워드만 포함, 범용 키워드 제외
+        """
+        router = RuleRouter()
+
+        # "이번 주 할 일" → EDU_STATUS_CHECK (교육 할 일)
+        result = router.route("이번 주 할 일 뭐야?")
+        assert result.sub_intent_id == SubIntentId.EDU_STATUS_CHECK.value
+
+        # "올해 HR 할 일" → HR_TODO_CHECK (HR 할 일)
+        result2 = router.route("올해 HR 할 일 뭐야?")
+        assert result2.sub_intent_id == SubIntentId.HR_TODO_CHECK.value
+
+    def test_quiz_context_prevents_false_positive(self):
+        """퀴즈 문맥 조건이 오탐을 방지하는지 검증.
+
+        버그 재현: "점수 확인해줘" 같은 범용 표현이
+        퀴즈 문맥 없이도 QUIZ_SUBMIT으로 분류됨.
+
+        해결: QUIZ_SUBMIT은 "퀴즈/시험/테스트" 문맥이 있어야만 판정
+        """
+        router = RuleRouter()
+
+        # 퀴즈 문맥 없음 → NOT QUIZ_SUBMIT
+        result = router.route("점수 확인해줘")
+        assert result.sub_intent_id != SubIntentId.QUIZ_SUBMIT.value
+        assert result.requires_confirmation is False
+
+        # 퀴즈 문맥 있음 → QUIZ_SUBMIT
+        result2 = router.route("퀴즈 점수 확인해줘")
+        assert result2.sub_intent_id == SubIntentId.QUIZ_SUBMIT.value
+        assert result2.requires_confirmation is True

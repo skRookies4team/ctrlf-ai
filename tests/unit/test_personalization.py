@@ -50,24 +50,34 @@ class TestPersonalizationModels:
         assert PersonalizationSubIntentId.Q20.value == "Q20"
 
     def test_priority_sub_intents(self):
-        """우선순위 인텐트 8개 확인."""
-        assert len(PRIORITY_SUB_INTENTS) == 8
+        """우선순위 인텐트 5개 확인.
+
+        Note: Q5(평균비교), Q6(보안토픽TOP3)는 프로젝트 범위에서 제외됨.
+        """
+        assert len(PRIORITY_SUB_INTENTS) == 5
         assert "Q1" in PRIORITY_SUB_INTENTS
         assert "Q3" in PRIORITY_SUB_INTENTS
-        assert "Q5" in PRIORITY_SUB_INTENTS
-        assert "Q6" in PRIORITY_SUB_INTENTS
         assert "Q9" in PRIORITY_SUB_INTENTS
         assert "Q11" in PRIORITY_SUB_INTENTS
         assert "Q14" in PRIORITY_SUB_INTENTS
-        assert "Q20" in PRIORITY_SUB_INTENTS
+        # Q5, Q6는 프로젝트 범위에서 제외됨
+        assert "Q5" not in PRIORITY_SUB_INTENTS
+        assert "Q6" not in PRIORITY_SUB_INTENTS
+        # Q20은 우선순위 목록에 미포함 (선택 구현)
+        assert "Q20" not in PRIORITY_SUB_INTENTS
 
     def test_default_period_for_intent(self):
-        """인텐트별 기본 period 확인."""
+        """인텐트별 기본 period 확인.
+
+        Note: Q5, Q6는 프로젝트 범위에서 제외됨.
+        """
         assert DEFAULT_PERIOD_FOR_INTENT["Q3"] == PeriodType.THIS_MONTH
-        assert DEFAULT_PERIOD_FOR_INTENT["Q5"] == PeriodType.THIS_YEAR
-        assert DEFAULT_PERIOD_FOR_INTENT["Q6"] == PeriodType.THREE_MONTHS
         assert DEFAULT_PERIOD_FOR_INTENT["Q9"] == PeriodType.THIS_WEEK
         assert DEFAULT_PERIOD_FOR_INTENT["Q11"] == PeriodType.THIS_YEAR
+        assert DEFAULT_PERIOD_FOR_INTENT["Q20"] == PeriodType.THIS_YEAR
+        # Q5, Q6는 프로젝트 범위에서 제외됨
+        assert "Q5" not in DEFAULT_PERIOD_FOR_INTENT
+        assert "Q6" not in DEFAULT_PERIOD_FOR_INTENT
 
     def test_error_response_templates(self):
         """에러 응답 템플릿 확인."""
@@ -122,10 +132,16 @@ class TestPersonalizationModels:
         assert SUB_INTENT_METADATA["Q1"].description == "미이수 필수 교육 조회"
         assert SUB_INTENT_METADATA["Q11"].description == "남은 연차 일수"
 
-    def test_q5_q6_domain_is_quiz(self):
-        """Q5, Q6 Domain이 QUIZ인지 확인."""
-        assert SUB_INTENT_METADATA["Q5"].domain == "QUIZ"
-        assert SUB_INTENT_METADATA["Q6"].domain == "QUIZ"
+    def test_quiz_domain_metadata(self):
+        """QUIZ 도메인 메타데이터 확인.
+
+        Note: Q5, Q6는 프로젝트 범위에서 제외되어 메타데이터도 삭제됨.
+        """
+        # Q5, Q6 메타데이터는 삭제됨
+        assert "Q5" not in SUB_INTENT_METADATA
+        assert "Q6" not in SUB_INTENT_METADATA
+        # Q7은 QUIZ 도메인
+        assert SUB_INTENT_METADATA["Q7"].domain == "QUIZ"
 
 
 # =============================================================================

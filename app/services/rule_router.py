@@ -228,15 +228,6 @@ QUIZ_GENERATION_KEYWORDS = frozenset([
     "퀴즈 출제", "문제 출제",
 ])
 
-# 퀴즈 점수/평균 비교 키워드 (QUIZ_SCORE_CHECK - Q5)
-QUIZ_SCORE_KEYWORDS = frozenset([
-    "평균 점수", "내 평균", "나의 평균", "평균 비교",
-    "부서 평균", "전사 평균", "회사 평균", "팀 평균",
-    "점수 비교", "성적 비교", "퀴즈 평균", "시험 평균",
-    "내 점수 어때", "점수가 어때", "평균이 어때",
-    "다른 부서", "다른 팀", "우리 부서 평균",
-])
-
 # 퀴즈 미완료/재응시 조회 키워드 (QUIZ_PENDING_CHECK - 개인화)
 QUIZ_PENDING_KEYWORDS = frozenset([
     # 미완료/미응시 패턴
@@ -462,9 +453,7 @@ class RuleRouter:
         # Phase 50: 이어보기/다시보기 패턴도 명확한 개인화 질문
         if self._contains_any(query_lower, EDU_RESUME_KEYWORDS):
             return False  # 명확히 교육 이어보기/재생 위치 질문
-        # Phase 50: 퀴즈 점수/미완료 조회도 명확한 개인화 질문
-        if self._contains_any(query_lower, QUIZ_SCORE_KEYWORDS):
-            return False  # 명확히 퀴즈 점수 조회 질문
+        # Phase 50: 퀴즈 미완료 조회도 명확한 개인화 질문
         if self._contains_any(query_lower, QUIZ_PENDING_KEYWORDS):
             return False  # 명확히 퀴즈 미완료 조회 질문
 
@@ -740,22 +729,7 @@ class RuleRouter:
                 debug=debug_info,
             )
 
-        # 2-2. 퀴즈 점수/평균 비교 조회 (Q5 개인화)
-        if self._contains_any(query_lower, QUIZ_SCORE_KEYWORDS):
-            debug_info.rule_hits.append("QUIZ_SCORE_CHECK")
-            debug_info.keywords.extend(
-                [kw for kw in QUIZ_SCORE_KEYWORDS if kw in query_lower]
-            )
-            return RouterResult(
-                tier0_intent=Tier0Intent.BACKEND_STATUS,
-                domain=RouterDomain.QUIZ,
-                route_type=RouterRouteType.BACKEND_API,
-                sub_intent_id=SubIntentId.QUIZ_SCORE_CHECK.value,
-                confidence=0.9,
-                debug=debug_info,
-            )
-
-        # 2-3. 퀴즈 미완료/재응시 조회 (개인화)
+        # 2-2. 퀴즈 미완료/재응시 조회 (개인화)
         if self._contains_any(query_lower, QUIZ_PENDING_KEYWORDS):
             debug_info.rule_hits.append("QUIZ_PENDING_CHECK")
             debug_info.keywords.extend(

@@ -36,7 +36,6 @@ SUBINTENT_TO_Q: dict[str, str] = {
     "EDU_RESUME_CHECK": "Q4",      # 특정 교육 진도율/시청률 (이어보기)
 
     # QUIZ 관련 - 개인화 조회
-    "QUIZ_SCORE_CHECK": "Q5",      # 내 평균 vs 부서/전사 평균
     "QUIZ_PENDING_CHECK": "Q7",    # 미완료/재응시 퀴즈 조회
 }
 
@@ -205,7 +204,6 @@ PERSONALIZATION_SUBINTENTS = frozenset([
     "EDU_STATUS_CHECK",
     "EDU_RESUME_CHECK",      # 교육 이어보기/재생 위치
     # 직접 매핑되는 SubIntentId - QUIZ 도메인
-    "QUIZ_SCORE_CHECK",
     "QUIZ_PENDING_CHECK",    # 미완료/재응시 퀴즈
     # 이미 Q 형식인 경우도 포함
     *[f"Q{i}" for i in range(1, 21)],

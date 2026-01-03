@@ -92,6 +92,7 @@ from app.models.router_types import (
     Tier0Intent,
     TIER0_ROUTING_POLICY,
 )
+from app.clients.ab_milvus_client import get_client_info_by_model
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, LLMCompletionResult, get_llm_client
 from app.clients.personalization_client import PersonalizationClient
@@ -452,9 +453,14 @@ class ChatService:
         # Phase 41: RAG 디버그용 request_id 생성
         request_id = generate_request_id()
 
+        # Phase AB: A/B 테스트 모델 (방식 B - model 필드 직접 사용)
+        # ChatRequest.model 필드에서 직접 모델 선택 (별도 context API 불필요)
+        ab_model = req.model  # "openai" | "sroberta" | None
+
         logger.info(
             f"Processing chat request: session_id={req.session_id}, "
-            f"user_id={req.user_id}, user_role={req.user_role}, request_id={request_id}"
+            f"user_id={req.user_id}, user_role={req.user_role}, "
+            f"request_id={request_id}, ab_model={ab_model}"
         )
 
         # Step 1: Extract the latest user message as query
@@ -771,8 +777,9 @@ class ChatService:
             # RAG_INTERNAL: RAG만 사용
             rag_search_attempted = True
             rag_start = time.perf_counter()
+            # Phase AB: model 필드 직접 사용 (방식 B)
             sources, rag_search_failed, retriever_used = await self._perform_rag_search_with_fallback(
-                masked_query, domain, req, request_id=request_id
+                masked_query, domain, req, model=ab_model
             )
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
 
@@ -794,9 +801,10 @@ class ChatService:
             logger.info(f"MIXED_BACKEND_RAG route: Fetching RAG + Backend data in parallel")
 
             # Phase 12: 병렬 호출에서 각각의 실패를 독립적으로 처리
+            # Phase AB: model 필드 직접 사용 (방식 B)
             rag_start = time.perf_counter()
             rag_task = self._perform_rag_search_with_fallback(
-                masked_query, domain, req, request_id=request_id
+                masked_query, domain, req, model=ab_model
             )
             backend_task = self._fetch_backend_data_for_mixed(
                 user_role=intent_result.user_role,
@@ -1377,6 +1385,8 @@ class ChatService:
         )
 
         # Step 8: Generate and send AI log (fire-and-forget)
+        # Phase AB: A/B 테스트 정보 조회 (model 필드 직접 사용)
+        ab_info = get_client_info_by_model(ab_model)
         await self._send_ai_log(
             req=req,
             response_answer=final_answer,
@@ -1391,6 +1401,10 @@ class ChatService:
             latency_ms=latency_ms,
             model_name="internal-llm",
             rag_gap_candidate=rag_gap_candidate_flag,
+            # Phase AB: A/B 테스트 정보
+            ab_model=ab_info.get("model"),
+            ab_embedding_model=ab_info.get("embedding_model"),
+            ab_collection_name=ab_info.get("collection_name"),
         )
 
         # Step 9: Emit v1 Telemetry CHAT_TURN event (exactly once per turn)
@@ -1439,6 +1453,10 @@ class ChatService:
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
         rag_gap_candidate: bool = False,
+        # Phase AB: A/B 테스트 정보
+        ab_model: Optional[str] = None,
+        ab_embedding_model: Optional[str] = None,
+        ab_collection_name: Optional[str] = None,
     ) -> None:
         """
         AI 로그를 생성하고 백엔드로 전송합니다 (fire-and-forget).
@@ -1487,6 +1505,10 @@ class ChatService:
                 question_masked=question_masked,
                 answer_masked=answer_masked,
                 rag_gap_candidate=rag_gap_candidate,
+                # Phase AB: A/B 테스트 정보
+                ab_model=ab_model,
+                ab_embedding_model=ab_embedding_model,
+                ab_collection_name=ab_collection_name,
             )
 
             # 비동기 전송 (fire-and-forget)
@@ -1559,9 +1581,17 @@ class ChatService:
         query: str,
         domain: str,
         req: ChatRequest,
-        request_id: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool, str]:
         """RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다 (위임).
+
+        Phase AB: model 파라미터로 A/B 테스트 모델 직접 전달
+
+        Args:
+            query: 검색 쿼리
+            domain: 도메인
+            req: ChatRequest
+            model: A/B 테스트 모델 ("openai" | "sroberta")
 
         Returns:
             Tuple[List[ChatSource], bool, str]:
@@ -1570,7 +1600,10 @@ class ChatService:
                 - 사용된 retriever (MILVUS, RAGFLOW, RAGFLOW_FALLBACK)
         """
         return await self._rag_handler.perform_search_with_fallback(
-            query, domain, req, request_id
+            query=query,
+            domain=domain,
+            req=req,
+            model=model,
         )
 
     # =========================================================================
@@ -1904,7 +1937,7 @@ class ChatService:
                 sub_intent_id=q,
                 user_id=req.user_id,
                 period=period,
-                target_dept_id=None,  # TODO: 부서 비교(Q5) 시 dept 파싱 필요
+                target_dept_id=None,  # 향후 부서 비교 기능 사용 예정
             )
 
             logger.info(

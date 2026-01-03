@@ -183,8 +183,6 @@ class AnswerGenerator:
         fallback_templates = {
             "Q1": self._format_q1_fallback,
             "Q3": self._format_q3_fallback,
-            "Q5": self._format_q5_fallback,
-            "Q6": self._format_q6_fallback,
             "Q9": self._format_q9_fallback,
             "Q11": self._format_q11_fallback,
             "Q14": self._format_q14_fallback,
@@ -237,41 +235,6 @@ class AnswerGenerator:
             return "\n".join(lines)
 
         return f"이번 달 마감되는 필수 교육이 {count}건 있어요."
-
-    def _format_q5_fallback(self, facts: PersonalizationFacts) -> str:
-        """Q5 (평균 비교) 폴백."""
-        my_avg = facts.metrics.get("my_average", 0)
-        dept_avg = facts.metrics.get("dept_average", 0)
-        company_avg = facts.metrics.get("company_average", 0)
-
-        dept_name = facts.extra.get("target_dept_name", "부서")
-
-        lines = []
-        if my_avg:
-            lines.append(f"- 내 평균: {my_avg:.1f}점")
-        if dept_avg:
-            lines.append(f"- {dept_name} 평균: {dept_avg:.1f}점")
-        if company_avg:
-            lines.append(f"- 전사 평균: {company_avg:.1f}점")
-
-        if lines:
-            return "교육 점수 평균 비교:\n" + "\n".join(lines)
-        return "평균 데이터를 조회할 수 없어요."
-
-    def _format_q6_fallback(self, facts: PersonalizationFacts) -> str:
-        """Q6 (많이 틀린 토픽 TOP3) 폴백."""
-        items = facts.items
-        if not items:
-            return "틀린 문제 데이터가 없어요. 훌륭합니다!"
-
-        lines = ["많이 틀린 보안 토픽 TOP3:"]
-        for item in items[:3]:
-            rank = item.get("rank", "")
-            topic = item.get("topic", "")
-            wrong_rate = item.get("wrong_rate", 0)
-            lines.append(f"{rank}. {topic} (오답률: {wrong_rate:.1f}%)")
-
-        return "\n".join(lines)
 
     def _format_q9_fallback(self, facts: PersonalizationFacts) -> str:
         """Q9 (이번 주 할 일) 폴백."""

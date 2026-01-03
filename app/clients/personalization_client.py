@@ -105,7 +105,7 @@ class PersonalizationClient:
             sub_intent_id: Q1-Q20 인텐트 ID
             user_id: 사용자 ID (X-User-Id 헤더로 전달)
             period: 기간 유형 (this-week|this-month|3m|this-year)
-            target_dept_id: 부서 비교 대상 ID (Q5에서만 사용)
+            target_dept_id: 부서 비교 대상 ID (향후 사용 예정)
 
         Returns:
             PersonalizationFacts: 조회된 facts 데이터 (에러 시 error 필드 포함)
@@ -248,24 +248,6 @@ class PersonalizationClient:
                 "items": [
                     {"education_id": "EDU001", "title": "개인정보보호 교육", "deadline": "2025-01-31", "days_left": 13},
                     {"education_id": "EDU003", "title": "직장 내 괴롭힘 예방교육", "deadline": "2025-01-25", "days_left": 7},
-                ],
-            },
-            "Q5": {  # 내 평균 vs 부서/전사 평균
-                "metrics": {
-                    "my_average": 85.5,
-                    "dept_average": 82.3,
-                    "company_average": 80.1,
-                },
-                "extra": {
-                    "target_dept_id": "D001",
-                    "target_dept_name": "개발팀",
-                },
-            },
-            "Q6": {  # 가장 많이 틀린 보안 토픽 TOP3
-                "items": [
-                    {"rank": 1, "topic": "피싱 메일 식별", "wrong_rate": 35.2},
-                    {"rank": 2, "topic": "비밀번호 정책", "wrong_rate": 28.7},
-                    {"rank": 3, "topic": "개인정보 처리", "wrong_rate": 22.1},
                 ],
             },
             "Q9": {  # 이번 주 교육/퀴즈 할 일
