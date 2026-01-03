@@ -28,8 +28,16 @@ logger = get_logger(__name__)
 SUBINTENT_TO_Q: dict[str, str] = {
     # HR 관련 - 명확한 sub_intent_id가 있는 경우
     "HR_WELFARE_CHECK": "Q14",     # 복지/식대 포인트
-    "HR_ATTENDANCE_CHECK": "Q10",  # 내 근태 현황 (Q10이 맞음, Q20은 올해 HR 할일)
+    "HR_ATTENDANCE_CHECK": "Q10",  # 내 근태 현황
+    "HR_TODO_CHECK": "Q20",        # 올해 HR 할 일 (미완료)
     # HR_LEAVE_CHECK은 query 기반으로 세분화 (아래 _classify_hr_leave 함수)
+
+    # EDU 관련 - 개인화 조회
+    "EDU_RESUME_CHECK": "Q4",      # 특정 교육 진도율/시청률 (이어보기)
+
+    # QUIZ 관련 - 개인화 조회
+    "QUIZ_SCORE_CHECK": "Q5",      # 내 평균 vs 부서/전사 평균
+    "QUIZ_PENDING_CHECK": "Q7",    # 미완료/재응시 퀴즈 조회
 }
 
 # HR_LEAVE_CHECK 세분화용 키워드 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
@@ -188,11 +196,17 @@ def _classify_hr_leave(query: str) -> str:
 
 # 개인화 조회 대상 SubIntentId 집합
 PERSONALIZATION_SUBINTENTS = frozenset([
-    # 직접 매핑되는 SubIntentId
+    # 직접 매핑되는 SubIntentId - HR 도메인
     "HR_LEAVE_CHECK",
     "HR_WELFARE_CHECK",
     "HR_ATTENDANCE_CHECK",
+    "HR_TODO_CHECK",
+    # 직접 매핑되는 SubIntentId - EDU 도메인
     "EDU_STATUS_CHECK",
+    "EDU_RESUME_CHECK",      # 교육 이어보기/재생 위치
+    # 직접 매핑되는 SubIntentId - QUIZ 도메인
+    "QUIZ_SCORE_CHECK",
+    "QUIZ_PENDING_CHECK",    # 미완료/재응시 퀴즈
     # 이미 Q 형식인 경우도 포함
     *[f"Q{i}" for i in range(1, 21)],
 ])
