@@ -91,6 +91,25 @@ async def fetch_ai_logs() -> List[LogEntry]:
                 "Backend API 인증 실패: BACKEND_ACCESS_TOKEN을 확인하세요"
             )
         
+        if resp.status_code == 500:
+            error_detail = ""
+            try:
+                error_body = resp.json()
+                error_detail = error_body.get("message") or error_body.get("error") or str(error_body)
+            except:
+                error_detail = resp.text[:500] if resp.text else "(응답 본문 없음)"
+            
+            logger.error(
+                "백엔드 서버 오류 (500 Internal Server Error)\n"
+                f"  - URL: {url}\n"
+                f"  - 백엔드 서버에 문제가 발생했습니다\n"
+                f"  - 백엔드 로그를 확인하세요\n"
+                f"  - 응답: {error_detail}"
+            )
+            raise RuntimeError(
+                f"백엔드 서버 오류: 백엔드 팀에 문의하세요. (상세: {error_detail[:100]})"
+            )
+        
         resp.raise_for_status()
 
     body = resp.json()
@@ -232,6 +251,7 @@ async def main():
 
     if not clusters:
         logger.info("No FAQ candidates found. Exit.")
+        logger.info("Note: 백엔드 팀에 더미 데이터 생성을 요청하세요.")
         return
 
     # 통계 수집
