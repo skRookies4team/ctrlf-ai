@@ -131,22 +131,67 @@ EDU_CONTENT_KEYWORDS = frozenset([
 ])
 
 # 교육 현황/개인화 키워드 (BACKEND_STATUS - EDU)
+# Phase 50: 개인화 Q1/Q3/Q9 키워드와 동기화
 EDU_STATUS_KEYWORDS = frozenset([
+    # 이수/수료 상태 조회
     "수료", "이수", "미이수", "미수료", "수료율", "이수율",
     "진도", "진행률", "시청률", "완료율",
+    # 내 교육 현황 조회
     "내 교육", "나의 교육", "내가 들은", "내가 수강",
     "교육현황", "수강현황", "학습현황",
-    "언제까지", "기한", "마감",
+    # Q1: 미이수 교육 패턴 (Phase 50)
+    "안 들은", "안들은", "필수 미이수", "안한 교육", "안 한 교육",
+    # Q3: 마감 임박 교육 패턴 (Phase 50)
+    "데드라인", "마감", "곧 마감", "마감 임박",
+    "이번 달", "이번달", "이달",
+    "언제까지", "기한",
+    # Q9: 이번 주 할 일 패턴 (Phase 50)
+    "이번 주", "이번주", "금주", "이주",
+    "할 일", "해야 할", "해야할", "해야 하는",
+    # 진도 확인 패턴
     "어디까지", "몇 퍼센트", "얼마나 했",
 ])
 
+# 교육 이어보기/재생 위치 조회 키워드 (EDU_RESUME_CHECK - 개인화)
+# Phase 50: 보던/듣던/최근/마지막 패턴 확장
+EDU_RESUME_KEYWORDS = frozenset([
+    # 이어보기 패턴
+    "이어서", "이어보기", "이어 보기", "계속 보기", "계속보기",
+    "끊긴", "끊어진", "중단", "멈춘", "멈춰진",
+    # 재생 위치 패턴
+    "어디까지 봤", "어디서 끊", "마지막으로 본", "마지막 위치",
+    "재생 위치", "시청 위치", "보던 거", "듣던 거",
+    # 다시 보기/듣기 패턴
+    "다시 재생", "다시 틀어", "이어 재생", "이어 틀어",
+    # Phase 50: "보던/듣던 교육" 패턴 추가
+    "보던 교육", "듣던 교육", "보던 강의", "듣던 강의",
+    "다시 보고", "다시 듣고", "다시 보기", "다시 듣기",
+    # Phase 50: 최근/마지막 시청 기록 패턴 추가
+    "최근에 본", "최근에 보던", "최근에 듣던", "최근 본", "최근 보던",
+    "마지막에 본", "마지막에 보던", "마지막에 듣던", "마지막 본", "마지막 보던",
+    "마지막에 들은", "마지막에 듣던", "마지막 듣던",
+])
+
 # HR/근태/복지/연차 개인화 키워드 (BACKEND_STATUS - HR)
+# Phase 50: 개인화 질문 패턴 대폭 확장 (연차/휴가/복지 조회 질문)
 HR_PERSONAL_KEYWORDS = frozenset([
-    "내 연차", "나의 연차", "연차 잔여", "연차 남은",
-    "휴가 잔여", "휴가 남은", "내 휴가",
+    # 연차 개인화 패턴 (Phase 50 확장)
+    "내 연차", "나의 연차", "연차 잔여", "연차 남은", "남은 연차", "잔여 연차",
+    "연차 며칠", "연차 얼마", "연차 몇", "연차 확인", "연차 조회",
+    "연차가 며칠", "연차가 얼마", "연차가 몇",
+    # 휴가 개인화 패턴 (Phase 50 확장)
+    "휴가 잔여", "휴가 남은", "내 휴가", "남은 휴가", "잔여 휴가",
+    "휴가 며칠", "휴가 얼마", "휴가 몇", "휴가 확인", "휴가 조회",
+    "휴가가 며칠", "휴가가 얼마", "휴가가 몇",
+    # 급여 패턴
     "급여", "월급", "봉급", "내 급여", "급여명세",
+    # 근태 패턴
     "근태", "출근", "퇴근", "내 근태", "근태현황",
+    # 복지/포인트 패턴 (Phase 50 확장)
     "복지", "복지포인트", "포인트 잔액", "내 포인트",
+    "포인트 얼마", "포인트 조회", "포인트 확인",
+    "식대", "식대 잔액", "식대 얼마", "식대 조회",
+    # 일반 개인정보 조회 패턴
     "내 정보", "나의 정보", "내 현황", "나의 현황",
     "내가 얼마", "내 잔여", "나 몇 개",
 ])
@@ -168,10 +213,12 @@ QUIZ_START_KEYWORDS = frozenset([
 ])
 
 # 퀴즈 제출 키워드 (QUIZ_SUBMIT)
+# 주의: "완료"는 "미완료"에도 매칭되므로 더 구체적인 표현 사용
 QUIZ_SUBMIT_KEYWORDS = frozenset([
     "퀴즈 제출", "답안 제출", "정답 제출",
     "채점해", "채점 해", "점수 확인",
-    "제출할게", "제출합니다", "완료",
+    "제출할게", "제출합니다",
+    "퀴즈 완료", "시험 완료", "테스트 완료",
 ])
 
 # 퀴즈 생성 키워드 (QUIZ_GENERATION)
@@ -179,6 +226,44 @@ QUIZ_GENERATION_KEYWORDS = frozenset([
     "퀴즈 생성", "문제 생성", "문항 생성",
     "퀴즈 만들", "문제 만들", "시험 만들",
     "퀴즈 출제", "문제 출제",
+])
+
+# 퀴즈 점수/평균 비교 키워드 (QUIZ_SCORE_CHECK - Q5)
+QUIZ_SCORE_KEYWORDS = frozenset([
+    "평균 점수", "내 평균", "나의 평균", "평균 비교",
+    "부서 평균", "전사 평균", "회사 평균", "팀 평균",
+    "점수 비교", "성적 비교", "퀴즈 평균", "시험 평균",
+    "내 점수 어때", "점수가 어때", "평균이 어때",
+    "다른 부서", "다른 팀", "우리 부서 평균",
+])
+
+# 퀴즈 미완료/재응시 조회 키워드 (QUIZ_PENDING_CHECK - 개인화)
+QUIZ_PENDING_KEYWORDS = frozenset([
+    # 미완료/미응시 패턴
+    "안 푼 퀴즈", "안푼 퀴즈", "미완료 퀴즈", "미응시 퀴즈",
+    "남은 퀴즈", "남아있는 퀴즈", "안 본 시험", "안본 시험",
+    # 재응시/다시 풀기 패턴
+    "다시 풀어야", "재응시", "재시험", "다시 봐야",
+    "풀어야 할 퀴즈", "봐야 할 시험", "응시해야 할",
+    # 퀴즈 현황 조회 패턴
+    "퀴즈 현황", "시험 현황", "내 퀴즈", "나의 퀴즈",
+    "퀴즈 목록", "시험 목록", "퀴즈 있", "시험 있",
+])
+
+# 퀴즈 문맥 키워드 (치명 액션 판정 시 오탐 방지용)
+# "채점해", "점수 확인" 같은 범용 키워드가 퀴즈 외 맥락에서 매칭되지 않도록
+QUIZ_CONTEXT_KEYWORDS = frozenset(["퀴즈", "시험", "테스트"])
+
+# HR 할 일/미완료 항목 키워드 (HR_TODO_CHECK - Q20)
+# 주의: query가 lower()로 변환되므로 키워드도 소문자로 정의
+# 범용 키워드("올해 할 일", "해야 할 일")는 EDU와 충돌하므로 제외
+HR_TODO_KEYWORDS = frozenset([
+    # HR 명시 키워드
+    "hr 할 일", "인사 할 일", "hr 투두", "hr todo",
+    "미완료 hr", "미완료 인사", "인사 업무",
+    # HR 고유 업무 키워드
+    "연말정산", "성과 평가", "인사 평가",
+    "서류 제출", "인사 서류", "hr 업무",
 ])
 
 # 일반 잡담 키워드 (GENERAL_CHAT)
@@ -366,12 +451,22 @@ class RuleRouter:
         명확하지 않은 패턴:
         - 교육 키워드 + 애매한 동사
         - 단, EDU_CONTENT_KEYWORDS나 EDU_STATUS_KEYWORDS에 명확히 해당하면 제외
+
+        Phase 50: EDU_RESUME_KEYWORDS, QUIZ 키워드도 명확한 개인화 패턴으로 인식
         """
         # 먼저 명확한 키워드가 있는지 체크
         if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
             return False  # 명확히 교육 내용 질문
         if self._contains_any(query_lower, EDU_STATUS_KEYWORDS):
             return False  # 명확히 교육 현황 질문
+        # Phase 50: 이어보기/다시보기 패턴도 명확한 개인화 질문
+        if self._contains_any(query_lower, EDU_RESUME_KEYWORDS):
+            return False  # 명확히 교육 이어보기/재생 위치 질문
+        # Phase 50: 퀴즈 점수/미완료 조회도 명확한 개인화 질문
+        if self._contains_any(query_lower, QUIZ_SCORE_KEYWORDS):
+            return False  # 명확히 퀴즈 점수 조회 질문
+        if self._contains_any(query_lower, QUIZ_PENDING_KEYWORDS):
+            return False  # 명확히 퀴즈 미완료 조회 질문
 
         # 교육 키워드 + 애매한 동사 조합 체크
         has_edu_keyword = self._contains_any(query_lower, EDU_AMBIGUOUS_KEYWORDS)
@@ -442,21 +537,28 @@ class RuleRouter:
             )
 
         # QUIZ_SUBMIT 체크
+        # 오탐 방지: "채점해", "점수 확인" 같은 범용 키워드는 퀴즈 문맥이 있어야만 매칭
         if self._contains_any(query_lower, QUIZ_SUBMIT_KEYWORDS):
-            debug_info.rule_hits.append("QUIZ_SUBMIT")
-            debug_info.keywords.extend(
-                [kw for kw in QUIZ_SUBMIT_KEYWORDS if kw in query_lower]
-            )
-            return RouterResult(
-                tier0_intent=Tier0Intent.BACKEND_STATUS,
-                domain=RouterDomain.QUIZ,
-                route_type=RouterRouteType.BACKEND_API,
-                sub_intent_id=SubIntentId.QUIZ_SUBMIT.value,
-                confidence=0.95,
-                requires_confirmation=True,
-                confirmation_prompt=ConfirmationTemplates.QUIZ_SUBMIT,
-                debug=debug_info,
-            )
+            # 퀴즈 문맥 확인 (키워드에 "퀴즈/시험/테스트"가 포함되어 있으면 자동 통과)
+            has_quiz_context = self._contains_any(query_lower, QUIZ_CONTEXT_KEYWORDS)
+            if not has_quiz_context:
+                # 퀴즈 문맥 없음 → 치명 액션으로 판정하지 않음 (다른 라우팅으로 진행)
+                debug_info.rule_hits.append("QUIZ_SUBMIT_SKIPPED_NO_CONTEXT")
+            else:
+                debug_info.rule_hits.append("QUIZ_SUBMIT")
+                debug_info.keywords.extend(
+                    [kw for kw in QUIZ_SUBMIT_KEYWORDS if kw in query_lower]
+                )
+                return RouterResult(
+                    tier0_intent=Tier0Intent.BACKEND_STATUS,
+                    domain=RouterDomain.QUIZ,
+                    route_type=RouterRouteType.BACKEND_API,
+                    sub_intent_id=SubIntentId.QUIZ_SUBMIT.value,
+                    confidence=0.95,
+                    requires_confirmation=True,
+                    confirmation_prompt=ConfirmationTemplates.QUIZ_SUBMIT,
+                    debug=debug_info,
+                )
 
         # QUIZ_GENERATION 체크
         if self._contains_any(query_lower, QUIZ_GENERATION_KEYWORDS):
@@ -593,6 +695,21 @@ class RuleRouter:
                 debug=debug_info,
             )
 
+        # 1-1. HR 할 일/미완료 항목 조회 (Q20 개인화) - EDU_STATUS보다 먼저 체크
+        if self._contains_any(query_lower, HR_TODO_KEYWORDS):
+            debug_info.rule_hits.append("HR_TODO_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in HR_TODO_KEYWORDS if kw in query_lower]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.HR,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.HR_TODO_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
         # 2. 교육 현황 조회 (개인화)
         if self._contains_any(query_lower, EDU_STATUS_KEYWORDS):
             debug_info.rule_hits.append("EDU_STATUS")
@@ -604,6 +721,51 @@ class RuleRouter:
                 domain=RouterDomain.EDU,
                 route_type=RouterRouteType.BACKEND_API,
                 sub_intent_id=SubIntentId.EDU_STATUS_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
+        # 2-1. 교육 이어보기/재생 위치 조회 (개인화)
+        if self._contains_any(query_lower, EDU_RESUME_KEYWORDS):
+            debug_info.rule_hits.append("EDU_RESUME_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in EDU_RESUME_KEYWORDS if kw in query_lower]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.EDU,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.EDU_RESUME_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
+        # 2-2. 퀴즈 점수/평균 비교 조회 (Q5 개인화)
+        if self._contains_any(query_lower, QUIZ_SCORE_KEYWORDS):
+            debug_info.rule_hits.append("QUIZ_SCORE_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in QUIZ_SCORE_KEYWORDS if kw in query_lower]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.QUIZ,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.QUIZ_SCORE_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
+        # 2-3. 퀴즈 미완료/재응시 조회 (개인화)
+        if self._contains_any(query_lower, QUIZ_PENDING_KEYWORDS):
+            debug_info.rule_hits.append("QUIZ_PENDING_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in QUIZ_PENDING_KEYWORDS if kw in query_lower]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.QUIZ,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.QUIZ_PENDING_CHECK.value,
                 confidence=0.9,
                 debug=debug_info,
             )
