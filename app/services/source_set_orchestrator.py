@@ -466,39 +466,107 @@ class SourceSetOrchestrator:
                     fail_reason=f"INVALID_DOMAIN: {doc.domain}",
                 )
 
-            # 1. RAGFlow에 문서 업로드
-            logger.info(f"Uploading document to RAGFlow: doc_id={doc.document_id}")
-            file_name = doc.source_url.split("/")[-1].split("?")[0] or f"{doc.document_id}.pdf"
-
-            upload_result = await self._ragflow_client.upload_document(
+            # 1. RAGFlow에 문서 ingest (업로드 + 파싱 통합)
+            logger.info(f"Ingesting document to RAGFlow: doc_id={doc.document_id}")
+            
+            ingest_result = await self._ragflow_client.ingest_document(
                 dataset_id=dataset_id,
+                doc_id=doc.document_id,
                 file_url=doc.source_url,
-                file_name=file_name,
+                version=None,  # 필요시 추가
+                meta={
+                    "domain": doc.domain,
+                    "source_set_id": job.source_set_id if job else None,
+                },
             )
-            ragflow_doc_id = upload_result.get("id")
 
-            if not ragflow_doc_id:
+            ingest_id = ingest_result.get("ingestId")
+            if not ingest_id:
                 return DocumentProcessingResult(
                     document_id=doc.document_id,
                     success=False,
-                    fail_reason="RAGFlow document upload failed: no document ID returned",
+                    fail_reason="RAGFlow ingest failed: no ingest ID returned",
                 )
 
-            logger.info(f"Document uploaded: doc_id={doc.document_id}, ragflow_id={ragflow_doc_id}")
+            logger.info(f"Document ingest accepted: doc_id={doc.document_id}, ingest_id={ingest_id}")
 
-            # 2. 파싱 트리거
-            await self._ragflow_client.trigger_parsing(
-                dataset_id=dataset_id,
-                document_ids=[ragflow_doc_id],
+            # 2. Ingest 완료 대기 - 문서 리스트에서 docId로 문서 찾기
+            import asyncio
+            max_wait_time = settings.RAGFLOW_POLL_TIMEOUT_SEC
+            poll_interval = settings.RAGFLOW_POLL_INTERVAL_SEC
+            start_time = asyncio.get_event_loop().time()
+            
+            logger.info(
+                f"Starting polling for document: doc_id={doc.document_id}, "
+                f"poll_interval={poll_interval}s, timeout={max_wait_time}s"
             )
+            
+            ragflow_doc_id = None
+            final_status = None
+            chunk_count = 0
+            poll_count = 0
+            ingest_start_time = asyncio.get_event_loop().time()  # ingest 시작 시간 기록
+            
+            while (asyncio.get_event_loop().time() - start_time) < max_wait_time:
+                await asyncio.sleep(poll_interval)
+                poll_count += 1
+                elapsed = asyncio.get_event_loop().time() - start_time
+                time_since_ingest = asyncio.get_event_loop().time() - ingest_start_time
+                
+                logger.debug(
+                    f"Polling attempt {poll_count}: doc_id={doc.document_id}, "
+                    f"elapsed={elapsed:.1f}s, time_since_ingest={time_since_ingest:.1f}s"
+                )
+                
+                # 문서 리스트에서 docId로 문서 찾기
+                found_doc = await self._ragflow_client.find_document_by_doc_id(
+                    dataset_id=dataset_id,
+                    doc_id=doc.document_id,
+                )
+                
+                if found_doc:
+                    ragflow_doc_id = found_doc.get("id")
+                    if ragflow_doc_id:
+                        # 문서 상태 확인
+                        try:
+                            doc_status = await self._ragflow_client.get_document_status(
+                                dataset_id=dataset_id,
+                                document_id=ragflow_doc_id,
+                            )
+                            final_status = doc_status.get("run")
+                            chunk_count = doc_status.get("chunk_count", 0)
+                            
+                            logger.info(
+                                f"Document status check: doc_id={doc.document_id}, "
+                                f"ragflow_id={ragflow_doc_id}, status={final_status}, "
+                                f"chunks={chunk_count}"
+                            )
+                            
+                            if final_status == "DONE":
+                                logger.info(f"Document ingest completed: doc_id={doc.document_id}, ragflow_id={ragflow_doc_id}")
+                                break
+                            elif final_status == "FAIL":
+                                logger.error(f"Document ingest failed: doc_id={doc.document_id}")
+                                return DocumentProcessingResult(
+                                    document_id=doc.document_id,
+                                    success=False,
+                                    fail_reason="RAGFlow ingest failed",
+                                )
+                        except Exception as e:
+                            logger.warning(f"Error checking document status: doc_id={doc.document_id}, error={e}")
+                            continue
+                    else:
+                        logger.debug(f"Document found but no ID: doc_id={doc.document_id}")
+                else:
+                    logger.debug(f"Document not found yet: doc_id={doc.document_id}, attempt={poll_count}")
 
-            # 3. Polling으로 완료 대기
-            final_status, chunk_count = await self._poll_document_status(
-                dataset_id=dataset_id,
-                document_id=ragflow_doc_id,
-                poll_interval=settings.RAGFLOW_POLL_INTERVAL_SEC,
-                timeout=settings.RAGFLOW_POLL_TIMEOUT_SEC,
-            )
+            if not ragflow_doc_id:
+                logger.warning(f"Could not find document after ingest: doc_id={doc.document_id}")
+                return DocumentProcessingResult(
+                    document_id=doc.document_id,
+                    success=False,
+                    fail_reason="RAGFlow ingest completed but document not found",
+                )
 
             if final_status != "DONE":
                 fail_reason = f"RAGFlow parsing {final_status}"
@@ -509,7 +577,7 @@ class SourceSetOrchestrator:
                     fail_reason=fail_reason,
                 )
 
-            # 4. 청크 조회
+            # 3. 청크 조회
             logger.info(f"Fetching chunks: doc_id={doc.document_id}, count={chunk_count}")
             chunks = await self._fetch_all_chunks(
                 dataset_id=dataset_id,

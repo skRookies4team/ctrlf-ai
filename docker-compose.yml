@@ -119,6 +119,10 @@ services:
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://58.127.241.84:1237}
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
+      # BACKEND_INTERNAL_TOKEN은 RAGFlow 서버의 AI_TO_RAGFLOW_TOKEN과 일치해야 함
+      # RAGFlow 서버는 AI_TO_RAGFLOW_TOKEN=${RAGFLOW_API_KEY}로 설정되어 있음
+      # 코드에서 BACKEND_INTERNAL_TOKEN이 없으면 RAGFLOW_API_KEY를 사용하도록 처리됨
+      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
     # Real 모드에서는 Mock 서비스 의존성 없음
 
   # =============================================================================
