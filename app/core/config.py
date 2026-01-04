@@ -245,7 +245,7 @@ class Settings(BaseSettings):
     # EDUCATION 도메인 검색 시 허용할 dataset_id 목록 (쉼표 구분)
     # Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
     RAG_EDUCATION_DATASET_IDS: str = (
-        "정보보안교육,성희롱예방교육,장애인식개선교육,직장내괴롭힘예방교육,개인정보보호교육"
+        "직무교육,장애인인식개선교육,직장내괴롭힘교육,직장내성희롱교육,정보보안교육,사내규정"
     )
 
     # =========================================================================
@@ -520,6 +520,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",  # .env에 정의되지 않은 추가 필드 무시
+        env_ignore_empty=True,  # 빈 환경변수 무시
     )
 
     # =========================================================================

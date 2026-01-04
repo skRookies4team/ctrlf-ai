@@ -92,7 +92,7 @@ from app.models.router_types import (
     Tier0Intent,
     TIER0_ROUTING_POLICY,
 )
-from app.clients.ab_milvus_client import get_client_info_by_model
+# from app.clients.ab_milvus_client import get_client_info_by_model  # 모듈이 존재하지 않음
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, LLMCompletionResult, get_llm_client
 from app.clients.personalization_client import PersonalizationClient
@@ -1386,7 +1386,12 @@ class ChatService:
 
         # Step 8: Generate and send AI log (fire-and-forget)
         # Phase AB: A/B 테스트 정보 조회 (model 필드 직접 사용)
-        ab_info = get_client_info_by_model(ab_model)
+        # TODO: get_client_info_by_model 함수 구현 필요
+        ab_info = {
+            "model": ab_model,
+            "embedding_model": None,
+            "collection_name": None,
+        }
         await self._send_ai_log(
             req=req,
             response_answer=final_answer,
