@@ -89,7 +89,10 @@ class RAGFlowIngestClient:
         """
         settings = get_settings()
         self._base_url = (base_url or settings.ragflow_base_url or "").rstrip("/")
-        self._internal_token = internal_token or settings.BACKEND_INTERNAL_TOKEN
+        # RAGFlow 내부 API용 토큰: internal_token이 명시적으로 제공되면 사용,
+        # 그렇지 않으면 RAGFLOW_API_KEY 사용 (RAGFlow 서버는 AI_TO_RAGFLOW_TOKEN=${RAGFLOW_API_KEY}로 설정됨)
+        # BACKEND_INTERNAL_TOKEN은 백엔드 서버와의 통신용이므로 사용하지 않음
+        self._internal_token = internal_token or settings.RAGFLOW_API_KEY
         self._timeout = timeout
         self._external_client = client
 

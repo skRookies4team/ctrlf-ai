@@ -546,14 +546,17 @@ class RagflowClient:
                     )
                 
                 # main.py는 display_name으로 doc_id를 저장하므로, name 필드와 정확히 일치해야 함
+                # 단, main.py에서 확장자를 추가할 수 있으므로 확장자를 제거하고 비교
                 for doc in documents:
                     if not isinstance(doc, dict):
                         continue
                     
                     # 1. name 필드가 doc_id와 정확히 일치하는지 확인 (가장 정확)
-                    # main.py에서 display_name=effective_doc_id로 저장하므로
+                    # main.py에서 display_name=effective_doc_id 또는 effective_doc_id.pdf로 저장할 수 있음
                     doc_name = doc.get("name", "")
-                    if doc_name == doc_id:
+                    # 확장자를 제거한 name과 doc_id 비교
+                    doc_name_without_ext = doc_name.rsplit(".", 1)[0] if "." in doc_name else doc_name
+                    if doc_name == doc_id or doc_name_without_ext == doc_id:
                         logger.debug(f"Found document by exact name match: doc_id={doc_id}, name={doc_name}, ragflow_id={doc.get('id')}")
                         return doc
                     
@@ -612,6 +615,18 @@ class RagflowClient:
                             reverse=True
                         )
                         if sorted_docs:
+                            # 최신 5개 문서의 정보 로깅
+                            logger.debug(f"Top 5 latest documents (sorted by create_time):")
+                            for i, doc in enumerate(sorted_docs[:5], 1):
+                                doc_create_time = int(doc.get("create_time", 0))
+                                time_diff_seconds = (current_time_ms - doc_create_time) / 1000
+                                logger.debug(
+                                    f"  {i}. name={doc.get('name')}, "
+                                    f"create_time={doc_create_time}, "
+                                    f"id={doc.get('id')}, "
+                                    f"time_diff={time_diff_seconds:.1f}s ({time_diff_seconds/3600:.2f} hours ago)"
+                                )
+                            
                             latest_doc = sorted_docs[0]
                             latest_create_time = int(latest_doc.get("create_time", 0))
                             time_diff_seconds = (current_time_ms - latest_create_time) / 1000
@@ -620,24 +635,37 @@ class RagflowClient:
                                 f"Latest document: name={latest_doc.get('name')}, "
                                 f"create_time={latest_create_time}, "
                                 f"id={latest_doc.get('id')}, "
-                                f"time_diff={time_diff_seconds:.1f}s"
+                                f"time_diff={time_diff_seconds:.1f}s ({time_diff_seconds/3600:.2f} hours ago)"
                             )
                             
-                            # 최근 60초 이내에 생성된 문서이고, 아직 처리 중이거나 name이 설정되지 않았을 수 있음
-                            # ingest 직후에는 문서가 리스트에 나타나지 않을 수 있으므로, 
+                            # 최근 5분 이내에 생성된 문서를 확인
+                            # RAGFlow 문서 리스트 API가 새 문서를 즉시 반환하지 않을 수 있으므로,
                             # 최신 문서가 ingest 이후에 생성된 것인지 확인
-                            if time_diff_seconds < 60:
+                            if time_diff_seconds < 300:  # 5분 이내
                                 logger.debug(
                                     f"Found recent document (created {time_diff_seconds:.1f}s ago), "
-                                    f"but name doesn't match doc_id. "
-                                    f"This might be the ingested document before name is set."
+                                    f"name={latest_doc.get('name')}, "
+                                    f"doc_id={doc_id}. "
+                                    f"Checking if this might be the ingested document."
                                 )
-                                # name이 아직 설정되지 않았을 수 있으므로, 최신 문서를 반환
-                                # (나중에 name이 업데이트되면 정확히 매칭됨)
-                                if not latest_doc.get("name") or latest_doc.get("name") == "":
+                                # 최신 문서의 name에서 확장자를 제거하고 doc_id와 비교
+                                latest_name = latest_doc.get("name", "")
+                                latest_name_without_ext = latest_name.rsplit(".", 1)[0] if "." in latest_name else latest_name
+                                
+                                # name이 doc_id와 일치하거나, name이 비어있거나, 
+                                # 또는 최신 문서가 ingest 이후에 생성된 것으로 보이면 반환
+                                if (latest_name == doc_id or 
+                                    latest_name_without_ext == doc_id or 
+                                    not latest_name or 
+                                    latest_name == "" or
+                                    time_diff_seconds < 120):  # 2분 이내면 무조건 반환
                                     logger.info(
-                                        f"Returning latest document with empty name: "
-                                        f"id={latest_doc.get('id')}, create_time={latest_create_time}"
+                                        f"Returning recent document as potential match: "
+                                        f"name={latest_name}, "
+                                        f"doc_id={doc_id}, "
+                                        f"id={latest_doc.get('id')}, "
+                                        f"create_time={latest_create_time}, "
+                                        f"time_diff={time_diff_seconds:.1f}s"
                                     )
                                     return latest_doc
                     except Exception as e:
