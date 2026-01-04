@@ -27,6 +27,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # 베이스 서비스는 직접 실행하지 않음 (extends용)
+    # _base 프로필은 절대 사용하지 않으므로 이 서비스는 직접 시작되지 않음
+    profiles:
+      - _base
     # 포트는 프로필별 서비스에서 설정 (충돌 방지)
     environment:
       - APP_NAME=ctrlf-ai-gateway
