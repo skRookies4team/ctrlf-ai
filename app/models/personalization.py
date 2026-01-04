@@ -94,10 +94,11 @@ class PersonalizationSubIntentId(str, Enum):
     Q20 = "Q20"  # 올해 HR 할 일 (미완료)
 
 
-# 데모 완전 구현 대상 (5개)
+# 데모 완전 구현 대상 (6개)
 PRIORITY_SUB_INTENTS = frozenset([
     PersonalizationSubIntentId.Q1.value,
     PersonalizationSubIntentId.Q3.value,
+    PersonalizationSubIntentId.Q4.value,   # 교육 이어보기 (EDU_RESUME_CHECK)
     PersonalizationSubIntentId.Q9.value,
     PersonalizationSubIntentId.Q11.value,
     PersonalizationSubIntentId.Q14.value,
@@ -126,26 +127,38 @@ class PersonalizationErrorType(str, Enum):
 
     Attributes:
         NOT_FOUND: 해당 기간에 조회할 데이터가 없음
-        TIMEOUT: 조회 지연
+        TIMEOUT: 조회 지연 (ConnectTimeout, ReadTimeout, WriteTimeout, PoolTimeout)
+        NETWORK_ERROR: 네트워크 연결 실패 (ConnectError, RemoteProtocolError)
+        HTTP_ERROR: HTTP 응답 에러 (2xx/404 외 상태코드)
+        CONFIG_ERROR: 설정 오류 (예: BACKEND_BASE_URL 미설정)
         PARTIAL: 일부 정보만 가져올 수 있음
         NOT_IMPLEMENTED: 아직 구현되지 않은 인텐트
+        UNEXPECTED_ERROR: 예상치 못한 에러 (JSON 파싱 실패, 스키마 불일치 등)
     """
 
     NOT_FOUND = "NOT_FOUND"
     TIMEOUT = "TIMEOUT"
+    NETWORK_ERROR = "NETWORK_ERROR"
+    HTTP_ERROR = "HTTP_ERROR"
+    CONFIG_ERROR = "CONFIG_ERROR"
     PARTIAL = "PARTIAL"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
+    UNEXPECTED_ERROR = "UNEXPECTED_ERROR"
 
 
 # 에러 타입별 사용자 메시지 템플릿
 ERROR_RESPONSE_TEMPLATES: Dict[str, str] = {
     PersonalizationErrorType.NOT_FOUND.value: "해당 기간에 조회할 데이터가 없어요.",
     PersonalizationErrorType.TIMEOUT.value: "지금 조회가 지연되고 있어요. 잠시 후 다시 시도해 주세요.",
+    PersonalizationErrorType.NETWORK_ERROR.value: "서버 연결에 실패했어요. 잠시 후 다시 시도해 주세요.",
+    PersonalizationErrorType.HTTP_ERROR.value: "서버 응답 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
+    PersonalizationErrorType.CONFIG_ERROR.value: "시스템 설정 오류가 발생했어요. 관리자에게 문의해 주세요.",
     PersonalizationErrorType.PARTIAL.value: "일부 정보만 가져올 수 있었어요. 가능한 범위에서 정리해 드릴게요.",
     PersonalizationErrorType.NOT_IMPLEMENTED.value: (
         "현재 데모 범위에서는 지원하지 않는 질문이에요. "
         "지원되는 질문 예시: 남은 연차, 복지 포인트 잔액, 미이수 필수 교육, 이번 주 할 일 등"
     ),
+    PersonalizationErrorType.UNEXPECTED_ERROR.value: "예상치 못한 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
 }
 
 

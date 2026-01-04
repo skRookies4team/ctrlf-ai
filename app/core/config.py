@@ -202,6 +202,14 @@ class Settings(BaseSettings):
     CHAT_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
     SCRIPT_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
 
+    # =========================================================================
+    # 개인화 API 모드 설정
+    # =========================================================================
+    # - mock: 무조건 mock 데이터 사용 (개발/데모용)
+    # - real: 무조건 실 백엔드 호출 (실패 시 에러 반환)
+    # - auto: 실 백엔드 호출, 네트워크 실패 시 mock fallback (기본값)
+    PERSONALIZATION_MODE: Literal["mock", "real", "auto"] = "auto"
+
     # 임베딩 계약 검증 (앱 시작 시 dim 불일치 감지)
     # True: dim 불일치 시 서버 기동 실패 (Fail-fast)
     # False: 경고만 출력하고 계속 진행
@@ -319,10 +327,11 @@ class Settings(BaseSettings):
 
     # =========================================================================
     # A/B 테스트: SRoberta 임베딩 설정
+    # ⚠️ RAGFlow(ctrlf-ragflow) 설정과 동기화 필수!
     # =========================================================================
-    # SRoberta 임베딩 모델 (sentence-transformers 호환)
-    SROBERTA_EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    SROBERTA_EMBED_DIM: int = 384
+    # SRoberta 임베딩 모델 (RAGFlow sample/embedding_provider.py와 동일)
+    SROBERTA_EMBED_MODEL: str = "jhgan/ko-sroberta-multitask"
+    SROBERTA_EMBED_DIM: int = 768
 
     # SRoberta 임베딩 서버 URL (별도 서버 사용 시)
     SROBERTA_EMBED_URL: Optional[str] = None
