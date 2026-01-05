@@ -77,6 +77,8 @@ from app.core.metrics import (
     metrics,
 )
 from app.models.chat import (
+    ChatAction,
+    ChatActionType,
     ChatAnswerMeta,
     ChatRequest,
     ChatResponse,
@@ -1966,7 +1968,30 @@ class ChatService:
             )
             final_answer = pii_output.masked_text
 
-            # 4) ChatResponse 생성
+            # 4) Q4 (EDU_RESUME_CHECK) 처리: 영상 재생 action 생성
+            action: Optional[ChatAction] = None
+            if q == "Q4" and facts.items:
+                # 마지막 시청 영상 정보에서 action 생성
+                last_video = facts.items[0] if isinstance(facts.items, list) else None
+                if last_video and isinstance(last_video, dict):
+                    education_id = last_video.get("education_id") or last_video.get("educationId")
+                    video_id = last_video.get("video_id") or last_video.get("videoId")
+                    if education_id and video_id:
+                        action = ChatAction(
+                            type=ChatActionType.PLAY_VIDEO,
+                            education_id=str(education_id),
+                            video_id=str(video_id),
+                            resume_position_seconds=last_video.get("resume_position_seconds") or last_video.get("resumePositionSeconds") or last_video.get("resumePosition"),
+                            education_title=last_video.get("education_title") or last_video.get("educationTitle"),
+                            video_title=last_video.get("video_title") or last_video.get("videoTitle"),
+                            progress_percent=last_video.get("progress_percent") or last_video.get("progressPercent"),
+                        )
+                        logger.info(
+                            f"Q4 action created: education_id={education_id}, video_id={video_id}, "
+                            f"resume_position={action.resume_position_seconds}"
+                        )
+
+            # 5) ChatResponse 생성
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
             return ChatResponse(
@@ -1984,6 +2009,8 @@ class ChatService:
                     rag_source_count=0,
                     # 개인화 관련 메타 정보 추가
                     personalization_q=q,
+                    # 프론트엔드 액션 (영상 재생 등)
+                    action=action,
                 ),
             )
 

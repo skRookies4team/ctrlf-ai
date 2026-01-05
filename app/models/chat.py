@@ -10,9 +10,63 @@ Usage:
     - ChatResponse: AI Gateway returns answer with sources and metadata
 """
 
+from enum import Enum
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# Chat Action Types (프론트엔드 액션 지시)
+# =============================================================================
+
+
+class ChatActionType(str, Enum):
+    """프론트엔드에서 실행할 액션 타입.
+
+    AI 응답에 포함되어 프론트엔드에서 자동으로 특정 동작을 수행하도록 지시합니다.
+    """
+
+    PLAY_VIDEO = "PLAY_VIDEO"  # 교육 영상 재생
+    OPEN_EDU_PANEL = "OPEN_EDU_PANEL"  # 교육 패널 열기
+    OPEN_QUIZ = "OPEN_QUIZ"  # 퀴즈 시작
+
+
+class ChatAction(BaseModel):
+    """프론트엔드에서 실행할 액션 정보.
+
+    AI 응답의 meta.action 필드에 포함되어 프론트엔드에서 자동 동작을 수행합니다.
+    예: 교육 영상 이어보기 요청 시 해당 영상을 자동 재생.
+
+    Attributes:
+        type: 액션 타입 (PLAY_VIDEO, OPEN_EDU_PANEL, OPEN_QUIZ)
+        education_id: 교육 ID (영상 재생 시 필수)
+        video_id: 영상 ID (영상 재생 시 필수)
+        resume_position_seconds: 이어보기 시작 위치(초)
+        education_title: 교육 제목 (UI 표시용)
+        video_title: 영상 제목 (UI 표시용)
+        progress_percent: 현재 진도율(%)
+    """
+
+    type: ChatActionType = Field(..., description="액션 타입")
+    education_id: Optional[str] = Field(
+        default=None, description="교육 ID (영상 재생 시 필수)"
+    )
+    video_id: Optional[str] = Field(
+        default=None, description="영상 ID (영상 재생 시 필수)"
+    )
+    resume_position_seconds: Optional[int] = Field(
+        default=None, description="이어보기 시작 위치(초)"
+    )
+    education_title: Optional[str] = Field(
+        default=None, description="교육 제목 (UI 표시용)"
+    )
+    video_title: Optional[str] = Field(
+        default=None, description="영상 제목 (UI 표시용)"
+    )
+    progress_percent: Optional[float] = Field(
+        default=None, description="현재 진도율(%)"
+    )
 
 
 class ChatMessage(BaseModel):
@@ -47,6 +101,7 @@ class ChatRequest(BaseModel):
         domain: Query domain for routing (POLICY, INCIDENT, EDUCATION, etc.)
         channel: Request channel (WEB, MOBILE, etc.)
         messages: Conversation history (last element is the latest message)
+        model: A/B test embedding model selection (optional, default: openai)
     """
 
     session_id: str = Field(description="Chat session ID managed by backend")
@@ -66,6 +121,11 @@ class ChatRequest(BaseModel):
     )
     messages: List[ChatMessage] = Field(
         description="Conversation history (last element is the latest message)"
+    )
+    # Phase AB: A/B 테스트 임베딩 모델 선택
+    model: Optional[Literal["openai", "sroberta"]] = Field(
+        default=None,
+        description="A/B test embedding model: 'openai' (text-embedding-3-large) or 'sroberta' (ko-sroberta-multitask). Default: openai",
     )
 
 
@@ -273,6 +333,11 @@ class ChatAnswerMeta(BaseModel):
     pending_sub_intent_id: Optional[str] = Field(
         default=None,
         description="Pending sub_intent_id for confirmation flow (QUIZ_START, QUIZ_SUBMIT, QUIZ_GENERATION)",
+    )
+    # 프론트엔드 액션 지시 (영상 재생, 퀴즈 시작 등)
+    action: Optional[ChatAction] = Field(
+        default=None,
+        description="Frontend action to execute (e.g., PLAY_VIDEO for auto-playing education video)",
     )
 
 
