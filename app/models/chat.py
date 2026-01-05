@@ -128,6 +128,12 @@ class ChatRequest(BaseModel):
         description="A/B test embedding model: 'openai' (text-embedding-3-large) or 'sroberta' (ko-sroberta-multitask). Default: openai",
     )
 
+    # LLM 프로바이더 선택 (관리자 대시보드에서 설정)
+    llm_model: Optional[Literal["exaone", "openai"]] = Field(
+        default=None,
+        description="LLM provider: 'exaone' (내부 EXAONE) or 'openai' (GPT). 미지정시 서버 기본값(exaone)",
+    )
+
 
 class ChatSource(BaseModel):
     """
@@ -225,6 +231,10 @@ class ChatAnswerMeta(BaseModel):
     )
     used_model: Optional[str] = Field(
         default=None, description="LLM model name used for generation"
+    )
+    llm_provider: Optional[str] = Field(
+        default=None,
+        description="LLM provider used: 'exaone' (내부) or 'openai' (GPT)",
     )
     route: Optional[str] = Field(
         default=None,

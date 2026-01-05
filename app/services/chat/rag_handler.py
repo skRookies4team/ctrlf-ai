@@ -360,7 +360,7 @@ def apply_low_relevance_gate(
     domain: str,
 ) -> Tuple[List["ChatSource"], Optional[str]]:
     """
-    Phase 48/50: 저관련 검색 결과를 필터링합니다. (L2 거리 기준)
+    Phase 48/50/52.1: 저관련 검색 결과를 필터링합니다. (L2 거리 기준)
 
     L2 거리: 낮을수록 유사함 (0 = 완전 일치)
     - min_score(최소 거리) = 가장 유사한 결과의 거리
@@ -370,9 +370,15 @@ def apply_low_relevance_gate(
     - score_gate: min_score > threshold 시에도 최소 1개는 유지 (soft gate)
     - anchor_gate: 미매칭 시에도 최소 ANCHOR_GATE_MIN_KEEP개는 유지
 
+    Phase 52.1 개선 (RAG 품질 게이트 강화):
+    - RAG_QUALITY_HARD_DROP_ENABLED=True면:
+      - Gate A': min_score > RAG_QUALITY_DROP_THRESHOLD → HARD_DROP (sources=[])
+      - Gate B: 앵커 키워드 미매칭 → HARD_DROP (sources=[])
+    - RAG가 억지로 근거 없는 정책 안내를 하는 것 방지
+
     두 가지 게이트를 적용:
-    A. L2 거리 soft 게이트: min_score > RAG_MAX_L2_DISTANCE → 경고만, 최소 1개 유지
-    B. 앵커 키워드 soft 게이트: 핵심어 미매칭 → 경고만, 최소 1개 유지
+    A. L2 거리 게이트: min_score > threshold → soft/hard 강등
+    B. 앵커 키워드 게이트: 핵심어 미매칭 → soft/hard 강등
 
     Args:
         sources: RAG 검색 결과
@@ -381,8 +387,8 @@ def apply_low_relevance_gate(
 
     Returns:
         Tuple[List[ChatSource], Optional[str]]:
-            - 필터링된 sources (최소 1개 보장)
-            - gate_reason (soft 강등 시 사유, 통과 시 None)
+            - 필터링된 sources
+            - gate_reason (강등 시 사유, 통과 시 None)
     """
     settings = get_settings()
 
@@ -400,8 +406,24 @@ def apply_low_relevance_gate(
     avg_score = sum(scores) / len(scores)
     max_l2_threshold = settings.RAG_MAX_L2_DISTANCE
 
-    # Phase 50: 안전장치 - 최소 유지 개수
+    # Phase 52.1: 품질 게이트 강화 설정
+    hard_drop_enabled = settings.RAG_QUALITY_HARD_DROP_ENABLED
+    hard_drop_threshold = settings.RAG_QUALITY_DROP_THRESHOLD
+
+    # Phase 50: 안전장치 - 최소 유지 개수 (soft gate용)
     min_keep = ANCHOR_GATE_MIN_KEEP
+
+    # Gate A': L2 거리 HARD 게이트 (Phase 52.1)
+    # min_score > hard_drop_threshold → 완전 drop (검색 결과가 너무 관련 없음)
+    if hard_drop_enabled and min_score > hard_drop_threshold:
+        query_safe = ascii_safe_preview(query, 50)
+        logger.warning(
+            f"[LowRelevanceGate] HARD_DROP by l2_distance_gate | "
+            f"min_score={min_score:.3f} > hard_threshold={hard_drop_threshold} (extremely far) | "
+            f"query='{query_safe}' | domain={domain} | "
+            f"avg_score={avg_score:.3f} | max_score={max_score:.3f} | top_k={len(sources)}"
+        )
+        return [], "l2_distance_hard_drop"
 
     # Gate A: L2 거리 soft 게이트 (최소 거리가 threshold보다 크면 = 너무 멀면)
     if min_score > max_l2_threshold:
@@ -417,12 +439,25 @@ def apply_low_relevance_gate(
         )
         return kept_sources, "min_l2_distance_above_threshold_soft"
 
-    # Gate B: 앵커 키워드 soft 게이트
+    # Gate B: 앵커 키워드 게이트
     anchor_keywords = extract_anchor_keywords(query)
     has_anchor_match = check_anchor_keywords_in_sources(anchor_keywords, sources)
 
     if not has_anchor_match:
-        # Phase 50: 완전 drop 대신 최소 min_keep개 유지
+        # Phase 52.1: hard_drop_enabled면 완전 drop
+        if hard_drop_enabled:
+            query_safe = ascii_safe_preview(query, 50)
+            keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}
+            logger.warning(
+                f"[LowRelevanceGate] HARD_DROP by anchor_gate | "
+                f"anchor_keywords={keywords_safe} not found in sources | "
+                f"query='{query_safe}' | domain={domain} | "
+                f"min_score={min_score:.3f} | avg_score={avg_score:.3f} | "
+                f"top_k={len(sources)}"
+            )
+            return [], "anchor_no_match_hard_drop"
+
+        # Phase 50: soft gate - 완전 drop 대신 최소 min_keep개 유지
         kept_sources = sources[:min_keep]
         query_safe = ascii_safe_preview(query, 50)
         keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}

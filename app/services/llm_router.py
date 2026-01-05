@@ -9,6 +9,10 @@ rule_router에서 낮은 신뢰도(confidence < 0.9)로 분류된 경우 사용�
 2. JSON 응답 파싱 및 유효성 검증
 3. 실패 시 ROUTE_UNKNOWN으로 폴백
 4. 애매한 경계 감지 및 되묻기 설정
+
+Phase 52 업데이트:
+- BACKEND_STATUS + 빈 sub_intent_id 폴백 게이트 추가
+- 무조건 되묻기 대신 조건부 RAG 폴백 (정책/절차형 → POLICY_QA, 교육형 → EDUCATION_QA)
 """
 
 import json
@@ -218,8 +222,8 @@ class LLMRouter:
             # JSON 파싱
             result = self._parse_response(response)
 
-            # 유효성 검증 및 보정
-            result = self._validate_and_fix(result)
+            # 유효성 검증 및 보정 (Phase 52: user_query 전달하여 폴백 게이트 활성화)
+            result = self._validate_and_fix(result, user_query)
 
             logger.info(
                 f"LLMRouter: intent={result.tier0_intent.value}, "
@@ -383,32 +387,45 @@ class LLMRouter:
             )
             return default
 
-    def _validate_and_fix(self, result: RouterResult) -> RouterResult:
+    def _validate_and_fix(
+        self, result: RouterResult, user_query: str = ""
+    ) -> RouterResult:
         """분류 결과를 검증하고 필요시 보정합니다.
 
         Args:
             result: 원본 분류 결과
+            user_query: 원본 사용자 질문 (Phase 52: 폴백 게이트용)
 
         Returns:
             RouterResult: 검증/보정된 결과
 
         규칙:
-        1. BACKEND_STATUS인데 sub_intent_id가 비어있으면 needs_clarify=true
+        1. BACKEND_STATUS + 빈 sub_intent_id → 조건부 RAG 폴백 게이트 (Phase 52)
         2. 치명 액션이면 requires_confirmation=true 강제
         3. route_type과 tier0_intent 일관성 검증
         """
-        # 규칙 1: BACKEND_STATUS + 빈 sub_intent_id → needs_clarify
+        # 규칙 1: BACKEND_STATUS + 빈 sub_intent_id → 조건부 RAG 폴백 (Phase 52)
+        # 무조건 되묻기 대신, 정책/절차형이면 POLICY_QA로, 교육형이면 EDUCATION_QA로 폴백
         if (
             result.tier0_intent == Tier0Intent.BACKEND_STATUS
             and not result.sub_intent_id
-            and not result.needs_clarify
         ):
-            logger.debug("BACKEND_STATUS without sub_intent_id, setting needs_clarify")
-            result.needs_clarify = True
-            result.clarify_question = (
-                "어떤 정보를 조회하시겠어요? "
-                "(연차 잔여, 교육 이수현황, 근태 현황 등)"
+            fallback_result = self._apply_backend_status_fallback_gate(
+                result, user_query
             )
+            if fallback_result:
+                return fallback_result
+            # 폴백 게이트가 적용되지 않으면 기존처럼 clarify
+            if not result.needs_clarify:
+                logger.debug(
+                    "BACKEND_STATUS without sub_intent_id, no fallback matched, "
+                    "setting needs_clarify"
+                )
+                result.needs_clarify = True
+                result.clarify_question = (
+                    "어떤 정보를 조회하시겠어요? "
+                    "(예: 연차 잔여, 교육 이수현황, 근태 현황, 복지 포인트 등)"
+                )
 
         # 규칙 2: 치명 액션 → requires_confirmation 강제
         if result.sub_intent_id in CRITICAL_ACTION_SUB_INTENTS:
@@ -446,3 +463,95 @@ class LLMRouter:
             result.route_type = expected_route
 
         return result
+
+    def _apply_backend_status_fallback_gate(
+        self, result: RouterResult, user_query: str
+    ) -> Optional[RouterResult]:
+        """Phase 52: BACKEND_STATUS + 빈 sub_intent_id 폴백 게이트.
+
+        무조건 되묻기 대신, 질문 내용에 따라 RAG로 폴백합니다:
+        - (절차/단계 단어) AND (보안/사고 힌트) → POLICY_QA (RAG_INTERNAL)
+        - (절차/단계 단어) AND (교육 힌트) → EDUCATION_QA (RAG_INTERNAL)
+        - 그 외 → None (기존 clarify 로직 적용)
+
+        리스크 1,2 대응:
+        - AND 조건으로 오탐 방지 ("사고싶어" → POLICY_QA 방지)
+        - 정규화된 텍스트로 매칭 ("어떻게해야" == "어떻게 해야")
+
+        Args:
+            result: 원본 분류 결과
+            user_query: 사용자 질문 텍스트
+
+        Returns:
+            Optional[RouterResult]: 폴백이 적용되면 새 결과, 아니면 None
+        """
+        if not user_query:
+            return None
+
+        query_lower = user_query.lower()
+        # 정규화 (공백 제거) - rule_router와 동일한 방식
+        query_normalized = re.sub(r"\s+", "", query_lower)
+
+        # --- AND 조건 기반 폴백 게이트 ---
+
+        # 절차/프로세스 단어 (정규화됨)
+        procedure_words_norm = {
+            "절차", "단계", "단계별", "보고", "신고", "대응", "처리",
+            "어떻게해야", "뭘해야", "해야하는", "해야할",
+            "누구에게", "어디로", "어디에",
+        }
+
+        # 보안/사고 힌트 (정규화됨)
+        security_hints_norm = {
+            "보안", "사고", "유출", "침해", "반출",
+            "악성코드", "랜섬웨어", "해킹", "피싱",
+            "개인정보유출", "정보유출", "데이터유출",
+        }
+
+        # 교육 내용 힌트 (정규화됨)
+        edu_content_hints_norm = {
+            "교육내용", "교육자료", "학습내용", "강의내용",
+            "무슨교육", "어떤교육", "교육이뭐", "교육이란",
+            "커리큘럼", "교육과정",
+        }
+
+        # 절차 단어 체크
+        has_procedure = any(kw in query_normalized for kw in procedure_words_norm)
+
+        # 절차 + 보안/사고 힌트 → POLICY_QA (AND 조건)
+        if has_procedure:
+            has_security = any(kw in query_normalized for kw in security_hints_norm)
+            if has_security:
+                logger.info(
+                    f"BACKEND_STATUS fallback gate: procedure+security AND matched, "
+                    f"re-routing to POLICY_QA (RAG)"
+                )
+                result.tier0_intent = Tier0Intent.POLICY_QA
+                result.domain = RouterDomain.POLICY
+                result.route_type = RouterRouteType.RAG_INTERNAL
+                result.confidence = 0.7
+                result.needs_clarify = False
+                result.clarify_question = ""
+                if result.debug:
+                    result.debug.rule_hits.append("BACKEND_FALLBACK_PROCEDURE_SECURITY")
+                return result
+
+            # 절차 + 교육 힌트 → EDUCATION_QA (AND 조건)
+            has_edu = any(kw in query_normalized for kw in edu_content_hints_norm)
+            if has_edu:
+                logger.info(
+                    f"BACKEND_STATUS fallback gate: procedure+edu AND matched, "
+                    f"re-routing to EDUCATION_QA (RAG)"
+                )
+                result.tier0_intent = Tier0Intent.EDUCATION_QA
+                result.domain = RouterDomain.EDU
+                result.route_type = RouterRouteType.RAG_INTERNAL
+                result.confidence = 0.7
+                result.needs_clarify = False
+                result.clarify_question = ""
+                if result.debug:
+                    result.debug.rule_hits.append("BACKEND_FALLBACK_PROCEDURE_EDU")
+                return result
+
+        # 폴백 조건 미충족 → None (기존 clarify 로직 적용)
+        return None

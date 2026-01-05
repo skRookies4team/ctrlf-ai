@@ -21,6 +21,7 @@ import httpx
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
+from app.core.llm_providers import LLMProviderConfig, get_llm_provider_config
 from app.core.logging import get_logger
 from app.models.chat_stream import (
     ChatStreamRequest,
@@ -186,7 +187,11 @@ class ChatStreamService:
             str: NDJSON 문자열 (줄바꿈 포함)
         """
         request_id = request.request_id
-        model = self._settings.LLM_MODEL_NAME or "unknown"
+
+        # LLM 프로바이더 설정 가져오기
+        llm_provider = request.llm_model  # "exaone" | "openai" | None
+        provider_config = get_llm_provider_config(llm_provider)
+        model = provider_config.model_name or "unknown"
 
         # 메트릭 초기화
         metrics = StreamMetrics(
@@ -237,7 +242,9 @@ class ChatStreamService:
                 metrics.total_tokens = len(fallback_text)
             else:
                 # 실제 LLM 스트리밍 호출
-                async for token in self._stream_llm_response(request, metrics, start_time):
+                async for token in self._stream_llm_response(
+                    request, metrics, start_time, provider_config
+                ):
                     yield token
                     # token 이벤트에서 텍스트 추출하여 누적
                     if '"type":"token"' in token:
@@ -327,14 +334,17 @@ class ChatStreamService:
         request: ChatStreamRequest,
         metrics: StreamMetrics,
         start_time: float,
+        provider_config: LLMProviderConfig,
     ) -> AsyncGenerator[str, None]:
         """
         LLM API를 호출하여 스트리밍 응답을 생성합니다.
 
         OpenAI 호환 API의 stream=true 사용.
+        프로바이더 설정에 따라 내부 EXAONE 또는 OpenAI API 호출.
         """
-        base_url = str(self._settings.llm_base_url).rstrip("/")
-        url = f"{base_url}/v1/chat/completions"
+        # 프로바이더 설정에서 base_url 가져오기
+        base_url = (provider_config.base_url or str(self._settings.llm_base_url)).rstrip("/")
+        url = f"{base_url}/chat/completions"
 
         # messages 배열을 LLM 형식으로 변환
         llm_messages = [
@@ -343,12 +353,17 @@ class ChatStreamService:
         ]
 
         payload = {
-            "model": self._settings.LLM_MODEL_NAME,
+            "model": provider_config.model_name,
             "messages": llm_messages,
             "temperature": 0.7,
             "max_tokens": 2048,
             "stream": True,  # 스트리밍 활성화
         }
+
+        # API 키 헤더 구성 (OpenAI 등 외부 API용)
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if provider_config.api_key:
+            headers["Authorization"] = f"Bearer {provider_config.api_key}"
 
         # 역할 기반 시스템 프롬프트 추가
         system_prompt = self._get_system_prompt(request.user_role)
@@ -358,7 +373,11 @@ class ChatStreamService:
                 "content": system_prompt,
             })
 
-        logger.info(f"Starting LLM stream: request_id={request.request_id}, user_id={request.user_id}")
+        logger.info(
+            f"Starting LLM stream: request_id={request.request_id}, "
+            f"user_id={request.user_id}, provider={provider_config.provider}, "
+            f"model={provider_config.model_name}"
+        )
 
         # 설정에서 타임아웃 가져오기 (기본값: 180초, 백엔드 SSE 타임아웃보다 길게)
         stream_timeout = getattr(self._settings, "CHAT_STREAM_LLM_TIMEOUT_SEC", 180.0)
@@ -368,6 +387,7 @@ class ChatStreamService:
                 "POST",
                 url,
                 json=payload,
+                headers=headers,
                 timeout=stream_timeout,
             ) as response:
                 if response.status_code != 200:

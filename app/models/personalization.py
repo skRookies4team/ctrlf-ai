@@ -96,28 +96,68 @@ class PersonalizationSubIntentId(str, Enum):
     Q20 = "Q20"  # 올해 HR 할 일 (미완료)
 
 
-# 데모 완전 구현 대상 (8개) - Q5, Q6 추가 (백엔드 실제 DB 연동 완료)
+# 데모 완전 구현 대상 (13개) - Q2, Q7, Q8, Q18, Q19 추가 (4대교육 + 직무교육 지원)
 PRIORITY_SUB_INTENTS = frozenset([
     PersonalizationSubIntentId.Q1.value,
+    PersonalizationSubIntentId.Q2.value,   # 특정 토픽 교육 이수 여부 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q3.value,
     PersonalizationSubIntentId.Q4.value,   # 교육 이어보기 (EDU_RESUME_CHECK)
     PersonalizationSubIntentId.Q5.value,   # 내 평균 vs 부서/전사 평균 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q6.value,   # 가장 낮은/높은 점수 교육 TOP3 (백엔드 DB 연동)
+    PersonalizationSubIntentId.Q7.value,   # 특정 토픽 퀴즈 점수 조회 (백엔드 DB 연동)
+    PersonalizationSubIntentId.Q8.value,   # 특정 토픽 교육 시청 완료 여부 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q9.value,
     PersonalizationSubIntentId.Q11.value,
     PersonalizationSubIntentId.Q14.value,
+    PersonalizationSubIntentId.Q18.value,  # 보안교육(특정 토픽) 완료 여부 (백엔드 DB 연동)
+    PersonalizationSubIntentId.Q19.value,  # 특정 토픽 교육 마감일 조회 (백엔드 DB 연동)
 ])
 
 
 # Q별 기본 period 매핑 (기간 미지정 시 사용)
 DEFAULT_PERIOD_FOR_INTENT: Dict[str, PeriodType] = {
+    "Q2": PeriodType.THIS_YEAR,   # 특정 토픽 교육 이수 여부
     "Q3": PeriodType.THIS_MONTH,
     "Q5": PeriodType.THIS_YEAR,   # 내 평균 vs 부서/전사 평균
     "Q6": PeriodType.THIS_YEAR,   # 가장 낮은/높은 점수 교육 TOP3
+    "Q7": PeriodType.THIS_YEAR,   # 특정 토픽 퀴즈 점수 조회
+    "Q8": PeriodType.THIS_YEAR,   # 특정 토픽 교육 시청 완료 여부
     "Q9": PeriodType.THIS_WEEK,
     "Q11": PeriodType.THIS_YEAR,
     "Q14": PeriodType.THIS_YEAR,  # 기간 없음이지만 기본값
+    "Q18": PeriodType.THIS_YEAR,  # 보안교육(특정 토픽) 완료 여부
+    "Q19": PeriodType.THIS_YEAR,  # 특정 토픽 교육 마감일 조회
     "Q20": PeriodType.THIS_YEAR,
+}
+
+# 토픽 기반 인텐트 목록 (topic 파라미터 필요)
+TOPIC_BASED_INTENTS = frozenset([
+    PersonalizationSubIntentId.Q2.value,   # 특정 토픽 교육 이수 여부
+    PersonalizationSubIntentId.Q7.value,   # 특정 토픽 퀴즈 점수 조회
+    PersonalizationSubIntentId.Q8.value,   # 특정 토픽 교육 시청 완료 여부
+    PersonalizationSubIntentId.Q18.value,  # 보안교육(특정 토픽) 완료 여부
+    PersonalizationSubIntentId.Q19.value,  # 특정 토픽 교육 마감일 조회
+])
+
+# 교육 토픽 매핑 (한글 -> 영문 코드)
+EDUCATION_TOPIC_MAPPING: Dict[str, str] = {
+    "직장내괴롭힘": "WORKPLACE_BULLYING",
+    "직장 내 괴롭힘": "WORKPLACE_BULLYING",
+    "괴롭힘": "WORKPLACE_BULLYING",
+    "성희롱예방": "SEXUAL_HARASSMENT_PREVENTION",
+    "성희롱 예방": "SEXUAL_HARASSMENT_PREVENTION",
+    "성희롱": "SEXUAL_HARASSMENT_PREVENTION",
+    "개인정보보호": "PERSONAL_INFO_PROTECTION",
+    "개인정보 보호": "PERSONAL_INFO_PROTECTION",
+    "개인정보": "PERSONAL_INFO_PROTECTION",
+    "정보보안": "PERSONAL_INFO_PROTECTION",
+    "보안교육": "PERSONAL_INFO_PROTECTION",
+    "장애인인식개선": "DISABILITY_AWARENESS",
+    "장애인 인식 개선": "DISABILITY_AWARENESS",
+    "장애인": "DISABILITY_AWARENESS",
+    "직무교육": "JOB_DUTY",
+    "직무 교육": "JOB_DUTY",
+    "직무": "JOB_DUTY",
 }
 
 
@@ -199,11 +239,18 @@ class PersonalizationResolveRequest(BaseModel):
         sub_intent_id: Q1-Q20 인텐트 ID
         period: 기간 유형 (옵션, 기본값 사용 가능)
         target_dept_id: 부서 비교 대상 ID (향후 사용 예정)
+        topic: 교육 토픽 (Q2, Q7, Q8, Q18, Q19에서 사용)
     """
 
     sub_intent_id: str = Field(..., description="Q1-Q20 인텐트 ID")
     period: Optional[str] = Field(default=None, description="기간 유형 (this-week|this-month|3m|this-year)")
     target_dept_id: Optional[str] = Field(default=None, description="부서 비교 대상 ID (Q5에서만 사용)")
+    topic: Optional[str] = Field(
+        default=None,
+        description="교육 토픽 (Q2, Q7, Q8, Q18, Q19에서 사용). "
+        "WORKPLACE_BULLYING, SEXUAL_HARASSMENT_PREVENTION, "
+        "PERSONAL_INFO_PROTECTION, DISABILITY_AWARENESS, JOB_DUTY 중 하나"
+    )
 
 
 class PersonalizationFacts(BaseModel):
