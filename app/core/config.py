@@ -481,7 +481,7 @@ class Settings(BaseSettings):
     BACKEND_INTERNAL_TOKEN: Optional[str] = None
 
     # RAGFlow 콜백 전용 인증 토큰 (X-Internal-Token 헤더)
-    # RAGFlow → AI 콜백 요청 시 사용 (예: /internal/ai/callbacks/ragflow/ingest)
+    # RAGFlow → AI 콜백 요청 시 사용 (예: /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest)
     # 보안: Backend 토큰과 분리하여 토큰 유출 시 피해 범위 제한
     RAGFLOW_CALLBACK_TOKEN: Optional[str] = None
 
