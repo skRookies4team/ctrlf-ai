@@ -17,6 +17,7 @@ from app.clients.milvus_client import (
     EmbeddingError,
     get_milvus_client,
     clear_milvus_client,
+    get_department_filter_expr,
 )
 from app.models.chat import ChatSource
 
@@ -569,3 +570,171 @@ class TestExceptions:
         """EmbeddingError 테스트."""
         error = EmbeddingError("Embedding failed")
         assert isinstance(error, MilvusError)
+
+
+# =============================================================================
+# Phase 56: Department 필터 테스트
+# =============================================================================
+
+
+class TestDepartmentFilter:
+    """Phase 56: 부서 필터링 테스트."""
+
+    def test_get_department_filter_expr_valid_department(self):
+        """유효한 부서 코드로 필터 표현식 생성."""
+        expr = get_department_filter_expr("DEV")
+        assert expr == 'department in ["DEV", "ALL"]'
+
+    def test_get_department_filter_expr_lowercase(self):
+        """소문자 부서 코드도 대문자로 변환."""
+        expr = get_department_filter_expr("dev")
+        assert expr == 'department in ["DEV", "ALL"]'
+
+    def test_get_department_filter_expr_all_departments(self):
+        """모든 유효한 부서 코드 테스트."""
+        valid_depts = ["HR", "DEV", "PLANNING", "SECURITY", "GA", "MARKETING", "SALES"]
+        for dept in valid_depts:
+            expr = get_department_filter_expr(dept)
+            assert expr == f'department in ["{dept}", "ALL"]'
+
+    def test_get_department_filter_expr_none(self):
+        """None 입력 시 None 반환."""
+        expr = get_department_filter_expr(None)
+        assert expr is None
+
+    def test_get_department_filter_expr_empty_string(self):
+        """빈 문자열 입력 시 None 반환."""
+        expr = get_department_filter_expr("")
+        assert expr is None
+
+    def test_get_department_filter_expr_invalid_department(self):
+        """유효하지 않은 부서 코드 시 None 반환."""
+        expr = get_department_filter_expr("INVALID_DEPT")
+        assert expr is None
+
+    def test_get_department_filter_expr_all_value(self):
+        """ALL 부서 코드 입력 시 필터 생성."""
+        expr = get_department_filter_expr("ALL")
+        assert expr == 'department in ["ALL", "ALL"]'
+
+
+class TestSearchAsSourcesWithDepartment:
+    """search_as_sources에서 department 필터 적용 테스트."""
+
+    @pytest.mark.anyio
+    async def test_search_as_sources_with_department_filter_enabled(self, mock_settings):
+        """부서 필터 활성화 시 필터 표현식 조합."""
+        # department 필터 활성화
+        mock_settings.RAG_DEPARTMENT_FILTER_ENABLED = True
+        mock_settings.RAG_DATASET_FILTER_ENABLED = False
+
+        clear_milvus_client()
+        client = MilvusSearchClient()
+        client._has_department_field = True  # 스키마에 department 필드 있음
+
+        mock_results = [
+            {
+                "id": "doc_1",
+                "content": "개발팀 교육 내용",
+                "title": "개발팀 직무교육",
+                "domain": "EDUCATION",
+                "doc_id": "edu_001",
+                "score": 0.9,
+                "metadata": {},
+            }
+        ]
+        client.search = AsyncMock(return_value=mock_results)
+
+        sources = await client.search_as_sources(
+            query="개발 교육",
+            domain="EDUCATION",
+            department="DEV",
+            top_k=5,
+        )
+
+        # search가 department 필터와 함께 호출되었는지 확인
+        client.search.assert_called_once()
+        call_kwargs = client.search.call_args[1]
+        assert 'department in ["DEV", "ALL"]' in call_kwargs.get("filter_expr", "")
+
+        clear_milvus_client()
+
+    @pytest.mark.anyio
+    async def test_search_as_sources_with_both_filters(self, mock_settings):
+        """dataset_id + department 필터 조합 테스트."""
+        mock_settings.RAG_DEPARTMENT_FILTER_ENABLED = True
+        mock_settings.RAG_DATASET_FILTER_ENABLED = True
+        mock_settings.RAG_EDUCATION_DATASET_IDS = "직무교육"
+
+        clear_milvus_client()
+        client = MilvusSearchClient()
+        client._has_department_field = True
+        client._has_dataset_id_field = True
+
+        client.search = AsyncMock(return_value=[])
+
+        await client.search_as_sources(
+            query="교육",
+            domain="EDUCATION",
+            department="HR",
+            top_k=5,
+        )
+
+        # 두 필터가 && 연산자로 조합되어야 함
+        call_kwargs = client.search.call_args[1]
+        filter_expr = call_kwargs.get("filter_expr", "")
+        assert "dataset_id" in filter_expr
+        assert "department" in filter_expr
+        assert "&&" in filter_expr
+
+        clear_milvus_client()
+
+    @pytest.mark.anyio
+    async def test_search_as_sources_department_filter_disabled(self, mock_settings):
+        """부서 필터 비활성화 시 필터 적용 안됨."""
+        mock_settings.RAG_DEPARTMENT_FILTER_ENABLED = False
+        mock_settings.RAG_DATASET_FILTER_ENABLED = False
+
+        clear_milvus_client()
+        client = MilvusSearchClient()
+        client._has_department_field = True
+
+        client.search = AsyncMock(return_value=[])
+
+        await client.search_as_sources(
+            query="교육",
+            domain="EDUCATION",
+            department="DEV",
+            top_k=5,
+        )
+
+        # 필터가 적용되지 않아야 함
+        call_kwargs = client.search.call_args[1]
+        assert call_kwargs.get("filter_expr") is None
+
+        clear_milvus_client()
+
+    @pytest.mark.anyio
+    async def test_search_as_sources_no_department_field_in_schema(self, mock_settings):
+        """스키마에 department 필드가 없으면 필터 스킵."""
+        mock_settings.RAG_DEPARTMENT_FILTER_ENABLED = True
+        mock_settings.RAG_DATASET_FILTER_ENABLED = False
+
+        clear_milvus_client()
+        client = MilvusSearchClient()
+        client._has_department_field = False  # 스키마에 department 필드 없음
+
+        client.search = AsyncMock(return_value=[])
+
+        await client.search_as_sources(
+            query="교육",
+            domain="EDUCATION",
+            department="DEV",
+            top_k=5,
+        )
+
+        # 필터가 적용되지 않아야 함 (department 필드 없음)
+        call_kwargs = client.search.call_args[1]
+        assert call_kwargs.get("filter_expr") is None
+
+        clear_milvus_client()

@@ -754,6 +754,7 @@ class MilvusSearchClient:
 
         Phase 48: RAG_DATASET_FILTER_ENABLED=True 시 domain에 따른 dataset_id 필터 적용
         Phase 50: 2차 가드 - contextvars 플래그 체크
+        Phase 56: department 필터 추가 (부서별 교육영상 필터링)
 
         Raises:
             RetrievalBlockedError: 금지질문으로 retrieval이 차단된 경우
@@ -763,20 +764,39 @@ class MilvusSearchClient:
 
         settings = get_settings()
 
+        # 필터 표현식들을 수집하여 && 연산자로 조합
+        filter_exprs: List[str] = []
+
         # Phase 48: domain → dataset_id 필터 생성
         # 스키마에 dataset_id 필드가 없으면 필터 비활성화
-        filter_expr = None
         if settings.RAG_DATASET_FILTER_ENABLED:
             # 스키마 검사가 아직 안 됐으면 None (첫 검색 시 컬렉션 로드됨)
             # 스키마 검사 완료 후 dataset_id 필드가 없으면 필터 스킵
             if self._has_dataset_id_field is False:
                 logger.debug("[Phase48] Dataset filter skipped: dataset_id field not in schema")
             else:
-                filter_expr = get_dataset_filter_expr(domain)
-                if filter_expr:
+                dataset_expr = get_dataset_filter_expr(domain)
+                if dataset_expr:
+                    filter_exprs.append(dataset_expr)
                     logger.info(
-                        f"[Phase48] Dataset filter applied: domain={domain} -> {filter_expr}"
+                        f"[Phase48] Dataset filter applied: domain={domain} -> {dataset_expr}"
                     )
+
+        # Phase 56: department 필터 생성 (부서별 교육영상 필터링)
+        # 스키마에 department 필드가 없으면 필터 비활성화
+        if settings.RAG_DEPARTMENT_FILTER_ENABLED:
+            if self._has_department_field is False:
+                logger.debug("[Phase56] Department filter skipped: department field not in schema")
+            else:
+                dept_expr = get_department_filter_expr(department)
+                if dept_expr:
+                    filter_exprs.append(dept_expr)
+                    logger.info(
+                        f"[Phase56] Department filter applied: department={department} -> {dept_expr}"
+                    )
+
+        # 필터 조합 (여러 필터가 있으면 && 연산자로 연결)
+        filter_expr = " && ".join(filter_exprs) if filter_exprs else None
 
         # Phase 41: [B] retrieval_target 디버그 로그
         if request_id:
