@@ -1,20 +1,27 @@
 """
 질문리스트 배치 테스트 스크립트
 LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct 모델 성능 평가용
+
+사용법:
+    python qa_batch_test.py              # 전체 질문 테스트
+    python qa_batch_test.py -n 50        # 50개만 랜덤 샘플링
+    python qa_batch_test.py --sample 50  # 위와 동일
 """
 
+import argparse
 import asyncio
 import aiohttp
 import pandas as pd
 from datetime import datetime
 import json
+import random
 import time
 import sys
 from pathlib import Path
 
 # Configuration
 AI_API_URL = "http://localhost:8000/ai/chat/messages"
-CONCURRENT_REQUESTS = 3  # 동시 요청 수
+CONCURRENT_REQUESTS = 1  # 동시 요청 수 (LLM 타임아웃 방지)
 TIMEOUT_SECONDS = 120  # 요청 타임아웃
 OUTPUT_DIR = Path(__file__).parent / "docs"
 
@@ -125,7 +132,36 @@ def print_progress(completed: int, total: int, result: dict):
     print(f"\r[{completed}/{total}] ({pct:.1f}%) {result['ID']}: {status}".ljust(80), end="", flush=True)
 
 
+def parse_args():
+    """명령줄 인자 파싱"""
+    parser = argparse.ArgumentParser(
+        description="EXAONE 모델 질답리스트 배치 테스트",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+예시:
+    python qa_batch_test.py              # 전체 질문 테스트
+    python qa_batch_test.py -n 50        # 50개만 랜덤 샘플링
+    python qa_batch_test.py --sample 100 # 100개만 랜덤 샘플링
+        """
+    )
+    parser.add_argument(
+        "-n", "--sample",
+        type=int,
+        default=None,
+        help="테스트할 질문 수 (미지정 시 전체 테스트)"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="랜덤 시드 (기본값: 42, 재현 가능한 샘플링)"
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     print("=" * 60)
     print("EXAONE 모델 질답리스트 생성 스크립트")
     print("=" * 60)
@@ -136,7 +172,14 @@ def main():
 
     df = pd.read_excel(input_file, engine="openpyxl")
     questions = df.to_dict("records")
-    print(f"   -> 총 {len(questions)}개 질문 로드됨")
+    total_count = len(questions)
+    print(f"   -> 총 {total_count}개 질문 로드됨")
+
+    # 샘플링 처리
+    if args.sample and args.sample < total_count:
+        random.seed(args.seed)
+        questions = random.sample(questions, args.sample)
+        print(f"   -> {args.sample}개 랜덤 샘플링 (seed={args.seed})")
 
     # AI 서버 연결 테스트
     print("\n2. AI 서버 연결 테스트...")
@@ -186,7 +229,8 @@ def main():
 
     # Excel 파일로 저장
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = OUTPUT_DIR / f"질답리스트_EXAONE_{timestamp}.xlsx"
+    sample_suffix = f"_n{len(results)}" if args.sample else ""
+    output_file = OUTPUT_DIR / f"질답리스트_EXAONE{sample_suffix}_{timestamp}.xlsx"
 
     print(f"\n5. 결과 저장: {output_file}")
     results_df.to_excel(output_file, index=False, engine="openpyxl")
