@@ -21,16 +21,11 @@ jobs:
           # 2. 최신 코드 반영
           git fetch origin
           git reset --hard origin/main
+
+          #3 docker-compose 실행
+          docker-compose --profile real down
+          docker-compose --profile real up --build -d
           
-          # 3. 가상환경 활성화 및 패키지 설치
-          source /home/team4/gemma/bin/activate
-          pip install -r requirements.txt
-          
-          # 4. 서버 실행
-          echo "Restarting Uvicorn on port 8080..."
-          fuser -k 8080/tcp || true
-          
-          # 5. 백그라운드 실행 (로그 파일 경로 지정)
-          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > /home/team4/ctrlf-ai/ai_server.log 2>&1 &
-          
-          echo "Deployment command sent successfully."
+          # 4. 결과 확인
+          echo "Deployment successful. Running containers:"
+          docker-compose --profile real ps
