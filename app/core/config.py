@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
     # ctrlf-back infra-service 연동 URL (S3 presigned URL 등)
-    BACKEND_BASE_URL: Optional[HttpUrl] = None
+    INFRA_BASE_URL: Optional[HttpUrl] = None
 
     # =========================================================================
     # PII 마스킹 서비스 설정
@@ -130,9 +130,11 @@ class Settings(BaseSettings):
     # Step 3: SourceSet 오케스트레이션 설정
     # =========================================================================
     # RAGFlow 파싱 완료 Polling 설정
+    RAGFLOW_POLL_INITIAL_DELAY_SEC: float = 600.0  # 폴링 시작 전 대기 (10분)
     RAGFLOW_POLL_INTERVAL_SEC: float = 3.0  # 폴링 간격 (초)
-    RAGFLOW_POLL_TIMEOUT_SEC: float = 900.0  # 폴링 타임아웃 (15분)
+    RAGFLOW_POLL_TIMEOUT_SEC: float = 2400.0  # 폴링 타임아웃 (40분)
     RAGFLOW_CHUNK_PAGE_SIZE: int = 1000  # 청크 조회 페이지 크기
+    RAGFLOW_MAX_RETRY_COUNT: int = 2  # FAIL 시 최대 재시도 횟수 (총 3번 시도)
 
     # =========================================================================
     # Phase 20: FAQ 생성 고도화 설정
@@ -244,6 +246,18 @@ class Settings(BaseSettings):
         "또는,및,대한,대해,대해서,것,수,등,내용,사항,부분,전체,모든,각,해당"
     )
 
+    # =========================================================================
+    # Phase 52.1: RAG 품질 게이트 강화 설정
+    # =========================================================================
+    # 품질 게이트 강화 활성화 (True면 SOFT_DEMOTE 대신 HARD_DROP)
+    # HARD_DROP: low relevance 시 sources=[] 완전 drop (RAG 답변 금지)
+    RAG_QUALITY_HARD_DROP_ENABLED: bool = True
+
+    # HARD_DROP 임계치 (L2 거리 기준, 낮을수록 유사함)
+    # min_score(최소 거리)가 이 값보다 크면 완전 drop
+    # RAG_MAX_L2_DISTANCE(1.5)보다 높게 설정하여 극단적 케이스만 drop
+    RAG_QUALITY_DROP_THRESHOLD: float = 2.0
+
     # domain → dataset_id 매핑 강제 필터 활성화
     RAG_DATASET_FILTER_ENABLED: bool = True
 
@@ -260,8 +274,9 @@ class Settings(BaseSettings):
     # Phase 56: Department 필터 설정 (부서별 교육영상 필터링)
     # =========================================================================
     # 부서 필터 활성화 여부
-    # True: department 컬럼으로 부서별 교육영상 필터링 (본인 부서 + 전사공통)
+    # True: department 컬럼으로 부서별 교육영상 필터링 (본인 부서 + 전체 부서)
     # False: 부서 필터 비활성화 (모든 교육영상 조회)
+    # 부서 범위: 전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀
     RAG_DEPARTMENT_FILTER_ENABLED: bool = False  # 기본값 False (Milvus 스키마 추가 후 활성화)
 
     # =========================================================================
@@ -510,6 +525,7 @@ class Settings(BaseSettings):
         "RAGFLOW_BASE_URL",
         "LLM_BASE_URL",
         "BACKEND_BASE_URL",
+        "INFRA_BASE_URL",
         "PII_BASE_URL",
         mode="before",
     )
@@ -523,6 +539,42 @@ class Settings(BaseSettings):
     # =========================================================================
     # ctrlf-back 인증 토큰 (선택사항, 설정 시 Authorization: Bearer 헤더로 전송)
     BACKEND_API_TOKEN: Optional[str] = None
+
+    # =========================================================================
+    # Conversation State 설정 (멀티턴 맥락 유지)
+    # =========================================================================
+    # 저장소 백엔드 선택 ("memory" | "redis")
+    # - memory: 단일 인스턴스용, 개발/테스트 환경
+    # - redis: 멀티 인스턴스용, Production 환경
+    STATE_STORE_BACKEND: str = "memory"
+
+    # Redis URL (STATE_STORE_BACKEND=redis 일 때 필수)
+    STATE_STORE_REDIS_URL: Optional[str] = None
+
+    # TTL 정책
+    STATE_TTL_SECONDS: int = 3600  # 기본 60분
+    STATE_TTL_SLIDING: bool = True  # 활동 시 TTL 갱신
+    STATE_TTL_MAX_SECONDS: int = 7200  # 최대 2시간 (sliding 상한)
+
+    # 상태 갱신 임계값 (B: 갱신 규칙)
+    STATE_UPDATE_HIGH_SCORE_THRESHOLD: float = 0.75  # 고신뢰 판정 임계값
+    STATE_UPDATE_SCORE_GAP_THRESHOLD: float = 0.1  # top1-top2 격차 임계값
+
+    # 히스토리 관리
+    CHAT_HISTORY_MAX_TURNS: int = 4  # 최근 N턴 (user 기준)
+    CHAT_HISTORY_MAX_TOKENS: int = 2000  # 히스토리 토큰 상한
+    CHAT_TOKEN_COUNTING_MODE: str = "char_conservative"  # "tiktoken" | "char_conservative"
+
+    # Recent docs 스택 크기
+    STATE_RECENT_DOCS_MAX_SIZE: int = 5
+
+    # 검색 병합 설정 (E)
+    SEARCH_MERGE_ENABLED: bool = True  # 일반 검색 + filter 검색 병합
+    SEARCH_RANK_BUMP_MAX: int = 2  # 최대 순위 승급 칸 수
+
+    # 품질 게이트 설정 (F)
+    QUALITY_TOP1_THRESHOLD: float = 0.55  # top1 점수 하한
+    QUALITY_GAP_THRESHOLD: float = 0.05  # top1-top2 격차 임계값
 
     # =========================================================================
     # CORS 설정

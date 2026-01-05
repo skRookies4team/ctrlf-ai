@@ -137,7 +137,7 @@ class RAGFlowIngestClient:
             domain: 도메인 (예: "POLICY")
             trace_id: 추적 ID
             request_id: 요청 ID
-            department: 부서 코드 (HR, DEV, PLANNING, SECURITY, GA, MARKETING, SALES, ALL)
+            department: 부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)
 
         Returns:
             dict: RAGFlow 응답

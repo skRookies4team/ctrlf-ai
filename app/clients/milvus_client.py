@@ -142,34 +142,31 @@ def get_department_filter_expr(department: Optional[str]) -> Optional[str]:
     """
     Phase 56: 부서 필터 표현식을 생성합니다.
 
-    사용자 부서 교육영상 + 전사공통(ALL) 영상을 조회할 수 있도록
+    사용자 부서 교육영상 + 전체 부서 영상을 조회할 수 있도록
     IN 연산자를 사용한 필터 표현식을 생성합니다.
 
     Args:
-        department: 부서 코드 (HR, DEV, PLANNING, SECURITY, GA, MARKETING, SALES)
+        department: 부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)
 
     Returns:
         Optional[str]: Milvus filter expression 또는 None
 
     Example:
-        >>> get_department_filter_expr("DEV")
-        'department in ["DEV", "ALL"]'
+        >>> get_department_filter_expr("개발팀")
+        'department in ["개발팀", "전체 부서"]'
     """
     if not department:
         return None
 
-    # 부서 코드 정규화 (대문자)
-    dept_upper = department.upper()
-
-    # 허용된 부서 코드 검증
-    valid_departments = {"HR", "DEV", "PLANNING", "SECURITY", "GA", "MARKETING", "SALES", "ALL"}
-    if dept_upper not in valid_departments:
-        logger.warning(f"[Phase56] Unknown department code: {department}")
+    # 허용된 부서 검증
+    valid_departments = {"전체 부서", "총무팀", "기획팀", "마케팅팀", "인사팀", "재무팀", "개발팀", "영업팀", "법무팀"}
+    if department not in valid_departments:
+        logger.warning(f"[Phase56] Unknown department: {department}")
         return None
 
-    safe_dept = escape_milvus_string(dept_upper)
-    # 본인 부서 + 전사공통(ALL)
-    return f'department in ["{safe_dept}", "ALL"]'
+    safe_dept = escape_milvus_string(department)
+    # 본인 부서 + 전체 부서
+    return f'department in ["{safe_dept}", "전체 부서"]'
 
 
 def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:

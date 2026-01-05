@@ -581,21 +581,16 @@ class TestDepartmentFilter:
     """Phase 56: 부서 필터링 테스트."""
 
     def test_get_department_filter_expr_valid_department(self):
-        """유효한 부서 코드로 필터 표현식 생성."""
-        expr = get_department_filter_expr("DEV")
-        assert expr == 'department in ["DEV", "ALL"]'
-
-    def test_get_department_filter_expr_lowercase(self):
-        """소문자 부서 코드도 대문자로 변환."""
-        expr = get_department_filter_expr("dev")
-        assert expr == 'department in ["DEV", "ALL"]'
+        """유효한 부서명으로 필터 표현식 생성."""
+        expr = get_department_filter_expr("개발팀")
+        assert expr == 'department in ["개발팀", "전체 부서"]'
 
     def test_get_department_filter_expr_all_departments(self):
-        """모든 유효한 부서 코드 테스트."""
-        valid_depts = ["HR", "DEV", "PLANNING", "SECURITY", "GA", "MARKETING", "SALES"]
+        """모든 유효한 부서명 테스트."""
+        valid_depts = ["총무팀", "기획팀", "마케팅팀", "인사팀", "재무팀", "개발팀", "영업팀", "법무팀"]
         for dept in valid_depts:
             expr = get_department_filter_expr(dept)
-            assert expr == f'department in ["{dept}", "ALL"]'
+            assert expr == f'department in ["{dept}", "전체 부서"]'
 
     def test_get_department_filter_expr_none(self):
         """None 입력 시 None 반환."""
@@ -608,14 +603,14 @@ class TestDepartmentFilter:
         assert expr is None
 
     def test_get_department_filter_expr_invalid_department(self):
-        """유효하지 않은 부서 코드 시 None 반환."""
-        expr = get_department_filter_expr("INVALID_DEPT")
+        """유효하지 않은 부서명 시 None 반환."""
+        expr = get_department_filter_expr("존재하지않는부서")
         assert expr is None
 
     def test_get_department_filter_expr_all_value(self):
-        """ALL 부서 코드 입력 시 필터 생성."""
-        expr = get_department_filter_expr("ALL")
-        assert expr == 'department in ["ALL", "ALL"]'
+        """전체 부서 입력 시 필터 생성."""
+        expr = get_department_filter_expr("전체 부서")
+        assert expr == 'department in ["전체 부서", "전체 부서"]'
 
 
 class TestSearchAsSourcesWithDepartment:
@@ -648,14 +643,14 @@ class TestSearchAsSourcesWithDepartment:
         sources = await client.search_as_sources(
             query="개발 교육",
             domain="EDUCATION",
-            department="DEV",
+            department="개발팀",
             top_k=5,
         )
 
         # search가 department 필터와 함께 호출되었는지 확인
         client.search.assert_called_once()
         call_kwargs = client.search.call_args[1]
-        assert 'department in ["DEV", "ALL"]' in call_kwargs.get("filter_expr", "")
+        assert 'department in ["개발팀", "전체 부서"]' in call_kwargs.get("filter_expr", "")
 
         clear_milvus_client()
 
@@ -676,7 +671,7 @@ class TestSearchAsSourcesWithDepartment:
         await client.search_as_sources(
             query="교육",
             domain="EDUCATION",
-            department="HR",
+            department="인사팀",
             top_k=5,
         )
 
@@ -704,7 +699,7 @@ class TestSearchAsSourcesWithDepartment:
         await client.search_as_sources(
             query="교육",
             domain="EDUCATION",
-            department="DEV",
+            department="개발팀",
             top_k=5,
         )
 
@@ -729,7 +724,7 @@ class TestSearchAsSourcesWithDepartment:
         await client.search_as_sources(
             query="교육",
             domain="EDUCATION",
-            department="DEV",
+            department="개발팀",
             top_k=5,
         )
 

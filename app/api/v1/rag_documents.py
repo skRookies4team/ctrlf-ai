@@ -126,7 +126,7 @@ class IngestRequest(BaseModel):
     traceId: str = Field(..., description="추적 ID")
     department: Optional[str] = Field(
         None,
-        description="부서 코드 (HR, DEV, PLANNING, SECURITY, GA, MARKETING, SALES, ALL)"
+        description="부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)"
     )
 
 
