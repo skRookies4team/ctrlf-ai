@@ -78,6 +78,10 @@ class AILogService:
         question_masked: Optional[str] = None,
         answer_masked: Optional[str] = None,
         rag_gap_candidate: bool = False,
+        # Phase AB: A/B 테스트 정보
+        ab_model: Optional[str] = None,
+        ab_embedding_model: Optional[str] = None,
+        ab_collection_name: Optional[str] = None,
     ) -> AILogEntry:
         """
         채팅 요청/응답 및 파이프라인 메타데이터로부터 AILogEntry를 생성합니다.
@@ -124,6 +128,10 @@ class AILogService:
             question_masked=question_masked,
             answer_masked=answer_masked,
             rag_gap_candidate=rag_gap_candidate,
+            # Phase AB: A/B 테스트 정보
+            ab_model=ab_model,
+            ab_embedding_model=ab_embedding_model,
+            ab_collection_name=ab_collection_name,
         )
 
     async def mask_for_log(
@@ -169,6 +177,14 @@ class AILogService:
             bool: 전송 성공 여부
         """
         # 로컬 로그 기록 (항상)
+        # Phase AB: A/B 테스트 정보 추가
+        ab_info = ""
+        if log_entry.ab_model:
+            ab_info = (
+                f", ab_model={log_entry.ab_model}, "
+                f"ab_embedding={log_entry.ab_embedding_model}, "
+                f"ab_collection={log_entry.ab_collection_name}"
+            )
         logger.info(
             f"AI Log: session={log_entry.session_id}, "
             f"user={log_entry.user_id}, "
@@ -180,6 +196,7 @@ class AILogService:
             f"rag_used={log_entry.rag_used}, "
             f"rag_sources={log_entry.rag_source_count}, "
             f"latency_ms={log_entry.latency_ms}"
+            f"{ab_info}"
         )
 
         # 백엔드 URL이 없으면 로컬 로그만

@@ -366,11 +366,12 @@ class FaqDraftService:
 
         try:
             # Step 7: RagHandler를 통한 검색 (MilvusSearchClient 직접 호출 제거)
+            # Phase AB: model 필드 직접 사용 (방식 B)
             sources, failed, retriever = await self._rag_handler.perform_search_with_fallback(
                 query=req.canonical_question,
                 domain=req.domain,
                 req=None,  # FaqService는 ChatRequest 없음
-                request_id=None,
+                model=req.model,  # Phase AB: 모델 직접 전달
                 top_k=5,
             )
         except RagSearchUnavailableError as e:

@@ -43,6 +43,7 @@ class FaqDraftGenerateRequest(BaseModel):
         sample_questions: 실제 직원 질문 예시들
         top_docs: 백엔드가 이미 RAG에서 뽑아온 후보 문서들 (선택)
         avg_intent_confidence: 평균 의도 신뢰도 (0.0~1.0, 선택)
+        model: A/B 테스트 임베딩 모델 (선택, 기본값: openai)
     """
 
     domain: str = Field(
@@ -65,6 +66,11 @@ class FaqDraftGenerateRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description="평균 의도 신뢰도 (0.0~1.0, Chat-Service에서 전달되는 값, null이면 검증 스킵)",
+    )
+    # Phase AB: A/B 테스트 임베딩 모델 선택 (request_id 대체)
+    model: Optional[Literal["openai", "sroberta"]] = Field(
+        None,
+        description="A/B 테스트 임베딩 모델: 'openai' 또는 'sroberta'. 기본값: openai",
     )
 
 
