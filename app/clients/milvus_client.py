@@ -138,6 +138,40 @@ def get_education_dataset_ids() -> List[str]:
     return [ds_id.strip() for ds_id in raw.split(",") if ds_id.strip()]
 
 
+def get_department_filter_expr(department: Optional[str]) -> Optional[str]:
+    """
+    Phase 56: 부서 필터 표현식을 생성합니다.
+
+    사용자 부서 교육영상 + 전사공통(ALL) 영상을 조회할 수 있도록
+    IN 연산자를 사용한 필터 표현식을 생성합니다.
+
+    Args:
+        department: 부서 코드 (HR, DEV, PLANNING, SECURITY, GA, MARKETING, SALES)
+
+    Returns:
+        Optional[str]: Milvus filter expression 또는 None
+
+    Example:
+        >>> get_department_filter_expr("DEV")
+        'department in ["DEV", "ALL"]'
+    """
+    if not department:
+        return None
+
+    # 부서 코드 정규화 (대문자)
+    dept_upper = department.upper()
+
+    # 허용된 부서 코드 검증
+    valid_departments = {"HR", "DEV", "PLANNING", "SECURITY", "GA", "MARKETING", "SALES", "ALL"}
+    if dept_upper not in valid_departments:
+        logger.warning(f"[Phase56] Unknown department code: {department}")
+        return None
+
+    safe_dept = escape_milvus_string(dept_upper)
+    # 본인 부서 + 전사공통(ALL)
+    return f'department in ["{safe_dept}", "ALL"]'
+
+
 def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
     """
     Phase 48: domain에 해당하는 dataset_id 필터 표현식을 반환합니다.
@@ -321,6 +355,7 @@ class MilvusSearchClient:
         self._collection: Optional[Collection] = None
         self._collection_dim: Optional[int] = None  # 실제 컬렉션 dim (검증용)
         self._has_dataset_id_field: Optional[bool] = None  # Phase 48: 스키마 검사 결과 캐시
+        self._has_department_field: Optional[bool] = None  # Phase 56: department 필드 존재 여부
 
         logger.info(
             f"MilvusSearchClient initialized: host={self._host}:{self._port}, "
@@ -408,6 +443,16 @@ class MilvusSearchClient:
             logger.warning(
                 f"[Phase48] dataset_id field NOT found in schema. "
                 f"Dataset filtering will be disabled. Fields: {field_names}"
+            )
+
+        # Phase 56: department 필드 존재 여부 확인
+        self._has_department_field = "department" in field_names
+        if self._has_department_field:
+            logger.info(f"[Phase56] department field found in schema")
+        else:
+            logger.info(
+                f"[Phase56] department field NOT found in schema. "
+                f"Department filtering will be disabled until field is added."
             )
 
         logger.info(f"Loaded collection: {self._collection_name}")
