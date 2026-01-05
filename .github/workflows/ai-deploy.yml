@@ -2,11 +2,11 @@ name: AI Server Deploy
 
 on:
   push:
-    branches: [ "main" ]  # 메인 브랜치에 코드가 푸시되면 실행
+    branches: ["main"] # 메인 브랜치에 코드가 푸시되면 실행
 
 jobs:
   deploy:
-    runs-on: self-hosted 
+    runs-on: self-hosted
 
     steps:
       - name: Checkout code
@@ -17,7 +17,7 @@ jobs:
           # 1. AI 서버 내 실제 프로젝트 폴더로 이동 (현재 위치 확인 필수)
           cd /home/team4/ctrlf-ai || exit
           echo "Current directory: $(pwd)"
-          
+
           # 2. 최신 코드 반영
           git fetch origin
           git reset --hard origin/main
@@ -25,7 +25,7 @@ jobs:
           #3 docker-compose 실행
           docker-compose --profile real down
           docker-compose --profile real up --build -d
-          
+
           # 4. 결과 확인
           echo "Deployment successful. Running containers:"
           docker-compose --profile real ps
