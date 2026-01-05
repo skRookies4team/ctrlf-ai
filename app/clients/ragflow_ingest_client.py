@@ -121,6 +121,7 @@ class RAGFlowIngestClient:
         domain: str,
         trace_id: str,
         request_id: str,
+        department: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         RAGFlow에 문서 ingest를 요청합니다.
@@ -136,6 +137,7 @@ class RAGFlowIngestClient:
             domain: 도메인 (예: "POLICY")
             trace_id: 추적 ID
             request_id: 요청 ID
+            department: 부서 코드 (HR, DEV, PLANNING, SECURITY, GA, MARKETING, SALES, ALL)
 
         Returns:
             dict: RAGFlow 응답
@@ -156,6 +158,7 @@ class RAGFlowIngestClient:
             "version": version,
             "fileUrl": file_url,
             "replace": True,
+            "department": department,  # 부서 코드 (Milvus department 컬럼에 저장됨)
             "meta": {
                 "ragDocumentPk": rag_document_pk,
                 "domain": domain,

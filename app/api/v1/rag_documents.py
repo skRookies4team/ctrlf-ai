@@ -124,6 +124,10 @@ class IngestRequest(BaseModel):
     domain: str = Field(..., description="도메인 (POLICY만 허용)")
     requestId: str = Field(..., description="요청 ID (UUID)")
     traceId: str = Field(..., description="추적 ID")
+    department: Optional[str] = Field(
+        None,
+        description="부서 코드 (HR, DEV, PLANNING, SECURITY, GA, MARKETING, SALES, ALL)"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -537,10 +541,12 @@ async def ingest_rag_document(
                 domain=request.domain,
                 trace_id=request.traceId,
                 request_id=request.requestId,
+                department=request.department,
             )
             logger.info(
                 f"RAGFlow ingest request sent: doc_id={extracted_doc_id}, "
-                f"version={request.version}, trace_id={request.traceId}"
+                f"version={request.version}, department={request.department}, "
+                f"trace_id={request.traceId}"
             )
         except RAGFlowUnavailableError as e:
             logger.error(
