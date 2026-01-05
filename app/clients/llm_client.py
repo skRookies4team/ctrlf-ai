@@ -55,6 +55,7 @@ class LLMCompletionResult:
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
+from app.core.llm_providers import get_llm_provider_config
 from app.core.logging import get_logger
 from app.core.retry import (
     DEFAULT_LLM_TIMEOUT,
@@ -86,6 +87,7 @@ INTERNAL_IP_PREFIXES = ("10.", "172.", "192.168.")
 # 외부이지만 허용할 LLM 서버 IP allowlist (운영 정책용)
 ALLOWED_EXTERNAL_LLM_HOSTS: Set[str] = {
     "58.127.241.84",
+    "api.openai.com",  # OpenAI API (관리자 대시보드에서 선택 가능)
 }
 
 def _is_internal_domain(url: str) -> bool:
@@ -220,6 +222,7 @@ class LLMClient:
         model: Optional[str] = None,
         temperature: float = 0.2,
         max_tokens: int = 1024,
+        llm_provider: Optional[str] = None,
     ) -> str:
         """
         ChatCompletion 스타일의 응답을 요청하고 텍스트를 반환합니다.
@@ -236,6 +239,7 @@ class LLMClient:
             model: 사용할 모델 이름 (선택)
             temperature: 응답 다양성 조절 (0.0 ~ 1.0)
             max_tokens: 최대 토큰 수
+            llm_provider: LLM 프로바이더 ("exaone", "openai" 등). None이면 기본값 사용.
 
         Returns:
             str: LLM 응답 텍스트
@@ -243,11 +247,17 @@ class LLMClient:
         Raises:
             UpstreamServiceError: LLM 호출 실패 시 (Phase 12)
         """
-        if not self._base_url:
+        # LLM 프로바이더 설정 조회 (llm_provider가 지정되면 해당 설정 사용)
+        provider_config = get_llm_provider_config(llm_provider)
+        effective_base_url = provider_config.base_url or self._base_url
+        effective_model = model or provider_config.model_name
+        api_key = provider_config.api_key
+
+        if not effective_base_url:
             logger.warning("LLM generate_chat_completion skipped: base_url not configured")
             return self.FALLBACK_MESSAGE
 
-        base = str(self._base_url).rstrip("/")
+        base = str(effective_base_url).rstrip("/")
 
         # A5: 외부 도메인 차단 체크 (allowlist 예외 허용)
         parsed = urlparse(base)
@@ -277,20 +287,21 @@ class LLMClient:
 
         url = f"{base}/v1/chat/completions"
 
-        # 모델명이 없으면 설정에서 가져옴
-        settings = get_settings()
-        actual_model = model or settings.LLM_MODEL_NAME
-
         payload: Dict[str, Any] = {
-            "model": actual_model,
+            "model": effective_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
 
+        # API 키 헤더 구성 (OpenAI 등 외부 API용)
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         logger.info(
             f"Sending chat completion request to LLM: "
-            f"messages_count={len(messages)}, model={actual_model}"
+            f"messages_count={len(messages)}, model={effective_model}, provider={provider_config.provider}"
         )
         # Note: payload 로깅 제거 - messages에 사용자 쿼리/RAG 컨텍스트 포함되어 PII 유출 위험
 
@@ -300,6 +311,7 @@ class LLMClient:
                 self._client.post,
                 url,
                 json=payload,
+                headers=headers,
                 timeout=self._timeout,
                 config=LLM_RETRY_CONFIG,
                 operation_name="llm_chat_completion",
@@ -423,6 +435,7 @@ class LLMClient:
         model: Optional[str] = None,
         temperature: float = 0.2,
         max_tokens: int = 1024,
+        llm_provider: Optional[str] = None,
     ) -> LLMCompletionResult:
         """
         ChatCompletion 요청하고 토큰 사용량을 포함한 결과를 반환합니다.
@@ -434,6 +447,7 @@ class LLMClient:
             model: 사용할 모델 이름 (선택)
             temperature: 응답 다양성 조절
             max_tokens: 최대 토큰 수
+            llm_provider: LLM 프로바이더 ("exaone", "openai" 등). None이면 기본값 사용.
 
         Returns:
             LLMCompletionResult: 응답 텍스트 및 토큰 사용량
@@ -441,11 +455,17 @@ class LLMClient:
         Raises:
             UpstreamServiceError: LLM 호출 실패 시
         """
-        if not self._base_url:
+        # LLM 프로바이더 설정 조회
+        provider_config = get_llm_provider_config(llm_provider)
+        effective_base_url = provider_config.base_url or self._base_url
+        effective_model = model or provider_config.model_name
+        api_key = provider_config.api_key
+
+        if not effective_base_url:
             logger.warning("LLM generate_chat_completion_with_usage skipped: base_url not configured")
             return LLMCompletionResult(content=self.FALLBACK_MESSAGE)
 
-        base = str(self._base_url).rstrip("/")
+        base = str(effective_base_url).rstrip("/")
 
         # A5: 외부 도메인 차단 체크
         parsed = urlparse(base)
@@ -458,15 +478,17 @@ class LLMClient:
 
         url = f"{base}/v1/chat/completions"
 
-        settings = get_settings()
-        actual_model = model or settings.LLM_MODEL_NAME
-
         payload: Dict[str, Any] = {
-            "model": actual_model,
+            "model": effective_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+
+        # API 키 헤더 구성 (OpenAI 등 외부 API용)
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         start_time = time.perf_counter()
 
@@ -475,6 +497,7 @@ class LLMClient:
                 self._client.post,
                 url,
                 json=payload,
+                headers=headers,
                 timeout=self._timeout,
                 config=LLM_RETRY_CONFIG,
                 operation_name="llm_chat_completion_with_usage",
@@ -506,11 +529,12 @@ class LLMClient:
             usage = data.get("usage", {})
             prompt_tokens = usage.get("prompt_tokens")
             completion_tokens = usage.get("completion_tokens")
-            response_model = data.get("model", actual_model)
+            response_model = data.get("model", effective_model)
 
             logger.info(
                 f"LLM chat completion success: response_length={len(content)}, "
-                f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}"
+                f"prompt_tokens={prompt_tokens}, completion_tokens={completion_tokens}, "
+                f"provider={provider_config.provider}"
             )
 
             return LLMCompletionResult(
