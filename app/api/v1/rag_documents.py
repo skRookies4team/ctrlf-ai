@@ -5,12 +5,12 @@ Backend → AI → RAGFlow 문서 ingest 파이프라인을 위한 내부 API입
 
 엔드포인트:
 1. POST /internal/ai/rag-documents/ingest : Backend → AI ingest 요청
-2. POST /internal/ai/callbacks/ragflow/ingest : RAGFlow → AI ingest 완료/실패 콜백
+2. POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest : RAGFlow → AI ingest 완료/실패 콜백
 
 흐름:
 1. Backend → AI: POST /internal/ai/rag-documents/ingest
 2. AI → RAGFlow: POST {RAGFLOW_BASE_URL}/v1/internal_ragflow/internal/ragflow/ingest (비동기)
-3. RAGFlow → AI: POST /internal/ai/callbacks/ragflow/ingest (콜백)
+3. RAGFlow → AI: POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest (콜백)
 4. AI → Backend: PATCH /internal/rag/documents/{ragDocumentPk}/status
 
 인증:
@@ -42,7 +42,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/internal/ai", tags=["RAG Documents Ingest"])
+router = APIRouter(prefix="/v1/internal_ragflow/internal/ai", tags=["RAG Documents Ingest"])
 
 
 # =============================================================================
@@ -586,7 +586,7 @@ async def ingest_rag_document(
     description="""
 RAGFlow에서 ingest 완료/실패 시 호출하는 콜백 엔드포인트입니다.
 
-**URL**: POST /internal/ai/callbacks/ragflow/ingest
+**URL**: POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest
 
 **호출 주체**: RAGFlow 서비스
 
