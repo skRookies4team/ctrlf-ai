@@ -160,3 +160,16 @@ dummy_data/
 # Windows special files
 nul
 NUL
+
+# Office temporary files
+~$*
+
+# Test documents
+*.docx
+
+# Placeholder mapping files (development artifacts)
+doc_placeholder_mapping.json
+placeholder_docs_final.json
+
+# Accidentally created files
+dy

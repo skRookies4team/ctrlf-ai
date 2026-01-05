@@ -17,6 +17,11 @@ Phase 23 업데이트:
 - clarify_group별 키워드 매핑으로 sub_intent 결정 (ClarifyAnswerHandler)
 - one-shot 처리: 처리 완료 시 pending 즉시 삭제
 
+Phase 52 업데이트:
+- 공통 post-process 추가: BACKEND_STATUS + 빈 sub_intent 폴백 게이트
+- RuleRouter가 LLMRouter를 건너뛰어도 폴백 게이트가 적용됨
+- 정책/절차형 질문은 RAG로 재라우팅
+
 플로우:
 ```
 사용자 질문
@@ -46,6 +51,7 @@ ClarifyAnswerHandler로 키워드 매핑
 ```
 """
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -417,6 +423,19 @@ class RouterOrchestrator:
             else:
                 final_result = rule_result
 
+        # Phase 52: Step 4.5 - 공통 post-process (BACKEND_STATUS 폴백 게이트)
+        # RuleRouter가 LLMRouter를 건너뛰어도 이 로직은 항상 실행됨
+        final_result = self._apply_common_post_process(final_result, user_query)
+
+        # 공통 post-process 후 되묻기 필요하면 반환
+        if final_result.needs_clarify:
+            return self._create_clarify_result(
+                router_result=final_result,
+                session_id=session_id,
+                user_id=user_id,
+                original_query=user_query,
+            )
+
         # Step 5: 확인 게이트 필요하면 반환
         if final_result.requires_confirmation:
             return self._create_confirmation_result(
@@ -780,3 +799,101 @@ class RouterOrchestrator:
             session_id: 세션 ID
         """
         self._pending_store.delete(session_id)
+
+    def _apply_common_post_process(
+        self, result: RouterResult, user_query: str
+    ) -> RouterResult:
+        """Phase 52: 공통 post-process - BACKEND_STATUS 폴백 게이트.
+
+        RuleRouter가 LLMRouter를 건너뛰어도 이 로직은 항상 실행됩니다.
+        BACKEND_STATUS + 빈 sub_intent_id인 경우:
+        - (절차/단계 단어) AND (보안/사고 힌트) → POLICY_QA (RAG)
+        - (절차/단계 단어) AND (교육 힌트) → EDUCATION_QA (RAG)
+        - 그 외 → clarify
+
+        Args:
+            result: 라우터 결과
+            user_query: 원본 사용자 질문
+
+        Returns:
+            RouterResult: 보정된 결과
+        """
+        # BACKEND_STATUS + 빈 sub_intent_id가 아니면 그대로 반환
+        if result.tier0_intent != Tier0Intent.BACKEND_STATUS or result.sub_intent_id:
+            return result
+
+        query_lower = user_query.lower()
+        query_normalized = re.sub(r"\s+", "", query_lower)
+
+        # 절차/프로세스 단어 (정규화됨)
+        procedure_words_norm = {
+            "절차", "단계", "단계별", "보고", "신고", "대응", "처리",
+            "어떻게해야", "뭘해야", "해야하는", "해야할",
+            "누구에게", "어디로", "어디에",
+        }
+
+        # 보안/사고 힌트 (정규화됨)
+        security_hints_norm = {
+            "보안", "사고", "유출", "침해", "반출",
+            "악성코드", "랜섬웨어", "해킹", "피싱",
+            "개인정보유출", "정보유출", "데이터유출",
+        }
+
+        # 교육 내용 힌트 (정규화됨)
+        edu_content_hints_norm = {
+            "교육내용", "교육자료", "학습내용", "강의내용",
+            "무슨교육", "어떤교육", "교육이뭐", "교육이란",
+            "커리큘럼", "교육과정",
+        }
+
+        # 절차 단어 체크
+        has_procedure = any(kw in query_normalized for kw in procedure_words_norm)
+
+        # 절차 + 보안/사고 힌트 → POLICY_QA (AND 조건)
+        if has_procedure:
+            has_security = any(kw in query_normalized for kw in security_hints_norm)
+            if has_security:
+                logger.info(
+                    "Orchestrator post-process: procedure+security AND matched, "
+                    "re-routing to POLICY_QA (RAG)"
+                )
+                result.tier0_intent = Tier0Intent.POLICY_QA
+                result.domain = RouterDomain.POLICY
+                result.route_type = RouterRouteType.RAG_INTERNAL
+                result.confidence = 0.75
+                result.needs_clarify = False
+                result.clarify_question = ""
+                if result.debug:
+                    result.debug.rule_hits.append("ORCHESTRATOR_FALLBACK_PROCEDURE_SECURITY")
+                return result
+
+            # 절차 + 교육 힌트 → EDUCATION_QA (AND 조건)
+            has_edu = any(kw in query_normalized for kw in edu_content_hints_norm)
+            if has_edu:
+                logger.info(
+                    "Orchestrator post-process: procedure+edu AND matched, "
+                    "re-routing to EDUCATION_QA (RAG)"
+                )
+                result.tier0_intent = Tier0Intent.EDUCATION_QA
+                result.domain = RouterDomain.EDU
+                result.route_type = RouterRouteType.RAG_INTERNAL
+                result.confidence = 0.75
+                result.needs_clarify = False
+                result.clarify_question = ""
+                if result.debug:
+                    result.debug.rule_hits.append("ORCHESTRATOR_FALLBACK_PROCEDURE_EDU")
+                return result
+
+        # 폴백 조건 미충족 → clarify 설정
+        if not result.needs_clarify:
+            logger.debug(
+                "Orchestrator post-process: BACKEND_STATUS without sub_intent_id, "
+                "no fallback matched, setting needs_clarify"
+            )
+            result.needs_clarify = True
+            result.clarify_question = (
+                "어떤 정보를 조회하시겠어요? "
+                "(예: 연차 잔여, 교육 이수현황, 근태 현황, 복지 포인트 등)"
+            )
+
+        return result

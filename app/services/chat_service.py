@@ -80,6 +80,7 @@ from app.models.chat import (
     ChatAction,
     ChatActionType,
     ChatAnswerMeta,
+    ChatMessage,
     ChatRequest,
     ChatResponse,
     ChatSource,
@@ -176,6 +177,15 @@ from app.core.backend_context import (
     set_backend_blocked,
     reset_backend_context,
 )
+# 멀티턴 맥락 유지
+from app.models.conversation_state import ConversationState
+from app.services.chat.context_handler import (
+    ChatContextHandler,
+    get_context_handler,
+    ContextProcessResult,
+    SearchProcessResult,
+)
+from app.services.history_manager import truncate_history_safe
 
 logger = get_logger(__name__)
 
@@ -420,6 +430,9 @@ class ChatService:
         else:
             self._forbidden_filter = None
 
+        # 멀티턴 맥락 유지: ChatContextHandler 초기화
+        self._context_handler = get_context_handler()
+
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
         Handle a chat request and generate a response using full pipeline.
@@ -475,6 +488,34 @@ class ChatService:
 
         user_query = req.messages[-1].content
         logger.debug(f"User query received: len={len(user_query)}")
+
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 0 - State 로드
+        # =====================================================================
+        # user_id가 없으면 상태 기능 비활성화 (anonymous 충돌 방지)
+        # 실제 운영에서는 인증 컨텍스트(서버 보장 user_id)를 사용해야 함
+        state_enabled = bool(req.user_id)
+        if state_enabled:
+            conv_state = await self._context_handler.load_state(
+                user_id=req.user_id,
+                session_id=req.session_id,
+            )
+        else:
+            # user_id 없으면 빈 상태로 진행 (로드/저장 스킵)
+            conv_state = ConversationState(
+                user_id="",
+                session_id=req.session_id,
+            )
+            logger.warning(
+                f"[MULTITURN] user_id missing, state disabled for session={req.session_id}"
+            )
+
+        # 멀티턴 로깅 키 고정
+        logger.info(
+            f"[MULTITURN] user_id={req.user_id}, session_id={req.session_id}, "
+            f"request_id={request_id}, state_enabled={state_enabled}, "
+            f"state_version={conv_state.state_version}, turn={conv_state.turn_count}"
+        )
 
         # =====================================================================
         # Phase 50 / Step 3: 금지질문 필터 (1차 가드) - PII 마스킹 전에 raw_query로 체크
@@ -727,6 +768,31 @@ class ChatService:
                 tool=route.value,
                 reason=f"rule-based: IntentService",
             )
+
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 1-4 - 컨텍스트 처리
+        # =====================================================================
+        # 라우터 결과를 단일 진실(C)로 사용하여 컨텍스트 처리
+        context_result = await self._context_handler.process_context(
+            state=conv_state,
+            messages=req.messages,
+            user_query=user_query,
+            current_domain=domain,
+            current_intent=intent.value if intent else None,
+        )
+
+        # 지시어 해소 결과 반영
+        query_for_rag = context_result.resolved_query
+        if context_result.anaphora_resolved:
+            logger.info(
+                f"[MULTITURN] Anaphora resolved: {context_result.anaphora_type.value}, "
+                f"doc_id={context_result.resolved_doc_id}"
+            )
+            # RAG 검색에는 해소된 쿼리 사용
+            masked_query = query_for_rag
+
+        # 히스토리 (MessageBuilder에 전달용, 현재 질문 제외됨)
+        history_for_prompt = context_result.history_for_prompt
 
         # Step 4: RAG Search / Backend Data (based on route)
         # Phase 11: BACKEND_API, MIXED_BACKEND_RAG 실제 처리 로직 구현
@@ -1081,6 +1147,7 @@ class ChatService:
             )
         else:
             # 기존 로직: RAG_INTERNAL, LLM_ONLY 등
+            # 멀티턴 맥락 유지: conversation_state, history 전달
             llm_messages = self._build_llm_messages(
                 user_query=masked_query,
                 sources=sources,
@@ -1090,6 +1157,8 @@ class ChatService:
                 domain=domain,
                 intent=intent,
                 soft_guardrail_instruction=soft_guardrail_instruction,
+                conversation_state=conv_state,
+                history=history_for_prompt,
             )
 
         # Step 6: Generate LLM response
@@ -1270,6 +1339,27 @@ class ChatService:
             intent=intent,
         )
 
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 7 - 상태 갱신 (B: 갱신 규칙)
+        # =====================================================================
+        # 응답 생성 완료 후 상태 갱신 (state_enabled=True인 경우만)
+        # - 도메인/인텐트는 라우터 결과 기반 (Single Source of Truth)
+        # - 문서 갱신은 score/gap 기반 조건 체크
+        if state_enabled:
+            state_update_result = self._context_handler.update_state_from_response(
+                state=conv_state,
+                current_domain=domain,
+                current_intent=intent.value if intent else "",
+                sources=sources,
+                resolved_doc_id=context_result.resolved_doc_id,
+                resolved_by_anaphora=context_result.anaphora_resolved,
+                selected_by_user=context_result.user_selected,
+            )
+            logger.debug(
+                f"[MULTITURN] State updated: version={state_update_result.version}, "
+                f"doc_added={state_update_result.doc_added}"
+            )
+
         # Determine if any PII was detected (input or output)
         has_pii = pii_input.has_pii or pii_output.has_pii
 
@@ -1414,6 +1504,20 @@ class ChatService:
             ab_collection_name=ab_info.get("collection_name"),
         )
 
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 8 - 상태 저장 (TTL sliding 포함)
+        # =====================================================================
+        if state_enabled:
+            try:
+                await self._context_handler.save_state(conv_state)
+                logger.debug(
+                    f"[MULTITURN] State saved: user_id={req.user_id}, "
+                    f"session_id={req.session_id}, version={conv_state.state_version}"
+                )
+            except Exception as e:
+                # 상태 저장 실패는 응답에 영향 주지 않음
+                logger.warning(f"[MULTITURN] State save failed: {e}")
+
         # Step 9: Emit v1 Telemetry CHAT_TURN event (exactly once per turn)
         emit_chat_turn_once(
             intent_main=intent.value,
@@ -1535,12 +1639,15 @@ class ChatService:
         domain: Optional[str] = None,
         intent: Optional["IntentType"] = None,
         soft_guardrail_instruction: Optional[str] = None,
+        conversation_state: Optional["ConversationState"] = None,
+        history: Optional[List["ChatMessage"]] = None,
     ) -> List[Dict[str, str]]:
         """
         Build message list for LLM chat completion (위임).
 
         Phase 2 리팩토링: MessageBuilder로 로직 위임.
         Phase 46: 소프트 가드레일 시스템 지침 파라미터 추가.
+        멀티턴 맥락 유지: conversation_state, history 파라미터 추가.
         """
         return self._message_builder.build_rag_messages(
             user_query=user_query,
@@ -1551,6 +1658,8 @@ class ChatService:
             domain=domain,
             intent=intent,
             soft_guardrail_instruction=soft_guardrail_instruction,
+            conversation_state=conversation_state,
+            history=history,
         )
 
     def _format_sources_for_prompt(self, sources: List[ChatSource]) -> str:
