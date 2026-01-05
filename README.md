@@ -226,3 +226,7 @@ ctrlf-ai/
 ## 라이선스
 
 Private - CTRL+F Team
+
+
+# 배치 테스트
+python scripts/test/qa_batch_test.py
