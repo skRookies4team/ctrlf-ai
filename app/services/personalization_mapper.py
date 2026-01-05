@@ -37,6 +37,7 @@ SUBINTENT_TO_Q: dict[str, str] = {
 
     # QUIZ 관련 - 개인화 조회
     "QUIZ_PENDING_CHECK": "Q7",    # 미완료/재응시 퀴즈 조회
+    # QUIZ_SCORE_CHECK는 query 기반으로 세분화 (아래 _classify_quiz_score 함수)
 }
 
 # HR_LEAVE_CHECK 세분화용 키워드 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
@@ -53,6 +54,12 @@ EDU_STATUS_KEYWORDS: dict[str, list[str]] = {
     "Q3": ["데드라인", "마감", "이번 달", "이번달", "이달", "이달 내", "곧 마감"],
     "Q9": ["이번 주", "이번주", "할 일", "해야 할", "해야할", "이주", "이주 내", "금주"],
 }
+
+# QUIZ_SCORE_CHECK 세분화용 키워드 (Q5: 평균 점수, Q6: 낮은 점수 과목)
+QUIZ_SCORE_Q6_KEYWORDS = frozenset([
+    "낮은", "가장 낮", "제일 낮", "취약", "약한", "못한",
+    "높은", "가장 높", "제일 높", "잘한",
+])
 
 # Q로 시작하는지 확인
 def is_personalization_q(sub_intent_id: str) -> bool:
@@ -126,6 +133,12 @@ def to_personalization_q(
         logger.debug(f"EDU_STATUS_CHECK classified as {q}, query_len={len(query)}")
         return q
 
+    # QUIZ_SCORE_CHECK 세분화 (Q5: 평균 점수, Q6: 낮은/높은 점수 과목)
+    if sub_intent_id == "QUIZ_SCORE_CHECK":
+        q = _classify_quiz_score(query)
+        logger.debug(f"QUIZ_SCORE_CHECK classified as {q}, query_len={len(query)}")
+        return q
+
     # 매핑되지 않음 (개인화 대상 아님)
     logger.debug(f"No personalization mapping for: {sub_intent_id}")
     return None
@@ -159,6 +172,29 @@ def _classify_edu_status(query: str) -> str:
 
     # 기본: Q2 (수료현황/진도)
     return "Q2"
+
+
+def _classify_quiz_score(query: str) -> str:
+    """QUIZ_SCORE_CHECK를 query 키워드로 Q5/Q6 중 하나로 세분화합니다.
+
+    Q5: 내 평균 vs 부서/전사 평균
+    Q6: 가장 낮은/높은 점수 교육 TOP3
+
+    Args:
+        query: 사용자 질문
+
+    Returns:
+        str: Q6 (낮은/높은 점수), Q5 (기본: 평균 점수)
+    """
+    q_lower = query.lower()
+
+    # Q6: 낮은/높은 점수 과목
+    for keyword in QUIZ_SCORE_Q6_KEYWORDS:
+        if keyword in q_lower:
+            return "Q6"
+
+    # 기본: Q5 (평균 점수)
+    return "Q5"
 
 
 def _classify_hr_leave(query: str) -> str:
@@ -205,6 +241,7 @@ PERSONALIZATION_SUBINTENTS = frozenset([
     "EDU_RESUME_CHECK",      # 교육 이어보기/재생 위치
     # 직접 매핑되는 SubIntentId - QUIZ 도메인
     "QUIZ_PENDING_CHECK",    # 미완료/재응시 퀴즈
+    "QUIZ_SCORE_CHECK",      # 퀴즈 점수/성적 조회 (Q5, Q6)
     # 이미 Q 형식인 경우도 포함
     *[f"Q{i}" for i in range(1, 21)],
 ])

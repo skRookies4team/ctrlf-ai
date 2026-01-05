@@ -241,6 +241,26 @@ QUIZ_PENDING_KEYWORDS = frozenset([
     "퀴즈 목록", "시험 목록", "퀴즈 있", "시험 있",
 ])
 
+# 퀴즈 점수/성적 조회 키워드 (QUIZ_SCORE_CHECK - 개인화 Q5, Q6)
+QUIZ_SCORE_KEYWORDS = frozenset([
+    # 평균 점수 패턴 (Q5)
+    "평균 점수", "점수 평균", "퀴즈 평균", "시험 평균",
+    "내 평균", "나의 평균", "평균점수", "점수평균",
+    "퀴즈 점수", "시험 점수", "내 점수", "나의 점수",
+    "성적 평균", "평균 성적",
+    # 부서/전사 비교 패턴 (Q5)
+    "부서 평균", "전사 평균", "회사 평균", "팀 평균",
+    "다른 사람", "비교",
+    # 낮은/높은 점수 패턴 (Q6)
+    "낮은 점수", "점수가 낮은", "점수 낮은",
+    "높은 점수", "점수가 높은", "점수 높은",
+    "가장 낮", "가장 높", "제일 낮", "제일 높",
+    "취약", "취약한", "약한 과목", "못한 과목",
+    # 성적 조회 일반 패턴
+    "성적 조회", "점수 조회", "성적 확인", "점수 확인",
+    "성적 알려", "점수 알려",
+])
+
 # 퀴즈 문맥 키워드 (치명 액션 판정 시 오탐 방지용)
 # "채점해", "점수 확인" 같은 범용 키워드가 퀴즈 외 맥락에서 매칭되지 않도록
 QUIZ_CONTEXT_KEYWORDS = frozenset(["퀴즈", "시험", "테스트"])
@@ -740,6 +760,21 @@ class RuleRouter:
                 domain=RouterDomain.QUIZ,
                 route_type=RouterRouteType.BACKEND_API,
                 sub_intent_id=SubIntentId.QUIZ_PENDING_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
+        # 2-3. 퀴즈 점수/성적 조회 (개인화 Q5, Q6)
+        if self._contains_any(query_lower, QUIZ_SCORE_KEYWORDS):
+            debug_info.rule_hits.append("QUIZ_SCORE_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in QUIZ_SCORE_KEYWORDS if kw in query_lower]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.QUIZ,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.QUIZ_SCORE_CHECK.value,
                 confidence=0.9,
                 debug=debug_info,
             )

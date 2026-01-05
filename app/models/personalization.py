@@ -78,6 +78,8 @@ class PersonalizationSubIntentId(str, Enum):
     Q2 = "Q2"   # 내 교육 수료 현황 조회
     Q3 = "Q3"   # 이번 달 데드라인 필수 교육
     Q4 = "Q4"   # 특정 교육 진도율/시청률 조회
+    Q5 = "Q5"   # 내 평균 vs 부서/전사 평균
+    Q6 = "Q6"   # 가장 낮은/높은 점수 교육 TOP3
     Q7 = "Q7"   # 특정 교육 퀴즈 결과 조회
     Q8 = "Q8"   # 내 퀴즈 점수 이력 조회
     Q9 = "Q9"   # 이번 주 교육/퀴즈 할 일 1줄
@@ -94,11 +96,13 @@ class PersonalizationSubIntentId(str, Enum):
     Q20 = "Q20"  # 올해 HR 할 일 (미완료)
 
 
-# 데모 완전 구현 대상 (6개)
+# 데모 완전 구현 대상 (8개) - Q5, Q6 추가 (백엔드 실제 DB 연동 완료)
 PRIORITY_SUB_INTENTS = frozenset([
     PersonalizationSubIntentId.Q1.value,
     PersonalizationSubIntentId.Q3.value,
     PersonalizationSubIntentId.Q4.value,   # 교육 이어보기 (EDU_RESUME_CHECK)
+    PersonalizationSubIntentId.Q5.value,   # 내 평균 vs 부서/전사 평균 (백엔드 DB 연동)
+    PersonalizationSubIntentId.Q6.value,   # 가장 낮은/높은 점수 교육 TOP3 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q9.value,
     PersonalizationSubIntentId.Q11.value,
     PersonalizationSubIntentId.Q14.value,
@@ -108,6 +112,8 @@ PRIORITY_SUB_INTENTS = frozenset([
 # Q별 기본 period 매핑 (기간 미지정 시 사용)
 DEFAULT_PERIOD_FOR_INTENT: Dict[str, PeriodType] = {
     "Q3": PeriodType.THIS_MONTH,
+    "Q5": PeriodType.THIS_YEAR,   # 내 평균 vs 부서/전사 평균
+    "Q6": PeriodType.THIS_YEAR,   # 가장 낮은/높은 점수 교육 TOP3
     "Q9": PeriodType.THIS_WEEK,
     "Q11": PeriodType.THIS_YEAR,
     "Q14": PeriodType.THIS_YEAR,  # 기간 없음이지만 기본값
@@ -303,6 +309,20 @@ SUB_INTENT_METADATA: Dict[str, SubIntentMetadata] = {
         description="특정 교육 진도율/시청률 조회",
         keywords=["진도율", "시청률", "얼마나 봤", "몇 퍼센트"],
         domain="EDU",
+    ),
+    "Q5": SubIntentMetadata(
+        sub_intent_id="Q5",
+        description="내 퀴즈 평균 vs 부서/전사 평균 비교",
+        keywords=["평균 점수", "부서 평균", "전사 평균", "비교", "내 점수 어때"],
+        default_period=PeriodType.THIS_YEAR,
+        domain="QUIZ",
+    ),
+    "Q6": SubIntentMetadata(
+        sub_intent_id="Q6",
+        description="가장 낮은/높은 점수 교육 TOP3",
+        keywords=["낮은 점수", "높은 점수", "취약 과목", "못 본 퀴즈", "잘 본 퀴즈", "TOP3"],
+        default_period=PeriodType.THIS_YEAR,
+        domain="QUIZ",
     ),
     "Q7": SubIntentMetadata(
         sub_intent_id="Q7",

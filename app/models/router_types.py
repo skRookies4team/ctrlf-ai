@@ -146,6 +146,9 @@ class SubIntentId(str, Enum):
     # 개인화 조회 - QUIZ 도메인: 미완료/재응시 필요 퀴즈 조회
     QUIZ_PENDING_CHECK = "QUIZ_PENDING_CHECK"
 
+    # 개인화 조회 - QUIZ 도메인: 퀴즈 점수/성적 조회 (Q5, Q6)
+    QUIZ_SCORE_CHECK = "QUIZ_SCORE_CHECK"
+
     # 개인화 조회 - EDU 도메인: 교육 이어보기/재생 위치 조회
     EDU_RESUME_CHECK = "EDU_RESUME_CHECK"
 
