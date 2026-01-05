@@ -159,3 +159,90 @@ class FaqDraftGenerateBatchResponse(BaseModel):
     total_count: int = Field(..., ge=0, description="전체 요청 수")
     success_count: int = Field(..., ge=0, description="성공한 요청 수")
     failed_count: int = Field(..., ge=0, description="실패한 요청 수")
+
+
+# =============================================================================
+# 자동 FAQ 생성 모델 (Auto FAQ Generation)
+# =============================================================================
+
+
+class FaqCandidate(BaseModel):
+    """
+    FAQ 후보 정보
+
+    후보 선정 단계에서 생성되는 후보 정보입니다.
+    """
+
+    candidate_id: str = Field(..., description="후보 ID (UUID)")
+    cluster_id: str = Field(..., description="클러스터 ID")
+    canonical_question: str = Field(..., description="표준 질문")
+    frequency_score: float = Field(..., ge=0.0, le=1.0, description="빈도 점수")
+    recency_score: float = Field(..., ge=0.0, le=1.0, description="최근성 점수")
+    total_score: float = Field(..., ge=0.0, le=1.0, description="종합 점수")
+    domain: Optional[str] = Field(None, description="도메인")
+    sample_questions: List[str] = Field(
+        default_factory=list, description="실제 직원 질문 예시들"
+    )
+    user_count: int = Field(..., ge=1, description="질문한 사용자 수")
+
+
+class FaqAutoGenerateRequest(BaseModel):
+    """
+    자동 FAQ 생성 요청
+
+    질문 로그를 분석하여 FAQ 후보를 선정하고, 필요시 FAQ 초안을 자동 생성합니다.
+
+    Attributes:
+        domain: 도메인 필터 (선택, null이면 모든 도메인)
+        min_frequency: 최소 질문 빈도 (여러 사용자 간의 질문이 이 횟수 이상이어야 후보로 선정)
+        days_back: 조회 기간 일수 (최근 N일간의 질문 로그 분석)
+        max_candidates: 최대 후보 수 제한
+        auto_generate_drafts: true이면 후보 선정 후 자동으로 FAQ 초안까지 생성
+    """
+
+    domain: Optional[str] = Field(
+        None, description="도메인 필터 (예: SECURITY, POLICY, null이면 모든 도메인)"
+    )
+    min_frequency: int = Field(
+        default=3, ge=1, description="최소 질문 빈도 (여러 사용자 간의 질문 횟수)"
+    )
+    days_back: int = Field(
+        default=30, ge=1, le=365, description="조회 기간 일수 (최근 N일간)"
+    )
+    max_candidates: int = Field(
+        default=20, ge=1, le=100, description="최대 후보 수 제한"
+    )
+    auto_generate_drafts: bool = Field(
+        default=True, description="자동으로 FAQ 초안 생성 여부"
+    )
+
+
+class FaqAutoGenerateResponse(BaseModel):
+    """
+    자동 FAQ 생성 응답
+
+    질문 로그 분석 결과와 생성된 FAQ 초안 목록을 반환합니다.
+
+    Attributes:
+        status: 처리 상태 (SUCCESS, PARTIAL, FAILED)
+        candidates_found: 발견된 후보 수
+        drafts_generated: 생성된 초안 수
+        drafts_failed: 실패한 초안 수
+        candidates: FAQ 후보 목록 (로깅/디버깅용, 선택적)
+        drafts: 생성된 FAQ 초안 목록
+        error_message: 에러 메시지 (실패 시)
+    """
+
+    status: Literal["SUCCESS", "PARTIAL", "FAILED"] = Field(
+        ..., description="처리 상태"
+    )
+    candidates_found: int = Field(..., ge=0, description="발견된 후보 수")
+    drafts_generated: int = Field(..., ge=0, description="생성된 초안 수")
+    drafts_failed: int = Field(..., ge=0, description="실패한 초안 수")
+    candidates: List[FaqCandidate] = Field(
+        default_factory=list, description="FAQ 후보 목록 (로깅/디버깅용)"
+    )
+    drafts: List[FaqDraft] = Field(
+        default_factory=list, description="생성된 FAQ 초안 목록"
+    )
+    error_message: Optional[str] = Field(None, description="에러 메시지 (실패 시)")
