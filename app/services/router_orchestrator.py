@@ -56,7 +56,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from app.clients.llm_client import LLMClient
 from app.core.config import get_settings
@@ -189,6 +189,26 @@ class PendingAction:
     original_query: str = ""
     clarify_group: ClarifyGroup = ClarifyGroup.UNKNOWN
     user_id: str = ""
+    # 멀티턴 문서 선택용 (anaphora clarify에서 사용)
+    clarify_doc_options: List[Dict[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class ClarifyResolveResult:
+    """Clarify 응답 해석 결과.
+
+    _resolve_clarify_answer()의 반환값으로,
+    라우팅 결과와 함께 사용자 선택 정보를 담습니다.
+
+    Attributes:
+        router_result: 결정된 라우팅 결과
+        selected_doc_id: 선택된 문서 ID (문서 선택 Clarify인 경우)
+        selected_doc_title: 선택된 문서 제목
+    """
+
+    router_result: RouterResult
+    selected_doc_id: Optional[str] = None
+    selected_doc_title: Optional[str] = None
 
 
 # =============================================================================
@@ -208,6 +228,9 @@ class OrchestrationResult:
         response_message: 사용자에게 보여줄 메시지
         pending_action: 대기 중인 액션 (있으면)
         can_execute: 즉시 실행 가능 여부
+        user_selected: Clarify에서 사용자가 명시적으로 선택했는지
+        selected_doc_id: Clarify에서 선택된 문서 ID
+        selected_doc_title: Clarify에서 선택된 문서 제목
     """
 
     router_result: RouterResult
@@ -215,6 +238,10 @@ class OrchestrationResult:
     response_message: str = ""
     pending_action: Optional[PendingAction] = None
     can_execute: bool = True
+    # Clarify 명시 선택 정보
+    user_selected: bool = False
+    selected_doc_id: Optional[str] = None
+    selected_doc_title: Optional[str] = None
 
 
 # =============================================================================
@@ -559,14 +586,13 @@ class RouterOrchestrator:
 
         # 되묻기 응답 - Phase 23: ClarifyAnswerHandler 로직
         elif pending.action_type == PendingActionType.CLARIFY:
-            # one-shot: 처리 후 pending 삭제
-            self._pending_store.delete(session_id)
-
             # Phase 23: 응답 길이 체크
             response_length = len(user_query.strip())
 
             # 긴 응답(20자 초과)이면 새 질문으로 처리
             if response_length > CLARIFY_SHORT_RESPONSE_MAX_LENGTH:
+                # 긴 응답은 새 질문이므로 pending 삭제
+                self._pending_store.delete(session_id)
                 logger.info(
                     f"Clarify response too long ({response_length} chars), "
                     f"treating as new query: {user_query[:50]}..."
@@ -579,30 +605,40 @@ class RouterOrchestrator:
                 )
 
             # 짧은 응답: ClarifyAnswerHandler로 키워드 매핑
-            resolved_route = self._resolve_clarify_answer(
+            resolve_result = self._resolve_clarify_answer(
                 answer=user_query,
                 clarify_group=pending.clarify_group,
                 original_query=pending.original_query,
                 pending=pending,
             )
 
-            if resolved_route:
+            if resolve_result:
+                # 성공 시에만 pending 삭제 (오입력 시 재시도 가능)
+                self._pending_store.delete(session_id)
                 logger.info(
                     f"Clarify answer resolved: group={pending.clarify_group.value}, "
-                    f"answer='{user_query}', route={resolved_route.route_type.value}"
+                    f"answer='{user_query}', route={resolve_result.router_result.route_type.value}, "
+                    f"user_selected=True, doc_id={resolve_result.selected_doc_id}"
                 )
                 return OrchestrationResult(
-                    router_result=resolved_route,
+                    router_result=resolve_result.router_result,
                     needs_user_response=False,
                     can_execute=True,
+                    # 멀티턴: Clarify 선택 정보 전달
+                    user_selected=True,
+                    selected_doc_id=resolve_result.selected_doc_id,
+                    selected_doc_title=resolve_result.selected_doc_title,
                 )
 
-            # 키워드 매핑 실패: 원문+응답 결합하여 재라우팅
-            combined_query = f"{pending.original_query} {user_query}".strip()
+            # 키워드 매핑 실패: pending 유지하고 재질문 유도
+            # (오입력 시 복구 가능하도록)
             logger.info(
-                f"Clarify keyword not matched, re-routing with combined query: "
-                f"'{combined_query[:50]}...'"
+                f"Clarify keyword not matched for answer='{user_query}', "
+                f"group={pending.clarify_group.value}, keeping pending for retry"
             )
+            # 재질문 대신 원문+응답 결합으로 폴백 (기존 동작 유지)
+            combined_query = f"{pending.original_query} {user_query}".strip()
+            self._pending_store.delete(session_id)
             return await self.route(
                 user_query=combined_query,
                 session_id=session_id,
@@ -624,10 +660,11 @@ class RouterOrchestrator:
         clarify_group: ClarifyGroup,
         original_query: str,
         pending: PendingAction,
-    ) -> Optional[RouterResult]:
+    ) -> Optional[ClarifyResolveResult]:
         """되묻기 응답에서 키워드 매핑으로 라우팅 결과를 결정합니다.
 
         Phase 23: ClarifyAnswerHandler 로직
+        멀티턴 확장: 문서 선택 Clarify 지원 (clarify_doc_options 사용)
 
         Args:
             answer: 사용자 응답 (짧은 응답)
@@ -636,9 +673,25 @@ class RouterOrchestrator:
             pending: 대기 중인 액션
 
         Returns:
-            RouterResult: 결정된 라우팅 결과, 또는 None (매핑 실패 시)
+            ClarifyResolveResult: 라우팅 결과 + 문서 선택 정보, 또는 None (매핑 실패 시)
         """
         answer_lower = answer.lower().strip()
+
+        # 멀티턴 문서 선택 처리: 숫자 응답으로 문서 선택
+        selected_doc_id: Optional[str] = None
+        selected_doc_title: Optional[str] = None
+
+        if pending.clarify_doc_options:
+            # 숫자 응답 파싱 (예: "1", "2번", "첫번째")
+            doc_index = self._parse_selection_number(answer_lower)
+            if doc_index is not None and 0 <= doc_index < len(pending.clarify_doc_options):
+                selected_option = pending.clarify_doc_options[doc_index]
+                selected_doc_id = selected_option.get("doc_id")
+                selected_doc_title = selected_option.get("title")
+                logger.debug(
+                    f"Document selected from clarify: index={doc_index}, "
+                    f"doc_id={selected_doc_id}, title={selected_doc_title}"
+                )
 
         # clarify_group에 해당하는 키워드 맵 조회
         keyword_map = CLARIFY_KEYWORD_MAPPING.get(clarify_group, {})
@@ -651,11 +704,19 @@ class RouterOrchestrator:
                 break
 
         if not matched_route_type:
+            # 문서 선택은 성공했지만 라우트 매칭 실패 → 원래 라우트 유지
+            if selected_doc_id and pending.router_result:
+                return ClarifyResolveResult(
+                    router_result=pending.router_result,
+                    selected_doc_id=selected_doc_id,
+                    selected_doc_title=selected_doc_title,
+                )
             return None
 
         # 라우팅 결과 생성
+        router_result: Optional[RouterResult] = None
         if matched_route_type == "BACKEND_STATUS":
-            return RouterResult(
+            router_result = RouterResult(
                 tier0_intent=pending.pending_intent,
                 route_type=RouterRouteType.BACKEND_API,
                 sub_intent_id="STATUS_QUERY",
@@ -663,19 +724,54 @@ class RouterOrchestrator:
                 domain=pending.router_result.domain if pending.router_result else None,
             )
         elif matched_route_type == "RAG_INTERNAL":
-            return RouterResult(
+            router_result = RouterResult(
                 tier0_intent=pending.pending_intent,
                 route_type=RouterRouteType.RAG_INTERNAL,
                 confidence=0.9,
                 domain=pending.router_result.domain if pending.router_result else None,
             )
         elif matched_route_type == "BACKEND_API":
-            return RouterResult(
+            router_result = RouterResult(
                 tier0_intent=pending.pending_intent,
                 route_type=RouterRouteType.BACKEND_API,
                 confidence=0.9,
                 domain=pending.router_result.domain if pending.router_result else None,
             )
+
+        if router_result:
+            return ClarifyResolveResult(
+                router_result=router_result,
+                selected_doc_id=selected_doc_id,
+                selected_doc_title=selected_doc_title,
+            )
+
+        return None
+
+    def _parse_selection_number(self, answer: str) -> Optional[int]:
+        """응답에서 선택 번호를 추출합니다.
+
+        Args:
+            answer: 사용자 응답 (소문자 변환됨)
+
+        Returns:
+            int: 0-based 인덱스, 또는 None
+        """
+        import re
+
+        # 숫자 패턴: "1", "1번", "첫번째", "첫째" 등
+        patterns = [
+            (r"^(\d+)(?:번)?$", lambda m: int(m.group(1)) - 1),  # "1", "1번" → 0
+            (r"^첫\s*(?:번째|째)?$", lambda m: 0),
+            (r"^둘?\s*(?:번째|째)?$", lambda m: 1),
+            (r"^두\s*(?:번째|째)?$", lambda m: 1),
+            (r"^셋?\s*(?:번째|째)?$", lambda m: 2),
+            (r"^세\s*(?:번째|째)?$", lambda m: 2),
+        ]
+
+        for pattern, extractor in patterns:
+            match = re.match(pattern, answer.strip())
+            if match:
+                return extractor(match)
 
         return None
 

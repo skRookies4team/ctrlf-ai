@@ -400,10 +400,13 @@ class ChatContextHandler:
 
         갱신 우선순위:
         1. USER_SELECTED: 사용자가 Clarify 옵션에서 명시 선택 → 무조건 갱신
-        2. ANAPHORA_RESOLVED: 규칙/LLM으로 지시어 해소 → RAG_TOP1_HIGH로 처리
+        2. ANAPHORA_RESOLVED: 규칙/LLM으로 지시어 해소 → 약한 확정 (고신뢰 승격 금지)
         3. RAG_TOP1_HIGH: score >= threshold AND gap >= threshold
         4. RAG_TOP1_LOW: 낮은 신뢰도 → 갱신하되 reason 구분
         5. FALLBACK_FILTER: 갱신 안 함
+
+        주의: ANAPHORA_RESOLVED는 "후보 특정"이지 "정답 확정"이 아니므로
+        RAG_TOP1_HIGH로 승격하지 않음 (오답 고착 방지)
 
         Args:
             state: 대화 상태
@@ -437,17 +440,17 @@ class ChatContextHandler:
                 doc_added = True
                 logger.debug(f"Doc updated (USER_SELECTED): {resolved_doc_id}")
 
-        # 케이스 2: 지시어 해소로 문서 특정됨 (규칙/LLM) → RAG_TOP1_HIGH로 처리
-        # (USER_SELECTED보다 낮은 우선순위)
+        # 케이스 2: 지시어 해소로 문서 특정됨 (규칙/LLM) → ANAPHORA_RESOLVED
+        # 고신뢰 승격 금지: 지시어 해소는 "후보 특정"이지 "정답 확정"이 아님
+        # 오해소 1번이 RAG_TOP1_HIGH로 저장되어 오답 고착되는 경로를 차단
         elif resolved_by_anaphora and resolved_doc_id:
             doc = state.get_doc_by_id(resolved_doc_id)
             if doc:
-                # 지시어 해소는 USER_SELECTED가 아님 (사용자 명시 선택이 아니므로)
-                doc.reason = DocReferenceReason.RAG_TOP1_HIGH
+                doc.reason = DocReferenceReason.ANAPHORA_RESOLVED
                 doc.turn = state.turn_count
                 state.add_recent_doc(doc)
                 doc_added = True
-                logger.debug(f"Doc updated (ANAPHORA_RESOLVED→RAG_TOP1_HIGH): {resolved_doc_id}")
+                logger.debug(f"Doc updated (ANAPHORA_RESOLVED): {resolved_doc_id}")
 
         elif sources:
             top1 = sources[0]

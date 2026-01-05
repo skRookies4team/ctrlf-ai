@@ -470,12 +470,15 @@ class ChatService:
 
         # Phase AB: A/B 테스트 모델 (방식 B - model 필드 직접 사용)
         # ChatRequest.model 필드에서 직접 모델 선택 (별도 context API 불필요)
-        ab_model = req.model  # "openai" | "sroberta" | None
+        ab_model = req.model  # "openai" | "sroberta" | None (임베딩용)
+
+        # LLM 프로바이더 선택 (관리자 대시보드에서 설정)
+        llm_provider = req.llm_model  # "exaone" | "openai" | None
 
         logger.info(
             f"Processing chat request: session_id={req.session_id}, "
             f"user_id={req.user_id}, user_role={req.user_role}, "
-            f"request_id={request_id}, ab_model={ab_model}"
+            f"request_id={request_id}, ab_model={ab_model}, llm_provider={llm_provider}"
         )
 
         # Step 1: Extract the latest user message as query
@@ -780,6 +783,15 @@ class ChatService:
             current_domain=domain,
             current_intent=intent.value if intent else None,
         )
+
+        # Clarify 명시 선택 결과 반영 (orchestration_result에서 주입)
+        if orchestration_result is not None and orchestration_result.user_selected:
+            context_result.user_selected = True
+            context_result.resolved_doc_id = orchestration_result.selected_doc_id
+            context_result.anaphora_resolved = False  # 명시 선택은 지시어 해소가 아님
+            logger.debug(
+                f"[MULTITURN] User selected doc: {orchestration_result.selected_doc_id}"
+            )
 
         # 지시어 해소 결과 반영
         query_for_rag = context_result.resolved_query
@@ -1176,11 +1188,13 @@ class ChatService:
 
         try:
             # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
+            # llm_provider: 관리자 대시보드에서 선택한 LLM 프로바이더 ("exaone" | "openai")
             llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
                 messages=llm_messages,
-                model=None,  # Use server default
+                model=None,  # Use provider default model
                 temperature=0.2,
                 max_tokens=1024,
+                llm_provider=llm_provider,
             )
             raw_answer = llm_result.content
             llm_latency_ms = llm_result.latency_ms
@@ -1397,6 +1411,7 @@ class ChatService:
         meta = ChatAnswerMeta(
             user_role=intent_result.user_role.value,  # Phase 10: 역할 정보 포함
             used_model=llm_model_used or "internal-llm",  # LLM 응답에서 가져온 실제 모델명
+            llm_provider=llm_provider or "exaone",  # 사용된 LLM 프로바이더
             route=final_route.value,
             intent=intent.value,
             domain=domain,
