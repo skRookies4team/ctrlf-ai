@@ -18,11 +18,14 @@ from fastapi import APIRouter
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
+    AutoFaqGenerateRequest,
+    AutoFaqGenerateResponse,
     FaqDraftGenerateBatchRequest,
     FaqDraftGenerateBatchResponse,
     FaqDraftGenerateRequest,
     FaqDraftGenerateResponse,
 )
+from app.services.faq_auto_service import FaqAutoService, get_faq_auto_service
 from app.services.faq_service import FaqDraftService, FaqGenerationError
 
 logger = get_logger(__name__)
@@ -336,3 +339,130 @@ async def generate_faq_draft_batch(
         success_count=success_count,
         failed_count=failed_count,
     )
+
+
+# =============================================================================
+# 자동 FAQ 생성 엔드포인트 (질문 로그 기반)
+# =============================================================================
+
+
+@router.post(
+    "/generate/auto",
+    response_model=AutoFaqGenerateResponse,
+    summary="자동 FAQ 생성 (질문 로그 기반)",
+    description="사용자 질문 로그를 분석하여 자동으로 FAQ 후보를 선정하고 초안을 생성합니다.",
+    responses={
+        200: {
+            "description": "자동 FAQ 생성 결과",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "success": {
+                            "summary": "성공",
+                            "value": {
+                                "status": "SUCCESS",
+                                "candidates_found": 5,
+                                "drafts_generated": 5,
+                                "drafts_failed": 0,
+                                "candidates": [
+                                    {
+                                        "candidate_id": "cand-abc12345",
+                                        "cluster_id": "cluster-def67890",
+                                        "canonical_question": "USB 반출 절차는 어떻게 되나요?",
+                                        "sample_questions": [
+                                            "USB 반출 절차는 어떻게 되나요?",
+                                            "USB 메모리 외부 반출 방법이요"
+                                        ],
+                                        "frequency_score": 0.85,
+                                        "recency_score": None,
+                                        "total_score": 0.85
+                                    }
+                                ],
+                                "drafts": [
+                                    {
+                                        "faq_draft_id": "FAQ-cluster-def67890-xyz123",
+                                        "domain": "SEC_POLICY",
+                                        "cluster_id": "cluster-def67890",
+                                        "question": "USB 메모리 반출 시 어떤 절차가 필요한가요?",
+                                        "answer_markdown": "**정보보호팀의 사전 승인이 필요합니다.**",
+                                        "summary": "정보보호팀의 사전 승인이 필요합니다.",
+                                        "source_doc_id": "DOC-SEC-001",
+                                        "source_article_label": "제3장 제2조",
+                                        "answer_source": "AI_RAG",
+                                        "ai_confidence": 0.85,
+                                        "created_at": "2025-01-05T10:00:00Z"
+                                    }
+                                ],
+                                "error_message": None
+                            }
+                        },
+                        "partial": {
+                            "summary": "일부 성공",
+                            "value": {
+                                "status": "PARTIAL",
+                                "candidates_found": 5,
+                                "drafts_generated": 3,
+                                "drafts_failed": 2,
+                                "candidates": [],
+                                "drafts": [],
+                                "error_message": None
+                            }
+                        },
+                        "no_candidates": {
+                            "summary": "후보 없음",
+                            "value": {
+                                "status": "SUCCESS",
+                                "candidates_found": 0,
+                                "drafts_generated": 0,
+                                "drafts_failed": 0,
+                                "candidates": [],
+                                "drafts": [],
+                                "error_message": None
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+)
+async def generate_faq_auto(
+    request: AutoFaqGenerateRequest,
+) -> AutoFaqGenerateResponse:
+    """
+    자동 FAQ 생성 파이프라인을 실행합니다.
+
+    사용자 질문 로그를 분석하여 자동으로 FAQ 후보를 선정하고 초안을 생성합니다.
+
+    Args:
+        request: 자동 FAQ 생성 요청
+            - domain: 도메인 필터 (선택, 예: SEC_POLICY)
+            - minFrequency: 최소 질문 빈도 (기본 3회)
+            - daysBack: 조회 기간 (일, 기본 30일)
+            - maxCandidates: 최대 후보 수 (기본 20개)
+            - autoGenerateDrafts: 자동 FAQ 초안 생성 여부 (기본 true)
+
+    Returns:
+        AutoFaqGenerateResponse: 자동 FAQ 생성 결과
+            - status: SUCCESS, PARTIAL, FAILED
+            - candidates_found: 발견된 후보 수
+            - drafts_generated: 생성된 초안 수
+            - drafts_failed: 실패한 초안 수
+            - candidates: FAQ 후보 목록
+            - drafts: 생성된 FAQ 초안 목록
+            - error_message: 에러 메시지 (실패 시)
+    """
+    logger.info(
+        f"FAQ auto generate request: domain={request.domain}, "
+        f"minFrequency={request.minFrequency}, maxCandidates={request.maxCandidates}"
+    )
+
+    service = get_faq_auto_service()
+    response = await service.generate_auto(request)
+
+    logger.info(
+        f"FAQ auto generate response: status={response.status}, "
+        f"candidates={response.candidates_found}, drafts={response.drafts_generated}"
+    )
+
+    return response
