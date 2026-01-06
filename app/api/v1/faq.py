@@ -18,11 +18,14 @@ from fastapi import APIRouter
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
+    FaqAutoGenerateRequest,
+    FaqAutoGenerateResponse,
     FaqDraftGenerateBatchRequest,
     FaqDraftGenerateBatchResponse,
     FaqDraftGenerateRequest,
     FaqDraftGenerateResponse,
 )
+from app.services.faq_auto_service import FaqAutoGenerateService
 from app.services.faq_service import FaqDraftService, FaqGenerationError
 
 logger = get_logger(__name__)
@@ -31,6 +34,7 @@ router = APIRouter(prefix="/faq", tags=["FAQ"])
 
 # 서비스 인스턴스 (lazy initialization)
 _faq_service: FaqDraftService | None = None
+_faq_auto_service: FaqAutoGenerateService | None = None
 
 
 def get_faq_service() -> FaqDraftService:
@@ -39,6 +43,14 @@ def get_faq_service() -> FaqDraftService:
     if _faq_service is None:
         _faq_service = FaqDraftService()
     return _faq_service
+
+
+def get_faq_auto_service() -> FaqAutoGenerateService:
+    """FaqAutoGenerateService 인스턴스를 반환합니다 (싱글턴)."""
+    global _faq_auto_service
+    if _faq_auto_service is None:
+        _faq_auto_service = FaqAutoGenerateService()
+    return _faq_auto_service
 
 
 @router.post(
@@ -336,3 +348,144 @@ async def generate_faq_draft_batch(
         success_count=success_count,
         failed_count=failed_count,
     )
+
+
+# =============================================================================
+# 자동 FAQ 생성 엔드포인트 (Auto FAQ Generation)
+# =============================================================================
+
+
+@router.post(
+    "/generate/auto",
+    response_model=FaqAutoGenerateResponse,
+    summary="FAQ 자동 생성",
+    description="질문 로그를 분석하여 FAQ 후보를 선정하고, 필요시 FAQ 초안을 자동 생성합니다.",
+    responses={
+        200: {
+            "description": "자동 FAQ 생성 결과",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "success": {
+                            "summary": "성공",
+                            "value": {
+                                "status": "SUCCESS",
+                                "candidates_found": 5,
+                                "drafts_generated": 5,
+                                "drafts_failed": 0,
+                                "candidates": [
+                                    {
+                                        "candidate_id": "uuid",
+                                        "cluster_id": "cluster-uuid",
+                                        "canonical_question": "표준 질문",
+                                        "frequency_score": 0.85,
+                                        "recency_score": 0.90,
+                                        "total_score": 0.875,
+                                        "domain": "SECURITY",
+                                        "sample_questions": ["질문1", "질문2"],
+                                        "user_count": 5,
+                                    }
+                                ],
+                                "drafts": [],
+                                "error_message": None,
+                            },
+                        },
+                        "no_candidates": {
+                            "summary": "후보 없음",
+                            "value": {
+                                "status": "SUCCESS",
+                                "candidates_found": 0,
+                                "drafts_generated": 0,
+                                "drafts_failed": 0,
+                                "candidates": [],
+                                "drafts": [],
+                                "error_message": None,
+                            },
+                        },
+                    }
+                }
+            },
+        },
+    },
+)
+async def generate_auto_faq(
+    request: FaqAutoGenerateRequest,
+) -> FaqAutoGenerateResponse:
+    """
+    자동 FAQ 생성을 수행합니다.
+
+    질문 로그를 분석하여 FAQ 후보를 선정하고, 필요시 FAQ 초안을 자동 생성합니다.
+
+    **주요 단계**:
+    1. 질문 로그 조회 (백엔드 API 호출)
+    2. 질문 클러스터링 (유사 질문 그룹화)
+    3. 빈도 분석 (여러 사용자 간의 질문 빈도)
+    4. 후보 선정 및 점수 계산
+    5. FAQ 초안 자동 생성 (auto_generate_drafts=true인 경우)
+
+    **주의사항**:
+    - 현재 질문 로그 조회 API가 백엔드에 구현되지 않은 경우, NotImplementedError가 발생합니다.
+    - 백엔드 팀에 GET /chat/admin/messages API 구현을 요청하세요.
+
+    Args:
+        request: 자동 FAQ 생성 요청
+            - domain: 도메인 필터 (선택, null이면 모든 도메인)
+            - min_frequency: 최소 질문 빈도 (여러 사용자 간의 질문 횟수)
+            - days_back: 조회 기간 일수 (최근 N일간)
+            - max_candidates: 최대 후보 수 제한
+            - auto_generate_drafts: 자동으로 FAQ 초안 생성 여부
+
+    Returns:
+        FaqAutoGenerateResponse: 생성 결과
+            - status: SUCCESS, PARTIAL, 또는 FAILED
+            - candidates_found: 발견된 후보 수
+            - drafts_generated: 생성된 초안 수
+            - drafts_failed: 실패한 초안 수
+            - candidates: FAQ 후보 목록
+            - drafts: 생성된 FAQ 초안 목록
+            - error_message: 에러 메시지 (실패 시)
+    """
+    logger.info(
+        f"Auto FAQ generation request: domain={request.domain}, "
+        f"min_frequency={request.min_frequency}, days_back={request.days_back}, "
+        f"max_candidates={request.max_candidates}, "
+        f"auto_generate_drafts={request.auto_generate_drafts}"
+    )
+
+    service = get_faq_auto_service()
+
+    try:
+        response = await service.generate_auto_faq(request)
+
+        logger.info(
+            f"Auto FAQ generation completed: status={response.status}, "
+            f"candidates_found={response.candidates_found}, "
+            f"drafts_generated={response.drafts_generated}, "
+            f"drafts_failed={response.drafts_failed}"
+        )
+
+        return response
+
+    except NotImplementedError as e:
+        logger.error(f"Auto FAQ generation not implemented: {e}")
+        return FaqAutoGenerateResponse(
+            status="FAILED",
+            candidates_found=0,
+            drafts_generated=0,
+            drafts_failed=0,
+            candidates=[],
+            drafts=[],
+            error_message=str(e),
+        )
+
+    except Exception as e:
+        logger.exception(f"Unexpected error in auto FAQ generation: {e}")
+        return FaqAutoGenerateResponse(
+            status="FAILED",
+            candidates_found=0,
+            drafts_generated=0,
+            drafts_failed=0,
+            candidates=[],
+            drafts=[],
+            error_message=f"예기치 않은 오류: {type(e).__name__}: {str(e)}",
+        )

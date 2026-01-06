@@ -104,7 +104,7 @@ Spring → FastAPI: /start
   "requestId": "1b2b3b4b-....",
   "traceId": "trace-20251222-0001",
   "scriptPolicyId": "SP-DEFAULT-01",
-  "llmModelHint": "qwen2.5-14b-instruct"
+  "llmModelHint": "llm-model"
 }
 ```
 
@@ -247,7 +247,7 @@ URL : `/internal/callbacks/source-sets/{sourceSetId}/complete`
   "title": "직장내 괴롭힘 예방 교육",
   "totalDurationSec": 720,
   "version": 1,
-  "llmModel": "qwen2.5-14b-instruct",
+  "llmModel": "llm-model",
   "chapters": [
     {
       "chapterId": "uuid",

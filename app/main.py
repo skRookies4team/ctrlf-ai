@@ -239,9 +239,20 @@ app.include_router(source_sets.router, tags=["SourceSet Orchestration"])
 
 # RAG Documents Ingest API (POLICY 문서 Ingest)
 # - POST /internal/ai/rag-documents/ingest: Backend → AI ingest 요청
-# - POST /internal/ai/callbacks/ragflow/ingest: RAGFlow → AI 콜백
+# - POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest: RAGFlow → AI 콜백
 app.include_router(rag_documents.router, tags=["RAG Documents Ingest"])
 
 # Feedback Internal API (A6)
 # - POST /internal/ai/feedback: Backend → AI 피드백 수신
 app.include_router(feedback.router, tags=["Feedback"])
+
+# A/B Test Context API - DEPRECATED
+# 방식 B로 전환: 별도 context API 대신 ChatRequest.model 필드 직접 사용
+# 기존 방식 A의 API는 더 이상 필요하지 않음
+# - POST /internal/ai/context/model → ChatRequest.model 필드로 대체
+# - GET /internal/ai/context/model/{request_id} → 불필요
+# - DELETE /internal/ai/context/model/{request_id} → 불필요
+# - GET /internal/ai/context/stats → 불필요
+# from app.api.v1 import ab_context
+# app.include_router(ab_context.router, tags=["A/B Test Context"])
+

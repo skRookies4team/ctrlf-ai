@@ -61,6 +61,20 @@ async def verify_internal_token(
         logger.warning("BACKEND_INTERNAL_TOKEN not configured, skipping auth")
         return
 
+    # 받은 토큰 로그 출력 (디버깅용)
+    if x_internal_token:
+        masked_received = (
+            x_internal_token[:4] + "****" + x_internal_token[-4:]
+            if len(x_internal_token) > 8
+            else "****"
+        )
+        logger.info(
+            f"=== FastAPI 토큰 검증 ==="
+            f"받은 X-Internal-Token: {masked_received} (길이: {len(x_internal_token)})"
+        )
+    else:
+        logger.warning("X-Internal-Token 헤더가 없습니다.")
+
     if not x_internal_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -70,7 +84,33 @@ async def verify_internal_token(
             },
         )
 
+    # 예상 토큰 로그 출력 (디버깅용)
+    if expected_token:
+        masked_expected = (
+            expected_token[:4] + "****" + expected_token[-4:]
+            if len(expected_token) > 8
+            else "****"
+        )
+        logger.info(
+            f"예상 BACKEND_INTERNAL_TOKEN: {masked_expected} (길이: {len(expected_token)})"
+        )
+
     if x_internal_token != expected_token:
+        # 토큰 불일치 상세 로그
+        masked_received = (
+            x_internal_token[:4] + "****" + x_internal_token[-4:]
+            if len(x_internal_token) > 8
+            else "****"
+        )
+        masked_expected = (
+            expected_token[:4] + "****" + expected_token[-4:]
+            if len(expected_token) > 8
+            else "****"
+        )
+        logger.error(
+            f"토큰 불일치: 받은 토큰={masked_received} (길이: {len(x_internal_token)}), "
+            f"예상 토큰={masked_expected} (길이: {len(expected_token)})"
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
@@ -78,6 +118,8 @@ async def verify_internal_token(
                 "message": "유효하지 않은 인증 토큰입니다.",
             },
         )
+
+    logger.debug("토큰 검증 성공")
 
 
 # =============================================================================

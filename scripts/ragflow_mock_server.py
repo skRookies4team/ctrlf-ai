@@ -29,7 +29,7 @@ app = Flask(__name__)
 
 # 환경변수 (기본값)
 AI_TO_RAGFLOW_TOKEN = os.getenv("AI_TO_RAGFLOW_TOKEN", "your-backend-internal-token-here")
-AI_CALLBACK_URL = os.getenv("AI_CALLBACK_URL", "http://localhost:8000/internal/ai/callbacks/ragflow/ingest")
+AI_CALLBACK_URL = os.getenv("AI_CALLBACK_URL", "http://localhost:8000/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest")
 RAGFLOW_TO_AI_TOKEN = os.getenv("RAGFLOW_TO_AI_TOKEN", "your-ragflow-callback-token-here")
 
 

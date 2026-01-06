@@ -68,6 +68,13 @@ from app.clients.milvus_client import (
     MilvusSearchError,
     get_milvus_client,
 )
+from app.clients.ab_milvus_client import (
+    get_milvus_client_by_model,
+    get_client_info_by_model,
+    # Deprecated: 하위 호환용
+    get_ab_milvus_client,
+    get_ab_client_info,
+)
 from app.core.config import get_settings
 from app.core.exceptions import UpstreamServiceError
 from app.core.logging import get_logger
@@ -353,7 +360,7 @@ def apply_low_relevance_gate(
     domain: str,
 ) -> Tuple[List["ChatSource"], Optional[str]]:
     """
-    Phase 48/50: 저관련 검색 결과를 필터링합니다. (L2 거리 기준)
+    Phase 48/50/52.1: 저관련 검색 결과를 필터링합니다. (L2 거리 기준)
 
     L2 거리: 낮을수록 유사함 (0 = 완전 일치)
     - min_score(최소 거리) = 가장 유사한 결과의 거리
@@ -363,9 +370,15 @@ def apply_low_relevance_gate(
     - score_gate: min_score > threshold 시에도 최소 1개는 유지 (soft gate)
     - anchor_gate: 미매칭 시에도 최소 ANCHOR_GATE_MIN_KEEP개는 유지
 
+    Phase 52.1 개선 (RAG 품질 게이트 강화):
+    - RAG_QUALITY_HARD_DROP_ENABLED=True면:
+      - Gate A': min_score > RAG_QUALITY_DROP_THRESHOLD → HARD_DROP (sources=[])
+      - Gate B: 앵커 키워드 미매칭 → HARD_DROP (sources=[])
+    - RAG가 억지로 근거 없는 정책 안내를 하는 것 방지
+
     두 가지 게이트를 적용:
-    A. L2 거리 soft 게이트: min_score > RAG_MAX_L2_DISTANCE → 경고만, 최소 1개 유지
-    B. 앵커 키워드 soft 게이트: 핵심어 미매칭 → 경고만, 최소 1개 유지
+    A. L2 거리 게이트: min_score > threshold → soft/hard 강등
+    B. 앵커 키워드 게이트: 핵심어 미매칭 → soft/hard 강등
 
     Args:
         sources: RAG 검색 결과
@@ -374,8 +387,8 @@ def apply_low_relevance_gate(
 
     Returns:
         Tuple[List[ChatSource], Optional[str]]:
-            - 필터링된 sources (최소 1개 보장)
-            - gate_reason (soft 강등 시 사유, 통과 시 None)
+            - 필터링된 sources
+            - gate_reason (강등 시 사유, 통과 시 None)
     """
     settings = get_settings()
 
@@ -393,8 +406,24 @@ def apply_low_relevance_gate(
     avg_score = sum(scores) / len(scores)
     max_l2_threshold = settings.RAG_MAX_L2_DISTANCE
 
-    # Phase 50: 안전장치 - 최소 유지 개수
+    # Phase 52.1: 품질 게이트 강화 설정
+    hard_drop_enabled = settings.RAG_QUALITY_HARD_DROP_ENABLED
+    hard_drop_threshold = settings.RAG_QUALITY_DROP_THRESHOLD
+
+    # Phase 50: 안전장치 - 최소 유지 개수 (soft gate용)
     min_keep = ANCHOR_GATE_MIN_KEEP
+
+    # Gate A': L2 거리 HARD 게이트 (Phase 52.1)
+    # min_score > hard_drop_threshold → 완전 drop (검색 결과가 너무 관련 없음)
+    if hard_drop_enabled and min_score > hard_drop_threshold:
+        query_safe = ascii_safe_preview(query, 50)
+        logger.warning(
+            f"[LowRelevanceGate] HARD_DROP by l2_distance_gate | "
+            f"min_score={min_score:.3f} > hard_threshold={hard_drop_threshold} (extremely far) | "
+            f"query='{query_safe}' | domain={domain} | "
+            f"avg_score={avg_score:.3f} | max_score={max_score:.3f} | top_k={len(sources)}"
+        )
+        return [], "l2_distance_hard_drop"
 
     # Gate A: L2 거리 soft 게이트 (최소 거리가 threshold보다 크면 = 너무 멀면)
     if min_score > max_l2_threshold:
@@ -410,12 +439,25 @@ def apply_low_relevance_gate(
         )
         return kept_sources, "min_l2_distance_above_threshold_soft"
 
-    # Gate B: 앵커 키워드 soft 게이트
+    # Gate B: 앵커 키워드 게이트
     anchor_keywords = extract_anchor_keywords(query)
     has_anchor_match = check_anchor_keywords_in_sources(anchor_keywords, sources)
 
     if not has_anchor_match:
-        # Phase 50: 완전 drop 대신 최소 min_keep개 유지
+        # Phase 52.1: hard_drop_enabled면 완전 drop
+        if hard_drop_enabled:
+            query_safe = ascii_safe_preview(query, 50)
+            keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}
+            logger.warning(
+                f"[LowRelevanceGate] HARD_DROP by anchor_gate | "
+                f"anchor_keywords={keywords_safe} not found in sources | "
+                f"query='{query_safe}' | domain={domain} | "
+                f"min_score={min_score:.3f} | avg_score={avg_score:.3f} | "
+                f"top_k={len(sources)}"
+            )
+            return [], "anchor_no_match_hard_drop"
+
+        # Phase 50: soft gate - 완전 drop 대신 최소 min_keep개 유지
         kept_sources = sources[:min_keep]
         query_safe = ascii_safe_preview(query, 50)
         keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}
@@ -530,6 +572,7 @@ class RagHandler:
         req: Optional[ChatRequest] = None,
         request_id: Optional[str] = None,
         top_k: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
         RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다.
@@ -546,12 +589,17 @@ class RagHandler:
         - FaqService 등에서 ChatRequest 없이도 사용 가능
         - req=None이면 user_role, department는 None으로 전달
 
+        Phase AB: A/B 테스트 지원
+        - model 파라미터로 임베딩 모델 직접 선택 (권장)
+        - request_id는 하위 호환용으로 유지
+
         Args:
             query: 검색 쿼리 (마스킹된 상태)
             domain: 도메인
             req: 원본 요청 (선택, None이면 user_role/department 없이 검색)
-            request_id: 디버그용 요청 ID
+            request_id: 디버그용 요청 ID (deprecated for A/B)
             top_k: 검색 결과 개수 (선택, None이면 설정값 사용)
+            model: A/B 테스트 모델 ("openai" | "sroberta", 권장)
 
         Returns:
             Tuple[List[ChatSource], bool, RetrieverUsed]:
@@ -591,6 +639,7 @@ class RagHandler:
                 req=req,
                 request_id=request_id,
                 top_k=top_k,
+                model=model,
             )
         else:
             # RAGFlow만 사용
@@ -620,12 +669,25 @@ class RagHandler:
         req: Optional[ChatRequest] = None,
         request_id: Optional[str] = None,
         top_k: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
         """
         Milvus 전용 검색을 수행합니다.
 
         Phase 48 bugfix: RAGFlow fallback 제거 - Milvus만 사용합니다.
         Milvus 실패 시 503 에러를 반환하고, 결과 0건은 정상 처리됩니다.
+
+        Phase AB: A/B 테스트 지원
+        - model 파라미터로 임베딩 모델 직접 선택 (권장)
+        - 모델에 따라 적절한 Milvus 클라이언트 선택 (임베딩 + 컬렉션)
+
+        Args:
+            query: 검색 쿼리
+            domain: 도메인
+            req: ChatRequest (선택)
+            request_id: 디버그용 요청 ID
+            top_k: 검색 결과 개수
+            model: A/B 테스트 모델 ("openai" | "sroberta", 권장)
 
         Returns:
             Tuple[List[ChatSource], bool, RetrieverUsed]
@@ -635,21 +697,35 @@ class RagHandler:
         # Step 7: top_k 결정 (파라미터 > 설정값)
         effective_top_k = top_k if top_k is not None else settings.CHAT_CONTEXT_MAX_SOURCES
 
+        # Phase AB: A/B 테스트 클라이언트 선택 (방식 B - model 직접 사용)
+        # model 파라미터로 직접 클라이언트 선택 (권장)
+        milvus_client = get_milvus_client_by_model(model)
+        ab_info = get_client_info_by_model(model)
+
         # 디버그 로그: retrieval_target (Milvus)
         if request_id:
             dbg_retrieval_target(
                 request_id=request_id,
-                collection=settings.MILVUS_COLLECTION_NAME,
+                collection=ab_info.get("collection_name", settings.MILVUS_COLLECTION_NAME),
                 partition=None,
                 filter_expr=None,
                 top_k=effective_top_k,
                 domain=domain,
             )
 
+        # Phase AB: A/B 테스트 정보 로깅
+        if ab_info.get("is_ab_test"):
+            logger.info(
+                f"[A/B Search] model={model}, "
+                f"embedding={ab_info.get('embedding_model')}, "
+                f"collection={ab_info.get('collection_name')}"
+            )
+
         try:
             # Milvus 검색
             # Step 7: req가 None일 때 user_role, department는 None으로 전달
-            sources = await self._milvus.search_as_sources(
+            # Phase AB: A/B 클라이언트 사용
+            sources = await milvus_client.search_as_sources(
                 query=query,
                 domain=domain,
                 user_role=req.user_role if req else None,

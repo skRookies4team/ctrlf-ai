@@ -164,6 +164,23 @@ class AILogEntry(BaseModel):
         serialization_alias="ragGapCandidate",
     )
 
+    # Phase AB: A/B 테스트 정보
+    ab_model: Optional[str] = Field(
+        default=None,
+        description="A/B 테스트 모델 타입 (openai, sroberta)",
+        serialization_alias="abModel",
+    )
+    ab_embedding_model: Optional[str] = Field(
+        default=None,
+        description="A/B 테스트에서 사용된 임베딩 모델",
+        serialization_alias="abEmbeddingModel",
+    )
+    ab_collection_name: Optional[str] = Field(
+        default=None,
+        description="A/B 테스트에서 사용된 Milvus 컬렉션",
+        serialization_alias="abCollectionName",
+    )
+
 
 class AILogRequest(BaseModel):
     """

@@ -16,6 +16,8 @@ facts 조회 API 호출을 담당합니다.
 
 from typing import Optional
 
+import httpx
+
 from app.clients.http_client import get_async_http_client
 from app.core.backend_context import check_backend_allowed
 from app.core.config import get_settings
@@ -105,7 +107,7 @@ class PersonalizationClient:
             sub_intent_id: Q1-Q20 인텐트 ID
             user_id: 사용자 ID (X-User-Id 헤더로 전달)
             period: 기간 유형 (this-week|this-month|3m|this-year)
-            target_dept_id: 부서 비교 대상 ID (Q5에서만 사용)
+            target_dept_id: 부서 비교 대상 ID (향후 사용 예정)
 
         Returns:
             PersonalizationFacts: 조회된 facts 데이터 (에러 시 error 필드 포함)
@@ -131,10 +133,36 @@ class PersonalizationClient:
                 ),
             )
 
-        # 백엔드 URL 미설정 시 mock 응답
-        if not self._base_url:
-            logger.debug("Backend URL not configured, returning mock facts")
+        # =========================================================================
+        # PERSONALIZATION_MODE 분기
+        # - mock: 무조건 mock 데이터 반환
+        # - real: 실 백엔드만, 실패 시 에러 반환 (base_url 없으면 CONFIG_ERROR)
+        # - auto: 실 백엔드 시도, 네트워크 실패 시 mock fallback
+        # =========================================================================
+        mode = settings.PERSONALIZATION_MODE
+
+        # mock 모드: 무조건 mock 반환
+        if mode == "mock":
+            logger.debug(f"PERSONALIZATION_MODE=mock, returning mock facts for {sub_intent_id}")
             return self._get_mock_facts(sub_intent_id, period)
+
+        # 백엔드 URL 미설정 시: 모드에 따라 분기
+        if not self._base_url:
+            if mode == "auto":
+                # auto 모드: URL 없으면 mock fallback
+                logger.debug("Backend URL not configured (auto mode), returning mock facts")
+                return self._get_mock_facts(sub_intent_id, period)
+            # real 모드: URL 없으면 에러 반환
+            logger.warning("Backend URL not configured (real mode)")
+            return PersonalizationFacts(
+                sub_intent_id=sub_intent_id,
+                items=[],
+                metrics={},
+                error=PersonalizationError(
+                    type=PersonalizationErrorType.CONFIG_ERROR.value,
+                    message="BACKEND_BASE_URL is not set (PERSONALIZATION_MODE=real)",
+                ),
+            )
 
         endpoint = f"{self._base_url}{self.RESOLVE_PATH}"
 
@@ -165,6 +193,8 @@ class PersonalizationClient:
             elif response.status_code == 404:
                 return PersonalizationFacts(
                     sub_intent_id=sub_intent_id,
+                    items=[],
+                    metrics={},
                     error=PersonalizationError(
                         type=PersonalizationErrorType.NOT_FOUND.value,
                         message="Data not found for the specified period",
@@ -177,19 +207,62 @@ class PersonalizationClient:
                 )
                 return PersonalizationFacts(
                     sub_intent_id=sub_intent_id,
+                    items=[],
+                    metrics={},
                     error=PersonalizationError(
-                        type=PersonalizationErrorType.TIMEOUT.value,
+                        type=PersonalizationErrorType.HTTP_ERROR.value,
                         message=f"HTTP {response.status_code}",
                     ),
                 )
 
-        except Exception as e:
-            logger.warning(f"Personalization resolve error: {e}")
+        # 타임아웃 계열 예외: auto fallback 대상
+        # httpx.TimeoutException은 ConnectTimeout, ReadTimeout, WriteTimeout, PoolTimeout의 부모 클래스
+        except httpx.TimeoutException as e:
+            timeout_type = type(e).__name__  # 로그에서 구체적 타입 구분
+            if mode == "auto":
+                logger.warning(f"Personalization timeout ({timeout_type}, auto fallback to mock): {e}")
+                return self._get_mock_facts(sub_intent_id, period)
+
+            logger.warning(f"Personalization timeout ({timeout_type}): {e}")
             return PersonalizationFacts(
                 sub_intent_id=sub_intent_id,
+                items=[],
+                metrics={},
                 error=PersonalizationError(
                     type=PersonalizationErrorType.TIMEOUT.value,
-                    message=str(e),
+                    message=f"{timeout_type}: {e}",
+                ),
+            )
+
+        # 연결 에러 계열 예외: auto fallback 대상
+        except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            error_type = type(e).__name__  # 로그에서 구체적 타입 구분
+            if mode == "auto":
+                logger.warning(f"Personalization network error ({error_type}, auto fallback to mock): {e}")
+                return self._get_mock_facts(sub_intent_id, period)
+
+            logger.warning(f"Personalization network error ({error_type}): {e}")
+            return PersonalizationFacts(
+                sub_intent_id=sub_intent_id,
+                items=[],
+                metrics={},
+                error=PersonalizationError(
+                    type=PersonalizationErrorType.NETWORK_ERROR.value,
+                    message=f"{error_type}: {e}",
+                ),
+            )
+
+        # 기타 예외(JSON 파싱 실패, 스키마 불일치 등)는 항상 에러 반환 (버그 조기 탐지)
+        except Exception as e:
+            error_type = type(e).__name__
+            logger.error(f"Personalization resolve unexpected error ({error_type}): {e}")
+            return PersonalizationFacts(
+                sub_intent_id=sub_intent_id,
+                items=[],
+                metrics={},
+                error=PersonalizationError(
+                    type=PersonalizationErrorType.UNEXPECTED_ERROR.value,
+                    message=f"{error_type}: {e}",
                 ),
             )
 
@@ -250,22 +323,18 @@ class PersonalizationClient:
                     {"education_id": "EDU003", "title": "직장 내 괴롭힘 예방교육", "deadline": "2025-01-25", "days_left": 7},
                 ],
             },
-            "Q5": {  # 내 평균 vs 부서/전사 평균
-                "metrics": {
-                    "my_average": 85.5,
-                    "dept_average": 82.3,
-                    "company_average": 80.1,
-                },
-                "extra": {
-                    "target_dept_id": "D001",
-                    "target_dept_name": "개발팀",
-                },
-            },
-            "Q6": {  # 가장 많이 틀린 보안 토픽 TOP3
+            "Q4": {  # 특정 교육 진도율/시청률 조회 (이어보기)
+                "metrics": {"progress_percent": 65, "total_watch_seconds": 1170},
                 "items": [
-                    {"rank": 1, "topic": "피싱 메일 식별", "wrong_rate": 35.2},
-                    {"rank": 2, "topic": "비밀번호 정책", "wrong_rate": 28.7},
-                    {"rank": 3, "topic": "개인정보 처리", "wrong_rate": 22.1},
+                    {
+                        "education_id": "EDU001",
+                        "video_id": "VID001",
+                        "education_title": "개인정보보호 교육",
+                        "video_title": "개인정보보호 기본",
+                        "resumePosition": 1170,  # 백엔드 필드명 (초 단위)
+                        "progress_percent": 65,
+                        "duration": 1800,
+                    },
                 ],
             },
             "Q9": {  # 이번 주 교육/퀴즈 할 일
@@ -296,6 +365,87 @@ class PersonalizationClient:
                     {"type": "document", "title": "연말정산 서류 제출", "deadline": "2025-01-31"},
                     {"type": "survey", "title": "직원 만족도 조사", "deadline": "2025-02-28"},
                     {"type": "review", "title": "상반기 성과 평가", "deadline": "2025-06-30"},
+                ],
+            },
+            "Q2": {  # 수료현황/진도
+                "metrics": {
+                    "total_educations": 10,
+                    "completed_educations": 7,
+                    "in_progress_educations": 2,
+                    "not_started_educations": 1,
+                    "completion_rate": 70.0,
+                },
+                "items": [
+                    {"education_id": "EDU001", "title": "개인정보보호 교육", "status": "완료", "progress_percent": 100},
+                    {"education_id": "EDU002", "title": "정보보안 교육", "status": "진행중", "progress_percent": 45},
+                    {"education_id": "EDU003", "title": "직장 내 괴롭힘 예방", "status": "미시작", "progress_percent": 0},
+                ],
+            },
+            "Q5": {  # 퀴즈 평균 점수
+                "metrics": {
+                    "average_score": 82.5,
+                    "total_quizzes": 8,
+                    "passed_quizzes": 7,
+                    "failed_quizzes": 1,
+                },
+                "items": [
+                    {"quiz_id": "QUIZ001", "title": "개인정보보호 퀴즈", "score": 90, "pass_score": 70, "status": "합격"},
+                    {"quiz_id": "QUIZ002", "title": "정보보안 퀴즈", "score": 85, "pass_score": 70, "status": "합격"},
+                    {"quiz_id": "QUIZ003", "title": "직장내괴롭힘 퀴즈", "score": 60, "pass_score": 70, "status": "불합격"},
+                ],
+            },
+            "Q6": {  # 낮은/높은 점수 과목
+                "metrics": {
+                    "lowest_score": 60,
+                    "highest_score": 95,
+                },
+                "items": [
+                    {"quiz_id": "QUIZ003", "title": "직장내괴롭힘 퀴즈", "score": 60, "rank": "lowest"},
+                    {"quiz_id": "QUIZ005", "title": "성희롱예방 퀴즈", "score": 95, "rank": "highest"},
+                ],
+            },
+            "Q7": {  # 미완료/재응시 퀴즈 조회
+                "metrics": {"pending_count": 2, "retry_count": 1},
+                "items": [
+                    {"quiz_id": "QUIZ006", "title": "개인정보보호 심화 퀴즈", "status": "미응시", "deadline": "2025-01-31"},
+                    {"quiz_id": "QUIZ003", "title": "직장내괴롭힘 퀴즈", "status": "재응시 필요", "last_score": 60, "pass_score": 70},
+                ],
+            },
+            "Q8": {  # 특정 토픽 교육 시청 완료 여부 (영상만)
+                "metrics": {
+                    "topic_label": "개인정보보호",
+                    "video_count": 3,
+                    "watched_count": 2,
+                    "is_all_watched": False,
+                },
+                "items": [
+                    {"video_id": "VID001", "title": "개인정보보호 기본", "watched": True, "watch_percent": 100},
+                    {"video_id": "VID002", "title": "개인정보보호 심화", "watched": True, "watch_percent": 100},
+                    {"video_id": "VID003", "title": "개인정보보호 사례", "watched": False, "watch_percent": 35},
+                ],
+            },
+            "Q18": {  # 특정 토픽 전체 완료 여부 (영상 + 퀴즈)
+                "metrics": {
+                    "topic_label": "개인정보보호",
+                    "is_completed": False,
+                    "video_completed": True,
+                    "quiz_completed": False,
+                    "video_count": 3,
+                    "quiz_count": 1,
+                },
+                "items": [
+                    {"type": "video", "title": "개인정보보호 교육 영상", "status": "완료"},
+                    {"type": "quiz", "title": "개인정보보호 퀴즈", "status": "미완료", "score": None, "pass_score": 70},
+                ],
+            },
+            "Q19": {  # 특정 토픽 교육 마감일 조회
+                "metrics": {
+                    "topic_label": "개인정보보호",
+                    "deadline": "2025-01-31",
+                    "days_left": 13,
+                },
+                "items": [
+                    {"education_id": "EDU001", "title": "개인정보보호 교육", "deadline": "2025-01-31", "status": "진행중"},
                 ],
             },
         }

@@ -5,12 +5,12 @@ Backend → AI → RAGFlow 문서 ingest 파이프라인을 위한 내부 API입
 
 엔드포인트:
 1. POST /internal/ai/rag-documents/ingest : Backend → AI ingest 요청
-2. POST /internal/ai/callbacks/ragflow/ingest : RAGFlow → AI ingest 완료/실패 콜백
+2. POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest : RAGFlow → AI ingest 완료/실패 콜백
 
 흐름:
 1. Backend → AI: POST /internal/ai/rag-documents/ingest
 2. AI → RAGFlow: POST {RAGFLOW_BASE_URL}/v1/internal_ragflow/internal/ragflow/ingest (비동기)
-3. RAGFlow → AI: POST /internal/ai/callbacks/ragflow/ingest (콜백)
+3. RAGFlow → AI: POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest (콜백)
 4. AI → Backend: PATCH /internal/rag/documents/{ragDocumentPk}/status
 
 인증:
@@ -21,6 +21,7 @@ import asyncio
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, unquote
 
 from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import JSONResponse
@@ -41,7 +42,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/internal/ai", tags=["RAG Documents Ingest"])
+router = APIRouter(prefix="/v1/internal_ragflow/internal/ai", tags=["RAG Documents Ingest"])
 
 
 # =============================================================================
@@ -55,6 +56,43 @@ ALLOWED_DOMAINS = {"POLICY"}
 DOMAIN_DATASET_MAPPING = {
     "POLICY": "사내규정",
 }
+
+
+# =============================================================================
+# URL Utility Functions
+# =============================================================================
+
+
+def extract_filename_from_url(url: str) -> str:
+    """Presigned URL에서 파일명을 추출합니다.
+
+    S3 Presigned URL 형식:
+    https://bucket.s3.region.amazonaws.com/path/to/file.pdf?X-Amz-Algorithm=...
+
+    Args:
+        url: S3 Presigned URL
+
+    Returns:
+        str: 파일명 (예: "hr_safety_v3.pdf")
+
+    Raises:
+        ValueError: URL에서 파일명을 추출할 수 없는 경우
+    """
+    try:
+        parsed = urlparse(url)
+        # URL 디코딩 (한글 파일명 등 처리)
+        path = unquote(parsed.path)
+        # 마지막 path segment가 파일명
+        filename = path.rstrip("/").split("/")[-1]
+
+        if not filename:
+            raise ValueError(f"URL에서 파일명을 추출할 수 없습니다: {url[:100]}")
+
+        return filename
+    except Exception as e:
+        logger.error(f"Failed to extract filename from URL: {url[:100]}, error={e}")
+        raise ValueError(f"URL에서 파일명을 추출할 수 없습니다: {str(e)}")
+
 
 # =============================================================================
 # Idempotency 캐시 (in-memory, 2단계 TTL + LRU)
@@ -86,6 +124,10 @@ class IngestRequest(BaseModel):
     domain: str = Field(..., description="도메인 (POLICY만 허용)")
     requestId: str = Field(..., description="요청 ID (UUID)")
     traceId: str = Field(..., description="추적 ID")
+    department: Optional[str] = Field(
+        None,
+        description="부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -470,23 +512,41 @@ async def ingest_rag_document(
             trace_id=request.traceId,
         )
 
+    # sourceUrl에서 파일명 추출하여 doc_id로 사용
+    try:
+        extracted_doc_id = extract_filename_from_url(request.sourceUrl)
+        logger.info(
+            f"Extracted doc_id from URL: {extracted_doc_id}, "
+            f"original_document_id={request.documentId}, trace_id={request.traceId}"
+        )
+    except ValueError as e:
+        _clear_request_cache(request.documentId, request.version)
+        return _error_response(
+            status_code=400,
+            error="INVALID_SOURCE_URL",
+            message=str(e),
+            trace_id=request.traceId,
+        )
+
     # RAGFlow ingest 호출 (비동기로 백그라운드에서 처리)
     async def call_ragflow():
         try:
             client = get_ragflow_ingest_client()
             await client.ingest(
                 dataset_id=dataset_id,
-                doc_id=request.documentId,
+                doc_id=extracted_doc_id,
                 version=request.version,
                 file_url=request.sourceUrl,
                 rag_document_pk=request.ragDocumentPk,
                 domain=request.domain,
                 trace_id=request.traceId,
                 request_id=request.requestId,
+                department=request.department,
             )
             logger.info(
-                f"RAGFlow ingest request sent: document_id={request.documentId}, "
-                f"version={request.version}, trace_id={request.traceId}"
+                f"RAGFlow ingest request sent: doc_id={extracted_doc_id}, "
+                f"version={request.version}, department={request.department}, "
+                f"trace_id={request.traceId}"
             )
         except RAGFlowUnavailableError as e:
             logger.error(
@@ -532,7 +592,7 @@ async def ingest_rag_document(
     description="""
 RAGFlow에서 ingest 완료/실패 시 호출하는 콜백 엔드포인트입니다.
 
-**URL**: POST /internal/ai/callbacks/ragflow/ingest
+**URL**: POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest
 
 **호출 주체**: RAGFlow 서비스
 

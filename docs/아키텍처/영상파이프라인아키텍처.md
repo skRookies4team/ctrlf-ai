@@ -36,7 +36,7 @@
 │  └──────────────────────┘         └──────────────────────────────────────────┘ │
 │           │                                      │                              │
 │           ▼                                      ▼                              │
-│   LLM (Qwen2.5-7B)                    7-Step Rendering Pipeline                │
+│   LLM                                 7-Step Rendering Pipeline                │
 │           │                                      │                              │
 │           ▼                                      ▼                              │
 │   VideoScript JSON              TTS → FFmpeg → Storage → Callback              │
@@ -602,7 +602,7 @@ POST /api/videos/{video_id}/render-jobs
 │                                                                     │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────┐ │
 │  │   LLM       │    │    TTS      │    │       Storage           │ │
-│  │  (Qwen)     │    │  Provider   │    │                         │ │
+│  │             │    │  Provider   │    │                         │ │
 │  ├─────────────┤    ├─────────────┤    ├─────────────────────────┤ │
 │  │ OpenAI API  │    │ • Polly     │    │ • Local (dev)           │ │
 │  │ 호환        │    │ • GCP TTS   │    │ • S3/MinIO (prod)       │ │

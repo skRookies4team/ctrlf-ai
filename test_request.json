@@ -1,0 +1,13 @@
+{
+  "request_id": "test-002",
+  "session_id": "test-stream-privacy-allow",
+  "user_id": "emp001",
+  "user_role": "EMPLOYEE",
+  "department": "개발팀",
+  "messages": [
+    {
+      "role": "user",
+      "content": "내 교육 이수 현황 알려줘"
+    }
+  ]
+}

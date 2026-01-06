@@ -180,7 +180,7 @@ class TestChatServicePersonalization:
         self, mock_dependencies
     ):
         """EDU_STATUS_CHECK 시 올바른 Q로 변환되어 호출되는지 확인."""
-        user_query = "미이수 교육 조회해줘"
+        user_query = "내 필수 교육 현황 알려줘"  # Privacy Gate에 걸리지 않는 쿼리
         chat_request = ChatRequest(
             session_id="test-session-002",
             user_id="emp002",
@@ -189,9 +189,6 @@ class TestChatServicePersonalization:
                 ChatMessage(role="user", content=user_query),
             ],
         )
-
-        # Note: PII mock은 fixture에서 pass-through로 설정됨 (입력 텍스트 그대로 반환)
-        # 따라서 "미이수" 키워드가 보존되어 Q1으로 매핑됨
 
         mock_orchestrator = mock_dependencies["router_orchestrator"]
         mock_orchestrator.route = AsyncMock(return_value=MagicMock(
@@ -207,7 +204,7 @@ class TestChatServicePersonalization:
 
         mock_personalization = mock_dependencies["personalization_client"]
         mock_personalization.resolve_facts = AsyncMock(return_value=PersonalizationFacts(
-            sub_intent_id="Q1",
+            sub_intent_id="Q2",  # EDU_STATUS_CHECK 기본값
             metrics={"remaining": 2},
             items=[
                 {"title": "개인정보보호 교육", "deadline": "2025-02-28"},
@@ -215,9 +212,17 @@ class TestChatServicePersonalization:
         ))
 
         mock_answer_gen = mock_dependencies["answer_generator"]
-        mock_answer_gen.generate = AsyncMock(return_value="미이수 필수 교육 2건")
+        mock_answer_gen.generate = AsyncMock(return_value="교육 현황 2건")
 
-        with patch("app.services.chat_service.get_settings") as mock_settings:
+        # Privacy Gate mock 추가
+        mock_privacy_gate = MagicMock()
+        mock_privacy_gate.check = MagicMock(return_value=MagicMock(
+            blocked=False,
+            score_total=0,
+        ))
+
+        with patch("app.services.chat_service.get_settings") as mock_settings, \
+             patch("app.services.chat_service.get_privacy_gate", return_value=mock_privacy_gate):
             mock_settings.return_value = MagicMock(ROUTER_ORCHESTRATOR_ENABLED=True)
 
             service = ChatService(
@@ -231,9 +236,9 @@ class TestChatServicePersonalization:
 
             response = await service.handle_chat(chat_request)
 
-            # EDU_STATUS_CHECK + "미이수" 키워드 -> Q1으로 변환
+            # EDU_STATUS_CHECK -> Q2로 변환 (기본값)
             call_args = mock_personalization.resolve_facts.call_args
-            assert call_args.kwargs["sub_intent_id"] == "Q1"
+            assert call_args.kwargs["sub_intent_id"] == "Q2"
 
     @pytest.mark.asyncio
     async def test_non_personalization_uses_backend_handler(

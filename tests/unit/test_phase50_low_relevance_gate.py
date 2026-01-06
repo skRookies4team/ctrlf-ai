@@ -172,14 +172,22 @@ class TestApplyLowRelevanceGate:
         assert "soft" in reason.lower() if reason else True
 
     def test_soft_demote_no_anchor_match_keeps_min(self):
-        """anchor 미매칭도 최소 1개는 유지 (Phase 50 안전장치)"""
+        """anchor 미매칭도 최소 1개는 유지 (Phase 50 안전장치, HARD_DROP 비활성 시)"""
         sources = [
             self._make_source(0.8, "완전 다른 내용"),
             self._make_source(0.7, "매칭 안 되는 내용"),
         ]
-        result, reason = apply_low_relevance_gate(sources, "보안 정책 알려줘", "POLICY")
-        # anchor "보안"이 sources에 없지만 최소 1개 유지
-        assert len(result) >= ANCHOR_GATE_MIN_KEEP
+        # HARD_DROP이 활성화되면 anchor 미매칭 시 sources=[]가 되므로,
+        # SOFT_DEMOTE 동작 테스트를 위해 HARD_DROP 비활성화
+        from unittest.mock import MagicMock
+        mock_settings = MagicMock()
+        mock_settings.RAG_QUALITY_HARD_DROP_ENABLED = False
+        mock_settings.RAG_QUALITY_DROP_THRESHOLD = 0.5
+        mock_settings.RAG_MAX_L2_DISTANCE = 0.55
+        with patch("app.services.chat.rag_handler.get_settings", return_value=mock_settings):
+            result, reason = apply_low_relevance_gate(sources, "보안 정책 알려줘", "POLICY")
+            # anchor "보안"이 sources에 없지만 최소 1개 유지
+            assert len(result) >= ANCHOR_GATE_MIN_KEEP
 
     def test_empty_sources_returns_empty(self):
         """빈 sources는 그대로 반환"""

@@ -409,7 +409,7 @@ class TestPromptTemplate:
         """SYSTEM 프롬프트에 핵심 지침 포함"""
         from app.services.faq_service import SYSTEM_PROMPT
 
-        assert "기업 내부 FAQ 작성 보조자" in SYSTEM_PROMPT
+        assert "기업 내부 한국어 FAQ 작성 보조자" in SYSTEM_PROMPT
         assert "컨텍스트" in SYSTEM_PROMPT
         assert "LOW_RELEVANCE" in SYSTEM_PROMPT
         assert "120자" in SYSTEM_PROMPT

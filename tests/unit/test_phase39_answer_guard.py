@@ -221,17 +221,17 @@ class TestCitationHallucinationGuard:
         assert is_valid is True
         assert result == answer
 
-    def test_hallucinated_citation_allowed_with_warning(self, answer_guard, sample_sources):
-        """RAG 소스에 없는 조항 인용 → 허용 (Phase 44 정책 완화).
+    def test_hallucinated_citation_blocked(self, answer_guard, sample_sources):
+        """RAG 소스에 없는 조항 인용 → 차단 (Phase 55 정책 강화).
 
-        Phase 44: RAG sources가 있어도 일치하지 않는 조항은 경고만 로그.
-        LLM이 관련 지식으로 추가 조항을 언급하는 것은 허용.
+        Phase 55: RAG sources에 없는 조항 인용은 환각으로 간주하여 차단.
+        (Phase 44 롤백: 환각 방지를 위해 strict 모드 기본 적용)
         """
         answer = "제99조 제5항에 따르면 특별휴가를 사용할 수 있습니다."
         is_valid, result = answer_guard.validate_citation(answer, sample_sources)
-        # Phase 44: 차단하지 않고 허용
-        assert is_valid is True
-        assert result == answer
+        # Phase 55: 환각 인용 차단
+        assert is_valid is False
+        assert "근거 문서를 확인" in result or "차단" in result.lower() or "죄송" in result
 
     def test_no_citation_in_answer_passes(self, answer_guard, sample_sources):
         """조항 인용이 없는 답변은 통과."""
@@ -240,17 +240,17 @@ class TestCitationHallucinationGuard:
         assert is_valid is True
         assert result == answer
 
-    def test_citation_without_sources_allowed_with_warning(self, answer_guard, empty_sources):
-        """RAG 소스 없이 조항 인용 시 → 허용 (Phase 44 정책 완화).
+    def test_citation_without_sources_blocked(self, answer_guard, empty_sources):
+        """RAG 소스 없이 조항 인용 시 → 차단 (Phase 55 정책 강화).
 
-        Phase 44: RAG sources가 없어도 LLM의 일반적인 법률 지식으로
-        조항을 언급하는 것은 허용.
+        Phase 55: RAG sources가 없는 상태에서 조항 인용은 환각으로 간주하여 차단.
+        (Phase 44 롤백: 환각 방지를 위해 strict 모드 기본 적용)
         """
         answer = "제10조에 의하면 연차가 발생합니다."
         is_valid, result = answer_guard.validate_citation(answer, empty_sources)
-        # Phase 44: 차단하지 않고 허용
-        assert is_valid is True
-        assert result == answer
+        # Phase 55: 환각 인용 차단
+        assert is_valid is False
+        assert "근거 문서를 확인" in result or "죄송" in result
 
     def test_llm_only_answer_no_citation_section(self, answer_guard, empty_sources):
         """LLM_ONLY 답변에 조항 없으면 통과."""
@@ -515,3 +515,195 @@ class TestIntegration:
         assert is_answerable is True
         # debug_info도 POLICY로 유지
         assert debug_info.intent == "POLICY_QA"
+
+
+# =============================================================================
+# [H] Phase 56: Stats Out-of-Scope Fast Path Tests (통계 질문 조기 차단)
+# =============================================================================
+
+
+class TestStatsOutOfScopeFastPath:
+    """Phase 56: 통계 질문 조기 차단 테스트."""
+
+    def test_incident_stats_blocked(self, answer_guard):
+        """INCIDENT + 통계 신호 → 차단."""
+        test_queries = [
+            "최근 1년 동안 가장 많이 위반된 보안 규정 TOP 5",
+            "지난 3개월간 보안 사고 통계 알려줘",
+            "올해 가장 빈번한 위반 유형이 뭐야",
+            "상위 10개 보안 사고 유형",
+            "보안 침해 건수 통계",
+        ]
+        for query in test_queries:
+            result = answer_guard.check_stats_out_of_scope_fast_path(query, domain="INCIDENT")
+            assert result is not None, f"Should block: {query}"
+            assert "집계 데이터" in result or "통계" in result
+
+    def test_incident_report_not_blocked(self, answer_guard):
+        """INCIDENT + 신고/제보 → 통과 (차단 금지)."""
+        bypass_queries = [
+            "사고 신고할게요",
+            "보안 사고 제보합니다",
+            "해킹 발생 신고",
+            "침해사고 접수하려고요",
+        ]
+        for query in bypass_queries:
+            result = answer_guard.check_stats_out_of_scope_fast_path(query, domain="INCIDENT")
+            assert result is None, f"Should bypass (not block): {query}"
+
+    def test_non_incident_stats_not_blocked(self, answer_guard):
+        """비-INCIDENT 도메인 통계 질문 → 차단 금지."""
+        non_incident_queries = [
+            ("최근 3개월 교육 이수율 통계", "EDUCATION"),
+            ("TOP 3 인기 교육과정", "EDUCATION"),
+            ("가장 많이 신청된 휴가 유형", "POLICY"),
+            ("평균 근무시간 통계", "HR"),
+        ]
+        for query, domain in non_incident_queries:
+            result = answer_guard.check_stats_out_of_scope_fast_path(query, domain=domain)
+            assert result is None, f"Should not block non-incident: {query} (domain={domain})"
+
+    def test_normal_incident_query_not_blocked(self, answer_guard):
+        """일반 INCIDENT 질문 (통계 아님) → 차단 금지."""
+        normal_queries = [
+            "보안 사고 발생 시 대응 절차는?",
+            "해킹 신고 방법 알려줘",
+            "정보 유출 시 보고 체계",
+        ]
+        for query in normal_queries:
+            result = answer_guard.check_stats_out_of_scope_fast_path(query, domain="INCIDENT")
+            assert result is None, f"Should not block normal query: {query}"
+
+
+# =============================================================================
+# [I] Phase 56: Stats Language Sanitizer Tests (통계 표현 후처리)
+# =============================================================================
+
+
+class TestStatsLanguageSanitizer:
+    """Phase 56: 통계 표현 후처리 테스트."""
+
+    def test_sanitize_temporal_expressions(self, answer_guard, empty_sources):
+        """시간 표현 치환 테스트."""
+        answer = "최근 1년 동안 가장 많이 위반된 보안 규정은 다음과 같습니다."
+        query = "최근 1년 위반 통계"
+
+        sanitized, modified = answer_guard.sanitize_stats_language(
+            answer=answer,
+            query=query,
+            sources=empty_sources,
+        )
+
+        assert modified is True
+        assert "최근 1년" not in sanitized
+        assert "일반적으로" in sanitized or "⚠️" in sanitized
+
+    def test_sanitize_top_n_expressions(self, answer_guard, empty_sources):
+        """TOP N 표현 치환 테스트."""
+        answer = "TOP 5 위반 규정: 1. 비밀번호 정책..."
+        query = "TOP 5 위반 규정"
+
+        sanitized, modified = answer_guard.sanitize_stats_language(
+            answer=answer,
+            query=query,
+            sources=empty_sources,
+        )
+
+        assert modified is True
+        assert "TOP 5" not in sanitized
+        assert "주요" in sanitized or "⚠️" in sanitized
+
+    def test_sanitize_numeric_claims_removed(self, answer_guard, empty_sources):
+        """수치 주장 문장 제거 테스트 - 시간 표현 포함 시."""
+        # 시간 표현이 있어야 치환이 발생함 (통계 신호 + 시간 표현)
+        answer = "최근 1년간 보안 위반 건수는 총 150 건입니다. 비밀번호 관련이 가장 많습니다."
+        query = "최근 1년 위반 건수 통계"
+
+        sanitized, modified = answer_guard.sanitize_stats_language(
+            answer=answer,
+            query=query,
+            sources=empty_sources,
+        )
+
+        assert modified is True
+        # 시간 표현이 치환됨
+        assert "최근 1년" not in sanitized
+
+    def test_no_sanitize_with_evidence(self, answer_guard):
+        """소스에 근거가 있으면 치환 안 함."""
+        sources_with_evidence = [
+            ChatSource(
+                doc_id="doc1",
+                title="2024년 보안 보고서",
+                snippet="2024년 상반기 보안 위반 건수는 총 150건으로 집계되었습니다.",
+                score=0.9,
+            ),
+        ]
+        answer = "최근 1년 동안 150건의 위반이 발생했습니다."
+        query = "최근 1년 위반 통계"
+
+        sanitized, modified = answer_guard.sanitize_stats_language(
+            answer=answer,
+            query=query,
+            sources=sources_with_evidence,
+        )
+
+        # 소스에 수치 근거가 있으므로 치환 안 함
+        assert modified is False
+        assert sanitized == answer
+
+    def test_no_sanitize_non_stats_query(self, answer_guard, empty_sources):
+        """통계 신호 없는 질문 → 치환 안 함."""
+        answer = "연차휴가는 1년 근무 시 15일이 발생합니다."
+        query = "연차휴가 규정 알려줘"
+
+        sanitized, modified = answer_guard.sanitize_stats_language(
+            answer=answer,
+            query=query,
+            sources=empty_sources,
+        )
+
+        assert modified is False
+        assert sanitized == answer
+
+    def test_prefix_added_when_modified(self, answer_guard, empty_sources):
+        """수정된 경우 prefix 추가 확인."""
+        answer = "최근 3개월 동안 가장 많이 발생한 사고 유형입니다."
+        query = "최근 3개월 사고 통계"
+
+        sanitized, modified = answer_guard.sanitize_stats_language(
+            answer=answer,
+            query=query,
+            sources=empty_sources,
+            add_prefix=True,
+        )
+
+        assert modified is True
+        assert sanitized.startswith("⚠️")
+        assert "통계 집계" in sanitized or "안내문서" in sanitized
+
+
+class TestHasStatsSignal:
+    """has_stats_signal 헬퍼 테스트."""
+
+    def test_detects_stats_signals(self, answer_guard):
+        """통계 신호 감지 테스트."""
+        stats_queries = [
+            "최근 1년 통계",
+            "TOP 5 순위",
+            "가장 많이 발생한",
+            "상위 10개",
+            "위반 건수",
+        ]
+        for query in stats_queries:
+            assert answer_guard.has_stats_signal(query) is True, f"Should detect: {query}"
+
+    def test_no_stats_signal(self, answer_guard):
+        """통계 신호 없는 질문."""
+        normal_queries = [
+            "연차휴가 규정 알려줘",
+            "출장비 정산 방법",
+            "보안 교육 이수 방법",
+        ]
+        for query in normal_queries:
+            assert answer_guard.has_stats_signal(query) is False, f"Should not detect: {query}"
