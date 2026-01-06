@@ -255,9 +255,10 @@ class TestAILogService:
                 latency_ms=1200,
             )
 
-            # 백엔드 미설정 시에도 에러 없이 동작해야 함
+            # ES 직접 적재 방식으로 변경됨 - 에러 없이 동작해야 함
             result = await service.send_log(log_entry)
-            assert result is True  # 로컬 로그 기록 성공
+            # send_log는 void 함수 (None 반환)
+            assert result is None
 
     @pytest.mark.anyio
     async def test_mask_for_log(self):

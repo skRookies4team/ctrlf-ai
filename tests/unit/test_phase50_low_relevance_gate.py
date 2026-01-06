@@ -314,33 +314,33 @@ class TestConfigValues:
 
 
 class TestAiLogUrlFix:
-    """ai_log URL 슬래시 중복 수정 테스트"""
+    """ai_log ES URL 테스트 (faq 브랜치: ES 직접 적재 방식으로 변경됨)"""
 
     def test_url_no_double_slash(self):
-        """URL에 이중 슬래시가 없는지 확인"""
-        from unittest.mock import patch, MagicMock
+        """ES URL에 이중 슬래시가 없는지 확인"""
+        from unittest.mock import patch
         from app.services.ai_log_service import AILogService
 
-        # backend_base_url이 trailing slash로 끝나는 경우 테스트
+        # ELASTICSEARCH_URL이 trailing slash로 끝나는 경우 테스트
         with patch('app.services.ai_log_service.settings') as mock_settings:
-            mock_settings.backend_base_url = "http://backend:8080/"
-            mock_settings.BACKEND_API_TOKEN = None
+            mock_settings.ELASTICSEARCH_URL = "http://elasticsearch:9200/"
+            mock_settings.FAQ_LOG_FORCE = False
 
             service = AILogService()
 
-            # 이중 슬래시가 없어야 함
-            assert "//" not in service._backend_log_endpoint.replace("http://", "")
-            assert service._backend_log_endpoint == "http://backend:8080/api/ai-logs"
+            # trailing slash가 제거되어야 함
+            assert service._es_base_url == "http://elasticsearch:9200"
+            assert not service._es_base_url.endswith("/")
 
     def test_url_without_trailing_slash(self):
-        """trailing slash 없는 URL도 정상 동작"""
+        """trailing slash 없는 ES URL도 정상 동작"""
         from unittest.mock import patch
         from app.services.ai_log_service import AILogService
 
         with patch('app.services.ai_log_service.settings') as mock_settings:
-            mock_settings.backend_base_url = "http://backend:8080"
-            mock_settings.BACKEND_API_TOKEN = None
+            mock_settings.ELASTICSEARCH_URL = "http://elasticsearch:9200"
+            mock_settings.FAQ_LOG_FORCE = False
 
             service = AILogService()
 
-            assert service._backend_log_endpoint == "http://backend:8080/api/ai-logs"
+            assert service._es_base_url == "http://elasticsearch:9200"
