@@ -1,45 +1,36 @@
-"""
-generate_faq_from_logs.py
-
-AI 로그를 기반으로 FAQ 초안을 자동 생성하는 배치 스크립트
-
-Flow:
-1. Backend 로그 API(/api/ai-logs)에서 AI 로그 조회
-2. FAQ 후보 질문 필터링
-3. 질문 클러스터링
-4. AI 서버 /ai/faq/generate 호출
-"""
-
 import os
 import uuid
 import asyncio
 import logging
-from collections import defaultdict
-from typing import List, Dict, Any
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+from collections import defaultdict, Counter
+from datetime import datetime
 
 import httpx
 from dotenv import load_dotenv
 
 # =========================================================
-# ENV 로드
+# ENV
 # =========================================================
-
 load_dotenv()
 
-BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8085")
-AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:8000")
-BACKEND_ACCESS_TOKEN = os.getenv("BACKEND_ACCESS_TOKEN")
+ES_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
+FAQ_LOG_INDEX = os.getenv("FAQ_LOG_INDEX", "ctrlf-faq-log-*")
+FAQ_MASTER_INDEX = os.getenv("FAQ_MASTER_INDEX", "ctrlf-faq-master")
 
-MIN_QUESTION_COUNT = int(os.getenv("FAQ_MIN_QUESTION_COUNT", "3"))
-LOG_FETCH_LIMIT = 500
+AI_BASE_URL = os.getenv("AI_BASE_URL", "http://localhost:8000").rstrip("/")
 
-if not BACKEND_ACCESS_TOKEN:
-    raise RuntimeError("BACKEND_ACCESS_TOKEN is required (.env 확인)")
+FETCH_DAYS = os.getenv("FAQ_LOG_FETCH_RANGE", "7d")
+FETCH_LIMIT = int(os.getenv("FAQ_LOG_FETCH_LIMIT", "500"))
+
+MIN_QUESTION_COUNT = int(os.getenv("FAQ_MIN_QUESTION_COUNT", "2"))
+FAQ_DOMAIN_DEFAULT = os.getenv("FAQ_DOMAIN_DEFAULT", "EDU")
+EMBED_THRESHOLD = float(os.getenv("FAQ_EMBED_THRESHOLD", "0.75"))
 
 # =========================================================
-# 로깅
+# Logging
 # =========================================================
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(message)s",
@@ -47,235 +38,266 @@ logging.basicConfig(
 logger = logging.getLogger("faq-batch")
 
 # =========================================================
-# 데이터 모델
+# Data Model
 # =========================================================
+@dataclass
+class FaqLogEntry:
+    ts: str
+    domain: str
+    intent: Optional[str]
+    question: str
 
-class LogEntry:
-    """
-    Backend /api/ai-logs 로그 래퍼
-    """
-
-    def __init__(self, raw: Dict[str, Any]):
-        self.domain: str | None = raw.get("domain")
-        self.intent: str | None = raw.get("intent")
-        self.route: str | None = raw.get("route")
-
-        # FAQ 후보는 반드시 마스킹된 질문만 사용
-        self.question: str | None = raw.get("question_masked")
 
 # =========================================================
-# Step 1. 로그 조회
+# Utils
 # =========================================================
+def normalize(text: str) -> str:
+    return " ".join((text or "").strip().split())
 
-async def fetch_ai_logs() -> List[LogEntry]:
-    url = f"{BACKEND_BASE_URL}/api/ai-logs"
 
-    headers = {
-        "Authorization": f"Bearer {BACKEND_ACCESS_TOKEN}"
+# =========================================================
+# ES: Fetch faq_log
+# =========================================================
+async def fetch_faq_logs() -> List[FaqLogEntry]:
+    query = {
+        "size": FETCH_LIMIT,
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"log_type": "faq_log"}},
+                    {"range": {"@timestamp": {"gte": f"now-{FETCH_DAYS}"}}},
+                    {"exists": {"field": "question_masked"}},
+                ]
+            }
+        },
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(
-            url,
-            params={"limit": LOG_FETCH_LIMIT},
-            headers=headers,
-        )
-        
-        if resp.status_code == 401:
-            logger.error(
-                "인증 실패 (401 Unauthorized)\n"
-                "  - .env 파일의 BACKEND_ACCESS_TOKEN이 올바른지 확인하세요\n"
-                "  - 토큰이 만료되었는지 확인하세요"
-            )
-            raise RuntimeError(
-                "Backend API 인증 실패: BACKEND_ACCESS_TOKEN을 확인하세요"
-            )
-        
-        if resp.status_code == 500:
-            error_detail = ""
-            try:
-                error_body = resp.json()
-                error_detail = error_body.get("message") or error_body.get("error") or str(error_body)
-            except:
-                error_detail = resp.text[:500] if resp.text else "(응답 본문 없음)"
-            
-            logger.error(
-                "백엔드 서버 오류 (500 Internal Server Error)\n"
-                f"  - URL: {url}\n"
-                f"  - 백엔드 서버에 문제가 발생했습니다\n"
-                f"  - 백엔드 로그를 확인하세요\n"
-                f"  - 응답: {error_detail}"
-            )
-            raise RuntimeError(
-                f"백엔드 서버 오류: 백엔드 팀에 문의하세요. (상세: {error_detail[:100]})"
-            )
-        
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(f"{ES_URL}/{FAQ_LOG_INDEX}/_search", json=query)
         resp.raise_for_status()
 
-    body = resp.json()
+    hits = resp.json().get("hits", {}).get("hits", [])
+    logs: List[FaqLogEntry] = []
 
-    # Spring 응답 구조:
-    # {
-    #   "status": "ok",
-    #   "total_count": 123,
-    #   "returned_count": 50,
-    #   "logs": [...]
-    # }
-    raw_logs = body.get("logs", [])
+    for h in hits:
+        src = h["_source"]
+        logs.append(
+            FaqLogEntry(
+                ts=src.get("@timestamp"),
+                domain=src.get("domain") or FAQ_DOMAIN_DEFAULT,
+                intent=src.get("intent"),
+                question=normalize(src.get("question_masked")),
+            )
+        )
 
-    logger.info(f"Fetched {len(raw_logs)} logs from backend")
-    return [LogEntry(log) for log in raw_logs]
+    logger.info(f"[ES] fetched faq_log={len(logs)}")
+    return logs
 
-# =========================================================
-# Step 2. FAQ 후보 필터링
-# =========================================================
-
-def filter_faq_candidates(logs: List[LogEntry]) -> List[LogEntry]:
-    """
-    FAQ 후보 조건:
-    - domain == POLICY
-    - intent == POLICY_QA
-    - question_masked 존재
-    """
-    candidates = [
-        log for log in logs
-        if log.domain == "POLICY"
-        and log.intent == "POLICY_QA"
-        and log.question
-    ]
-
-    logger.info(f"FAQ candidate logs: {len(candidates)}")
-    return candidates
 
 # =========================================================
-# Step 3. 질문 클러스터링 (단순)
+# 추천 TOP 질문
 # =========================================================
+def compute_top_questions(logs: List[FaqLogEntry], limit=10):
+    counter = Counter([x.question for x in logs])
+    logger.info("\n[RECOMMEND] TOP QUESTIONS")
+    for q, c in counter.most_common(limit):
+        logger.info(f"- ({c}) {q}")
 
-def cluster_questions(logs: List[LogEntry]) -> Dict[str, List[str]]:
-    clusters: Dict[str, List[str]] = defaultdict(list)
 
-    for log in logs:
-        key = log.question.strip()
-        clusters[key].append(log.question)
+# =========================================================
+# Domain group
+# =========================================================
+def group_by_domain(logs: List[FaqLogEntry]):
+    grouped = defaultdict(list)
+    for l in logs:
+        grouped[l.domain].append(l)
+    return grouped
 
-    filtered = {
-        canonical: samples
-        for canonical, samples in clusters.items()
-        if len(samples) >= MIN_QUESTION_COUNT
+
+# =========================================================
+# Semantic clustering (lazy import)
+# =========================================================
+def cluster_semantic(logs: List[FaqLogEntry]) -> List[Dict[str, Any]]:
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+
+    model = SentenceTransformer(
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
+
+    texts = [l.question for l in logs]
+    vectors = model.encode(texts, normalize_embeddings=True)
+
+    clusters = []
+    anchors = []
+
+    for idx, log in enumerate(logs):
+        v = vectors[idx]
+        placed = False
+
+        for i, a in enumerate(anchors):
+            if float(np.dot(v, a)) >= EMBED_THRESHOLD:
+                clusters[i].append(log)
+                placed = True
+                break
+
+        if not placed:
+            anchors.append(v)
+            clusters.append([log])
+
+    results = []
+    for items in clusters:
+        if len(items) < MIN_QUESTION_COUNT:
+            continue
+
+        counter = Counter([x.question for x in items])
+        canonical = counter.most_common(1)[0][0]
+
+        results.append(
+            {
+                "canonical": canonical,
+                "items": items,
+                "count": len(items),
+            }
+        )
+
+    return results
+
+
+# =========================================================
+# FAQ MASTER 중복 조회 (404 안전)
+# =========================================================
+async def find_existing_faq(domain: str, question: str) -> Optional[str]:
+    query = {
+        "size": 1,
+        "query": {
+            "bool": {
+                "filter": [{"term": {"domain": domain}}],
+                "must": [
+                    {
+                        "match": {
+                            "canonical_question": {
+                                "query": question,
+                                "fuzziness": "AUTO"
+                            }
+                        }
+                    }
+                ],
+            }
+        },
     }
 
-    logger.info(
-        f"FAQ clusters after threshold({MIN_QUESTION_COUNT}): {len(filtered)}"
-    )
-    return filtered
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{ES_URL}/{FAQ_MASTER_INDEX}/_search",
+            json=query,
+        )
+
+        if resp.status_code == 404:
+            logger.info("[FAQ_MASTER] index not found → treat as empty")
+            return None
+
+        resp.raise_for_status()
+        hits = resp.json().get("hits", {}).get("hits", [])
+        return hits[0]["_id"] if hits else None
+
 
 # =========================================================
-# Step 4. FAQ 생성 요청
+# FAQ 강화
 # =========================================================
+async def reinforce_faq(faq_id: str, count: int):
+    script = {
+        "script": {
+            "source": """
+                ctx._source.question_count += params.c;
+                ctx._source.last_seen_at = params.now;
+            """,
+            "params": {
+                "c": count,
+                "now": datetime.utcnow().isoformat(),
+            },
+        }
+    }
 
-async def generate_faq(
-    canonical_question: str,
-    sample_questions: List[str],
-) -> bool:
-    """
-    FAQ를 생성합니다.
-    
-    Returns:
-        bool: 성공 여부 (True: 성공, False: 실패)
-    """
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{ES_URL}/{FAQ_MASTER_INDEX}/_update/{faq_id}",
+            json=script,
+        )
+
+    logger.info(f"[REINFORCE] faq_id={faq_id} +{count}")
+
+
+# =========================================================
+# FAQ 생성
+# =========================================================
+async def generate_faq(domain: str, canonical: str, samples: List[str]) -> bool:
     payload = {
-        "domain": "POLICY",
-        "cluster_id": f"auto-log-{uuid.uuid4().hex[:8]}",
-        "canonical_question": canonical_question,
-        "sample_questions": sample_questions[:5],
+        "domain": domain,
+        "cluster_id": f"auto-{uuid.uuid4().hex[:8]}",
+        "canonical_question": canonical,
+        "sample_questions": samples[:5],
         "top_docs": [],
         "avg_intent_confidence": 0.8,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{AI_BASE_URL}/ai/faq/generate",
-                json=payload,
-            )
-            resp.raise_for_status()
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{AI_BASE_URL}/ai/faq/generate",
+            json=payload,
+        )
 
-        data = resp.json()
-        status = data.get("status")
-        draft = data.get("faq_draft") or {}
-        error_message = data.get("error_message")
-
-        if status == "SUCCESS" and draft:
-            logger.info(
-                "FAQ generated | "
-                f"question='{canonical_question[:50]}...' | "
-                f"confidence={draft.get('ai_confidence', 'N/A')} | "
-                f"id={draft.get('faq_draft_id', 'N/A')}"
-            )
-            return True
-        else:
-            logger.warning(
-                f"FAQ generation failed | "
-                f"question='{canonical_question[:50]}...' | "
-                f"error={error_message or 'Unknown error'}"
-            )
+        if resp.status_code >= 400:
+            logger.error(f"[FAQ] HTTP {resp.status_code} {resp.text[:300]}")
             return False
 
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            f"FAQ generation API error | "
-            f"question='{canonical_question[:50]}...' | "
-            f"status={e.response.status_code} | "
-            f"response={e.response.text[:200]}"
-        )
-        return False
-    
-    except Exception as e:
-        logger.error(
-            f"FAQ generation unexpected error | "
-            f"question='{canonical_question[:50]}...' | "
-            f"error={type(e).__name__}: {str(e)}"
-        )
-        return False
+        if resp.json().get("status") == "SUCCESS":
+            logger.info(f"[FAQ] CREATED | {domain} | {canonical}")
+            return True
+
+    return False
+
 
 # =========================================================
 # Main
 # =========================================================
-
 async def main():
     logger.info("=== FAQ AUTO GENERATION START ===")
 
-    logs = await fetch_ai_logs()
-    candidates = filter_faq_candidates(logs)
-    clusters = cluster_questions(candidates)
-
-    if not clusters:
-        logger.info("No FAQ candidates found. Exit.")
-        logger.info("Note: 백엔드 팀에 더미 데이터 생성을 요청하세요.")
+    logs = await fetch_faq_logs()
+    if not logs:
+        logger.info("No logs found.")
         return
 
-    # 통계 수집
-    total = len(clusters)
-    success_count = 0
-    failed_count = 0
+    compute_top_questions(logs)
 
-    logger.info(f"Processing {total} FAQ clusters...")
+    grouped = group_by_domain(logs)
 
-    for idx, (canonical, questions) in enumerate(clusters.items(), 1):
-        logger.info(f"[{idx}/{total}] Processing: {canonical[:50]}...")
-        
-        success = await generate_faq(
-            canonical_question=canonical,
-            sample_questions=questions,
-        )
-        
-        if success:
-            success_count += 1
-        else:
-            failed_count += 1
+    for domain, dlogs in grouped.items():
+        logger.info(f"\n[DOMAIN] {domain} logs={len(dlogs)}")
 
-    logger.info("=== FAQ AUTO GENERATION END ===")
-    logger.info(f"Summary: Total={total}, Success={success_count}, Failed={failed_count}")
+        clusters = cluster_semantic(dlogs)
+        if not clusters:
+            logger.info("  no semantic clusters")
+            continue
+
+        for c in clusters:
+            canonical = c["canonical"]
+            items = c["items"]
+
+            existing = await find_existing_faq(domain, canonical)
+            if existing:
+                await reinforce_faq(existing, len(items))
+                continue
+
+            await generate_faq(
+                domain=domain,
+                canonical=canonical,
+                samples=[x.question for x in items],
+            )
+
+    logger.info("\n=== FAQ AUTO GENERATION END ===")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

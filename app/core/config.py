@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     RAGFLOW_BASE_URL_MOCK: str = "http://ragflow:8080"
     LLM_BASE_URL_MOCK: str = "http://llm-internal:8001"
     BACKEND_BASE_URL_MOCK: str = "http://backend-mock:8081"
+    ELASTICSEARCH_URL: str = "http://elasticsearch:9200"
 
     # Real 모드 URL (실제 서비스 주소, 배포 시 설정)
     # TODO: 실제 서비스 URL이 확정되면 여기에 설정
@@ -641,6 +642,10 @@ class Settings(BaseSettings):
     def is_real_mode(self) -> bool:
         """Real 모드인지 확인합니다."""
         return self.AI_ENV == "real"
+    
+    @property
+    def elasticsearch_url(self) -> str:
+        return self.ELASTICSEARCH_URL
 
     # =========================================================================
     # Option 3: 서비스별 Retriever Backend 프로퍼티

@@ -1,63 +1,76 @@
 """
 AI 로그 서비스 모듈 (AI Log Service Module)
 
-채팅 요청 처리 후 AI 로그를 생성하고 백엔드로 전송하는 서비스입니다.
-로그는 비동기로 전송되어 메인 응답 latency에 영향을 주지 않습니다.
+- 채팅 요청 처리 후 AI 로그 생성
+- LOG 단계 PII 마스킹 적용
+- Elasticsearch에 직접 적재 (Single Source of Truth)
 
-주요 기능:
-- ChatRequest, ChatResponse, 파이프라인 메타데이터로부터 AILogEntry 생성
-- LOG 단계 PII 마스킹 적용 (question_masked, answer_masked)
-- 백엔드 API로 로그 전송 (fire-and-forget 방식)
+이 로그는:
+- FAQ 자동 생성
+- RAG Gap 분석
+- 운영 모니터링
+의 기준 데이터가 된다.
 """
 
-import asyncio
-from typing import Optional
+import datetime
+from typing import Optional, Any
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.models.ai_log import AILogEntry, AILogRequest, AILogResponse, to_backend_log_payload
+from app.models.ai_log import AILogEntry
 from app.models.chat import ChatRequest, ChatResponse
-from app.models.intent import MaskingStage, PiiMaskResult
+from app.models.intent import MaskingStage
 from app.services.pii_service import PiiService
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
+# ==================================================
+# UTF-8 안전화 (ES Boundary)
+# ==================================================
+
+def normalize_utf8(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="ignore").decode("utf-8")
+    return value
+
+
+def safe_es_doc(doc: dict) -> dict:
+    return {k: normalize_utf8(v) for k, v in doc.items()}
+
+
+# ==================================================
+# AILogService
+# ==================================================
+
 class AILogService:
     """
-    AI 로그 서비스.
+    AI 로그 서비스 (Elasticsearch Direct Write)
 
-    채팅 파이프라인 완료 후 로그를 생성하고 백엔드로 전송합니다.
-    PII 원문은 절대 저장하지 않으며, LOG 단계에서 강하게 마스킹된 텍스트만 저장합니다.
-
-    Attributes:
-        _pii_service: PII 마스킹 서비스 (LOG 단계 마스킹용)
-        _backend_log_endpoint: 백엔드 로그 저장 API 엔드포인트
-
-    Usage:
-        log_service = AILogService()
-        await log_service.send_log(log_entry)
+    ❗ Elasticsearch = Single Source of Truth
     """
 
     def __init__(self, pii_service: Optional[PiiService] = None) -> None:
-        """
-        AILogService 초기화.
-
-        Args:
-            pii_service: PII 마스킹 서비스. None이면 새로 생성.
-        """
         self._pii_service = pii_service or PiiService()
 
-        # 백엔드 로그 엔드포인트 설정
-        # Phase 9: backend_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
-        # Phase 50: trailing slash 제거로 //api/ai-logs 중복 방지
-        if settings.backend_base_url:
-            base_url = settings.backend_base_url.rstrip("/")
-            self._backend_log_endpoint = f"{base_url}/api/ai-logs"
-        else:
-            self._backend_log_endpoint = None
+        if not settings.ELASTICSEARCH_URL:
+            raise RuntimeError("ELASTICSEARCH_URL is not configured")
+
+        self._es_base_url = settings.ELASTICSEARCH_URL.rstrip("/")
+
+        # 🔥 FAQ 강제 로그 (TEST MODE)
+        self._force_faq_log = getattr(settings, "FAQ_LOG_FORCE", False)
+
+        if self._force_faq_log:
+            logger.warning("⚠️ FAQ_LOG_FORCE enabled (TEST MODE)")
+
+    # ==================================================
+    # Log Entry 생성
+    # ==================================================
 
     def create_log_entry(
         self,
@@ -79,30 +92,6 @@ class AILogService:
         answer_masked: Optional[str] = None,
         rag_gap_candidate: bool = False,
     ) -> AILogEntry:
-        """
-        채팅 요청/응답 및 파이프라인 메타데이터로부터 AILogEntry를 생성합니다.
-
-        Args:
-            request: 원본 ChatRequest
-            response: 생성된 ChatResponse
-            intent: 분류된 의도 (IntentType.value)
-            domain: 보정된 도메인
-            route: 라우팅 결과 (RouteType.value)
-            has_pii_input: 입력에서 PII 검출 여부
-            has_pii_output: 출력에서 PII 검출 여부
-            rag_used: RAG 사용 여부
-            rag_source_count: RAG 검색 결과 개수
-            latency_ms: 전체 처리 시간 (ms)
-            model_name: 사용된 LLM 모델명
-            error_code: 에러 코드 (있으면)
-            error_message: 에러 메시지 (있으면)
-            turn_index: 세션 내 턴 인덱스
-            question_masked: LOG 단계 마스킹된 질문 (이미 마스킹된 경우)
-            answer_masked: LOG 단계 마스킹된 답변 (이미 마스킹된 경우)
-
-        Returns:
-            AILogEntry: 생성된 로그 엔트리
-        """
         return AILogEntry(
             session_id=request.session_id,
             user_id=request.user_id,
@@ -126,117 +115,115 @@ class AILogService:
             rag_gap_candidate=rag_gap_candidate,
         )
 
-    async def mask_for_log(
-        self,
-        question: str,
-        answer: str,
-    ) -> tuple[str, str]:
-        """
-        LOG 단계에서 질문과 답변에 대해 강화된 PII 마스킹을 적용합니다.
+    # ==================================================
+    # LOG 단계 PII 마스킹
+    # ==================================================
 
-        LOG 단계 마스킹은 저장용으로 더 강하게 적용될 수 있습니다.
-        PII 원문은 절대 DB에 저장되지 않도록 합니다.
-
-        Args:
-            question: 사용자 질문 텍스트
-            answer: LLM 답변 텍스트
-
-        Returns:
-            tuple[str, str]: (마스킹된 질문, 마스킹된 답변)
-        """
-        question_result = await self._pii_service.detect_and_mask(
+    async def mask_for_log(self, question: str, answer: str) -> tuple[str, str]:
+        q = await self._pii_service.detect_and_mask(
             text=question,
             stage=MaskingStage.LOG,
         )
-        answer_result = await self._pii_service.detect_and_mask(
+        a = await self._pii_service.detect_and_mask(
             text=answer,
             stage=MaskingStage.LOG,
         )
+        return q.masked_text, a.masked_text
 
-        return question_result.masked_text, answer_result.masked_text
+    # ==================================================
+    # ai_log 저장
+    # ==================================================
 
-    async def send_log(self, log_entry: AILogEntry) -> bool:
-        """
-        AI 로그를 백엔드로 전송합니다.
+    async def send_log(self, log_entry: AILogEntry) -> None:
+        index_name = f"ctrlf-logs-{datetime.date.today():%Y.%m.%d}"
 
-        Fire-and-forget 방식으로 동작하며, 전송 실패해도 메인 로직에 영향을 주지 않습니다.
-        BACKEND_BASE_URL이 설정되지 않은 경우 로컬 로그만 기록합니다.
+        doc = safe_es_doc({
+            "@timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "log_type": "ai_log",
+            "domain": log_entry.domain,
+            "intent": log_entry.intent,
+            "question_masked": log_entry.question_masked,
+            "answer_masked": log_entry.answer_masked,
+            "rag_used": log_entry.rag_used,
+            "rag_source_count": log_entry.rag_source_count,
+            "rag_gap_candidate": log_entry.rag_gap_candidate,
+            "session_id": log_entry.session_id,
+            "user_id": log_entry.user_id,
+            "turn_index": log_entry.turn_index,
+            "route": log_entry.route,
+            "model_name": log_entry.model_name,
+            "latency_ms": log_entry.latency_ms,
+            "error_code": log_entry.error_code,
+            "error_message": log_entry.error_message,
+        })
 
-        Args:
-            log_entry: 전송할 AILogEntry
-
-        Returns:
-            bool: 전송 성공 여부
-        """
-        # 로컬 로그 기록 (항상)
-        logger.info(
-            f"AI Log: session={log_entry.session_id}, "
-            f"user={log_entry.user_id}, "
-            f"intent={log_entry.intent}, "
-            f"route={log_entry.route}, "
-            f"domain={log_entry.domain}, "
-            f"pii_input={log_entry.has_pii_input}, "
-            f"pii_output={log_entry.has_pii_output}, "
-            f"rag_used={log_entry.rag_used}, "
-            f"rag_sources={log_entry.rag_source_count}, "
-            f"latency_ms={log_entry.latency_ms}"
-        )
-
-        # 백엔드 URL이 없으면 로컬 로그만
-        if not self._backend_log_endpoint:
-            logger.debug("BACKEND_BASE_URL not configured, skipping remote log")
-            return True
-
-        # 백엔드로 전송 (camelCase JSON)
         try:
             client = get_async_http_client()
-
-            # camelCase JSON payload 생성
-            payload = to_backend_log_payload(log_entry)
-
-            # 인증 헤더 설정 (있으면)
-            headers = {}
-            if settings.BACKEND_API_TOKEN:
-                headers["Authorization"] = f"Bearer {settings.BACKEND_API_TOKEN}"
-
-            response = await client.post(
-                self._backend_log_endpoint,
-                json=payload,
-                headers=headers if headers else None,
-                timeout=5.0,  # 로그 전송은 빠르게
+            resp = await client.post(
+                f"{self._es_base_url}/{index_name}/_doc",
+                json=doc,
+                timeout=2.0,
             )
 
-            if response.status_code == 200 or response.status_code == 201:
-                logger.debug(
-                    f"AI log sent successfully: session={log_entry.session_id}"
+            if resp.status_code not in (200, 201):
+                logger.error(
+                    f"[AI_LOG] ES failed | status={resp.status_code} | body={resp.text}"
                 )
-                return True
-            else:
-                logger.warning(
-                    f"AI log send failed: status={response.status_code}, "
-                    f"session={log_entry.session_id}"
-                )
-                return False
 
-        except Exception as e:
-            # 로그 전송 실패는 경고만 하고 진행
-            logger.warning(
-                f"AI log send error: {e}, session={log_entry.session_id}"
+        except Exception:
+            logger.exception("[AI_LOG] ES exception")
+
+    # ==================================================
+    # faq_log 저장
+    # ==================================================
+
+    async def send_faq_log(self, log_entry: AILogEntry) -> None:
+        index_name = f"ctrlf-faq-log-{datetime.date.today():%Y.%m.%d}"
+
+        doc = safe_es_doc({
+            "@timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "log_type": "faq_log",
+            "domain": log_entry.domain,
+            "intent": log_entry.intent,
+            "question_masked": log_entry.question_masked,
+            "source": "ai",
+        })
+
+        logger.info(
+            f"[FAQ_LOG] SAVE | domain={doc['domain']} | intent={doc['intent']}"
+        )
+
+        try:
+            client = get_async_http_client()
+            resp = await client.post(
+                f"{self._es_base_url}/{index_name}/_doc",
+                json=doc,
+                timeout=2.0,
             )
-            return False
+
+            if resp.status_code not in (200, 201):
+                logger.error(
+                    f"[FAQ_LOG] ES failed | status={resp.status_code} | body={resp.text}"
+                )
+
+        except Exception:
+            logger.exception("[FAQ_LOG] ES exception")
+
+    # ==================================================
+    # fire-and-forget
+    # ==================================================
 
     async def send_log_async(self, log_entry: AILogEntry) -> None:
-        """
-        AI 로그를 백엔드로 비동기 전송합니다 (fire-and-forget).
-
-        메인 응답과 독립적으로 백그라운드에서 실행됩니다.
-        전송 실패해도 예외를 발생시키지 않습니다.
-
-        Args:
-            log_entry: 전송할 AILogEntry
-        """
         try:
+            # 1️⃣ 운영 로그 (항상 저장)
             await self.send_log(log_entry)
-        except Exception as e:
-            # 백그라운드 작업 실패는 로그만 남김
-            logger.error(f"Background AI log send failed: {e}")
+
+            # 2️⃣ FAQ 로그 (🔥 테스트 단계: 무조건 저장)
+            logger.warning(
+                f"[FAQ_LOG] FORCE SAVE | domain={log_entry.domain} | intent={log_entry.intent}"
+            )
+            await self.send_faq_log(log_entry)
+
+        except Exception:
+            logger.exception("[AI_LOG] background task failed")
+
