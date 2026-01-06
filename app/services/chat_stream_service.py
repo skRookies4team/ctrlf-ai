@@ -461,7 +461,7 @@ class ChatStreamService:
         """
         # 프로바이더 설정에서 base_url 가져오기
         base_url = (provider_config.base_url or str(self._settings.llm_base_url)).rstrip("/")
-        url = f"{base_url}/chat/completions"
+        url = f"{base_url}/v1/chat/completions"
 
         # messages 배열을 LLM 형식으로 변환
         llm_messages = [
