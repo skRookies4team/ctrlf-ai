@@ -137,7 +137,7 @@ POST /ai/chat/messages
   ],
   "meta": {
     "user_role": "EMPLOYEE",
-    "used_model": "qwen2.5-7b",
+    "used_model": "llm-model",
     "route": "RAG_INTERNAL",
     "intent": "POLICY_QA",
     "domain": "POLICY",
@@ -179,7 +179,7 @@ POST /ai/chat/stream
 
 **Response (NDJSON 스트림)**
 ```json
-{"type":"meta","request_id":"req-uuid-001","model":"qwen2.5-7b","timestamp":"..."}
+{"type":"meta","request_id":"req-uuid-001","model":"llm-model","timestamp":"..."}
 {"type":"token","text":"연차"}
 {"type":"token","text":"휴가는"}
 {"type":"done","finish_reason":"stop","total_tokens":123,"elapsed_ms":4567,"ttfb_ms":200}
@@ -236,7 +236,7 @@ POST /ai/quiz/generate
   ],
   "meta": {
     "generated_count": 5,
-    "model": "qwen2.5-7b"
+    "model": "llm-model"
   }
 }
 ```

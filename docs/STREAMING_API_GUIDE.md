@@ -110,7 +110,7 @@ chunked
 연결 직후 1회 전송. 침묵 시간을 없애고 연결 상태를 확정합니다.
 
 ```json
-{"type":"meta","request_id":"req-uuid-001","model":"qwen2.5-7b","timestamp":"2025-01-01T10:00:00.000000"}
+{"type":"meta","request_id":"req-uuid-001","model":"llm-model","timestamp":"2025-01-01T10:00:00.000000"}
 ```
 
 | 필드 | 설명 |
@@ -229,7 +229,7 @@ curl -X POST http://localhost:8000/ai/chat/stream \
 ### 기대 출력 (NDJSON)
 
 ```
-{"type":"meta","request_id":"test-001","model":"qwen2.5-7b","timestamp":"2025-01-01T10:00:00.000000"}
+{"type":"meta","request_id":"test-001","model":"llm-model","timestamp":"2025-01-01T10:00:00.000000"}
 {"type":"token","text":"안"}
 {"type":"token","text":"녕"}
 {"type":"token","text":"하"}
@@ -301,7 +301,7 @@ INFO: Stream cancelled (client disconnected): req-uuid-001
 ```json
 {
   "request_id": "req-uuid-001",
-  "model": "qwen2.5-7b",
+  "model": "llm-model",
   "ttfb_ms": 200,
   "total_elapsed_ms": 4567,
   "total_tokens": 123,
