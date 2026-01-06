@@ -1,0 +1,7 @@
+{
+  "session_id": "test-001",
+  "user_id": "user-001",
+  "user_role": "EMPLOYEE",
+  "domain": "POLICY",
+  "messages": [{"role": "user", "content": "근무시간이 어떻게 되나요?"}]
+}

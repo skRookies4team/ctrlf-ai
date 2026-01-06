@@ -1,0 +1,908 @@
+# CTRLF AI 영상 제작 파이프라인 아키텍처
+
+> 실제 코드 분석 기반 기술 문서
+> 작성일: 2025-12-31
+> 버전: Phase 42 기준
+
+---
+
+## 목차
+
+1. [전체 아키텍처 개요](#1-전체-아키텍처-개요)
+2. [Phase 1: 스크립트 생성 파이프라인](#2-phase-1-스크립트-생성-파이프라인)
+3. [Phase 2: 영상 렌더링 파이프라인 (7-Step)](#3-phase-2-영상-렌더링-파이프라인-7-step)
+4. [데이터 변환 상세 분석](#4-데이터-변환-상세-분석)
+5. [외부 서비스 통합](#5-외부-서비스-통합)
+6. [API 엔드포인트 및 요청 흐름](#6-api-엔드포인트-및-요청-흐름)
+7. [WebSocket 실시간 진행률](#7-websocket-실시간-진행률)
+8. [에러 처리 및 복구](#8-에러-처리-및-복구)
+9. [환경 설정](#9-환경-설정)
+10. [주요 파일 위치](#10-주요-파일-위치)
+
+---
+
+## 1. 전체 아키텍처 개요
+
+### 1.1 시스템 구성도
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           CTRLF AI Video Pipeline                               │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  ┌──────────────────────┐         ┌──────────────────────────────────────────┐ │
+│  │   Phase 1: 스크립트   │         │          Phase 2: 영상 렌더링             │ │
+│  │      생성             │────────▶│                                          │ │
+│  └──────────────────────┘         └──────────────────────────────────────────┘ │
+│           │                                      │                              │
+│           ▼                                      ▼                              │
+│   LLM (Qwen2.5-7B)                    7-Step Rendering Pipeline                │
+│           │                                      │                              │
+│           ▼                                      ▼                              │
+│   VideoScript JSON              TTS → FFmpeg → Storage → Callback              │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 Two-Phase 비동기 파이프라인
+
+```
+Phase 1: Script Generation          Phase 2: Video Rendering
+┌─────────────────────────┐         ┌──────────────────────────────┐
+│ LLM-based Script Gen    │         │ Multi-step Rendering Job     │
+│ (VideoScriptGeneration) │────────>│ (RenderJobRunner)            │
+└─────────────────────────┘         └──────────────────────────────┘
+         ↓                                    ↓
+  LLM_Client.generate                RenderStep Pipeline:
+  (OpenAI-compatible)                 1. VALIDATE_SCRIPT
+  ↓                                   2. GENERATE_TTS
+  Returns raw_json with               3. GENERATE_SUBTITLE
+  chapters/scenes structure            4. RENDER_SLIDES
+                                       5. COMPOSE_VIDEO
+                                       6. UPLOAD_ASSETS
+                                       7. FINALIZE
+```
+
+---
+
+## 2. Phase 1: 스크립트 생성 파이프라인
+
+### 2.1 흐름도
+
+```
+POST /api/videos/{video_id}/scripts/generate
+                    │
+                    ▼
+    ┌───────────────────────────────┐
+    │  VideoScriptGenerationService │  (video_script_generation_service.py)
+    │  ─────────────────────────────│
+    │  • source_text (교육 원문)     │
+    │  • target_minutes (기본: 3분)  │
+    │  • max_chapters (기본: 5)      │
+    │  • style (friendly_security)  │
+    └───────────────────────────────┘
+                    │
+                    ▼
+    ┌───────────────────────────────┐
+    │         LLM Client            │  (llm_client.py)
+    │  ─────────────────────────────│
+    │  OpenAI-compatible API        │
+    │  Temperature: 0.3             │
+    │  Max Tokens: 4096             │
+    │  Auto-retry: 2회              │
+    └───────────────────────────────┘
+                    │
+                    ▼
+    ┌───────────────────────────────┐
+    │    VideoScript JSON 출력       │
+    │  ─────────────────────────────│
+    │  {                            │
+    │    chapters: [                │
+    │      {                        │
+    │        chapter_id, title,     │
+    │        scenes: [              │
+    │          {                    │
+    │            scene_id,          │
+    │            narration,    ◄─── TTS용 텍스트
+    │            on_screen_text,◄── 자막용 텍스트
+    │            duration_sec       │
+    │          }                    │
+    │        ]                      │
+    │      }                        │
+    │    ]                          │
+    │  }                            │
+    └───────────────────────────────┘
+                    │
+                    ▼
+         [Backend Callback]
+    POST /video/script/complete
+```
+
+### 2.2 VideoScriptGenerationService 상세
+
+**위치**: `app/services/video_script_generation_service.py`
+
+**주요 기능**:
+
+- 교육 원문 → VideoScript JSON 변환 (LLM 호출)
+- JSON 파싱 + Pydantic 스키마 검증
+- 실패 시 자동 복구 (최대 2회 재시도)
+
+**입력 옵션** (`ScriptGenerationOptions`):
+
+| 옵션                     | 기본값                         | 설명                |
+| ------------------------ | ------------------------------ | ------------------- |
+| `language`               | `"ko"`                         | 언어 코드           |
+| `target_minutes`         | `3`                            | 목표 영상 길이 (분) |
+| `max_chapters`           | `5`                            | 최대 챕터 수        |
+| `max_scenes_per_chapter` | `6`                            | 챕터당 최대 씬 수   |
+| `style`                  | `"friendly_security_training"` | 스크립트 스타일     |
+
+### 2.3 Pydantic 스키마
+
+```python
+class VideoScriptSchema(BaseModel):
+    chapters: List[ChapterSchema]  # min_length=1
+
+class ChapterSchema(BaseModel):
+    chapter_id: int
+    title: str                     # min_length=1
+    scenes: List[SceneSchema]      # min_length=1
+
+class SceneSchema(BaseModel):
+    scene_id: int
+    narration: str                 # min_length=1, TTS 입력
+    on_screen_text: Optional[str]  # 화면 자막
+    duration_sec: Optional[float]  # ge=0
+```
+
+---
+
+## 3. Phase 2: 영상 렌더링 파이프라인 (7-Step)
+
+### 3.1 전체 흐름도
+
+```
+POST /api/videos/{video_id}/render-jobs
+                    │
+                    ▼
+    ┌────────────────────────────────────────────────────────────────┐
+    │                    RenderJobRunner                              │
+    │                    (render_job_runner.py)                       │
+    │  ──────────────────────────────────────────────────────────────│
+    │  • 중복 Job 방지 (idempotency check)                            │
+    │  • DB 상태 관리 (QUEUED → PROCESSING → COMPLETED/FAILED)        │
+    │  • WebSocket 진행률 브로드캐스트                                  │
+    │  • render_spec_json 스냅샷 저장 (Phase 38)                       │
+    └────────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+    ┌────────────────────────────────────────────────────────────────┐
+    │                   RealVideoRenderer                             │
+    │                   (video_renderer_real.py)                      │
+    └────────────────────────────────────────────────────────────────┘
+                    │
+        ┌───────────┴───────────────────────────────────────────┐
+        │                    7-Step Pipeline                     │
+        ├────────────────────────────────────────────────────────┤
+        │                                                        │
+        │  Step 1: VALIDATE_SCRIPT                               │
+        │  └─ RenderSpec에서 SceneInfo[] 추출                     │
+        │                    │                                   │
+        │                    ▼                                   │
+        │  Step 2: GENERATE_TTS                                  │
+        │  ├─ 모든 narration 연결                                 │
+        │  └─ TTS Provider → MP3                                 │
+        │                    │                                   │
+        │                    ▼                                   │
+        │  Step 3: GENERATE_SUBTITLE                             │
+        │  └─ SRT 자막 파일 생성                                   │
+        │                    │                                   │
+        │                    ▼                                   │
+        │  Step 4: RENDER_SLIDES                                 │
+        │  ├─ Basic: 단색 배경                                    │
+        │  └─ Animated: VisualPlanExtractor + ImageAssetService  │
+        │                    │                                   │
+        │                    ▼                                   │
+        │  Step 5: COMPOSE_VIDEO                                 │
+        │  ├─ VideoComposer (video_composer.py)                  │
+        │  ├─ FFmpeg: 이미지 + 오디오 → MP4                        │
+        │  ├─ 1280×720 @ 24fps                                   │
+        │  └─ Ken Burns effect (animated mode)                   │
+        │                    │                                   │
+        │                    ▼                                   │
+        │  Step 6: UPLOAD_ASSETS                                 │
+        │  ├─ StorageAdapter (storage_adapter.py)                │
+        │  └─ S3: videos/{video_id}/{script_id}/{job_id}/        │
+        │                    │                                   │
+        │                    ▼                                   │
+        │  Step 7: FINALIZE                                      │
+        │  ├─ Job 상태 → COMPLETED                                │
+        │  └─ Backend Callback (비동기)                           │
+        │                                                        │
+        └────────────────────────────────────────────────────────┘
+```
+
+### 3.2 각 단계별 상세
+
+#### Step 1: VALIDATE_SCRIPT (0% → 15%)
+
+- **서비스**: `RealVideoRenderer._validate_script()`
+- **입력**: `script_json` (Dict)
+- **출력**: `List[SceneInfo]` (평탄화된 씬 리스트)
+- **동작**: chapters/scenes 중첩 구조를 SceneInfo 리스트로 변환
+
+#### Step 2: GENERATE_TTS (15% → 40%)
+
+- **서비스**: `RealVideoRenderer._generate_tts()`
+- **입력**: 모든 씬의 narration 텍스트 연결
+- **출력**: MP3 오디오 파일
+- **TTS Provider**: Mock, gTTS, AWS Polly, GCP Cloud TTS
+
+#### Step 3: GENERATE_SUBTITLE (40% → 50%)
+
+- **서비스**: `VideoComposer._generate_srt()`
+- **입력**: `List[SceneInfo]` + duration 정보
+- **출력**: SRT 자막 파일
+
+#### Step 4: RENDER_SLIDES (50% → 60%)
+
+- **서비스**: `RealVideoRenderer._render_slides()`
+- **Basic 모드**: 스킵 (FFmpeg에서 단색 배경 처리)
+- **Animated 모드**:
+  - `VisualPlanExtractor` → 시각적 계획 추출
+  - `ImageAssetService` → 씬별 이미지 생성
+
+#### Step 5: COMPOSE_VIDEO (60% → 85%)
+
+- **서비스**: `VideoComposer.compose()`
+- **입력**: scenes + audio + images
+- **출력**: MP4 비디오 + SRT 자막 + JPG 썸네일
+- **FFmpeg 설정**:
+  - 해상도: 1280×720
+  - FPS: 24
+  - 코덱: H.264 (libx264)
+  - 비트레이트: 2Mbps
+  - Animated: Ken Burns zoom + fade 전환
+
+#### Step 6: UPLOAD_ASSETS (85% → 95%)
+
+- **서비스**: `RealVideoRenderer._upload_assets()`
+- **Storage Provider**: Local, S3, MinIO, Backend Presigned
+- **Object Key 규칙**: `videos/{video_id}/{script_id}/{job_id}/`
+
+#### Step 7: FINALIZE (95% → 100%)
+
+- **동작**:
+  1. DB에 assets 저장
+  2. Job 상태 → COMPLETED
+  3. WebSocket 완료 알림
+  4. Backend callback (비동기)
+
+### 3.3 상태 전이 다이어그램
+
+```
+              create_job()
+                   │
+                   ▼
+             ┌──────────┐
+             │  QUEUED  │
+             └────┬─────┘
+                  │ start_job() / _execute_job()
+                  ▼
+           ┌────────────┐
+           │ PROCESSING │◄──────────────┐
+           └─────┬──────┘               │
+                 │                      │ retry_job()
+        ┌────────┼────────┐             │
+        │        │        │             │
+        ▼        │        ▼             │
+   ┌──────────┐  │   ┌────────┐         │
+   │COMPLETED │  │   │ FAILED │─────────┘
+   └──────────┘  │   └────────┘
+                 │        │
+                 │        │ error_code:
+                 │        │ • STORAGE_UPLOAD_FAILED
+                 │        │ • CANCELED
+                 │        │ • (기타 에러)
+                 ▼
+          cancel_job()
+```
+
+---
+
+## 4. 데이터 변환 상세 분석
+
+### 4.1 Phase 1: 스크립트 생성 데이터 흐름
+
+````
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STEP 1: 사용자 입력                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  source_text: str                                                   │
+│  "피싱 공격은 사회공학적 기법을 활용한 사이버 공격의 일종으로..."     │
+│                                                                     │
+│  📏 크기: 약 500~5,000자                                             │
+│  📦 형태: plain text                                                 │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STEP 2: LLM 프롬프트 구성                         │
+├─────────────────────────────────────────────────────────────────────┤
+│  messages = [                                                       │
+│    {"role": "system", "content": "당신은 교육 영상 스크립트..."},    │
+│    {"role": "user", "content": "아래 교육 원문을 분석하여..."}       │
+│  ]                                                                  │
+│                                                                     │
+│  📏 크기: system(~800) + user(~300 + source) ≈ 1,100 + source_text  │
+│  📦 형태: List[Dict] - OpenAI 메시지 포맷                            │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STEP 3: LLM 호출                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  POST {LLM_BASE_URL}/v1/chat/completions                            │
+│  {                                                                  │
+│    "model": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",                             │
+│    "messages": [...],                                               │
+│    "temperature": 0.3,                                              │
+│    "max_tokens": 4096                                               │
+│  }                                                                  │
+│                                                                     │
+│  📏 Request: ~6KB                                                   │
+│  ⏱️ Timeout: 30초                                                   │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STEP 4: LLM 응답                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  raw_output: str (JSON 형식)                                        │
+│  ```json                                                            │
+│  {                                                                  │
+│    "chapters": [                                                    │
+│      { "chapter_id": 1, "title": "...", "scenes": [...] }           │
+│    ]                                                                │
+│  }                                                                  │
+│  ```                                                                │
+│                                                                     │
+│  📏 크기: ~2,000~10,000자                                            │
+│  📦 형태: str (JSON 문자열)                                          │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STEP 5: JSON 파싱 + 검증                          │
+├─────────────────────────────────────────────────────────────────────┤
+│  1. _extract_json(): 코드블록에서 JSON 추출                          │
+│  2. json.loads(): str → Dict                                        │
+│  3. VideoScriptSchema.model_validate(): Pydantic 검증               │
+│                                                                     │
+│  📦 형태: str → Dict[str, Any]                                       │
+│  🔄 실패 시: 최대 2회 재시도 (fix prompt)                             │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    STEP 6: 최종 출력                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  raw_json: Dict[str, Any]                                           │
+│  {                                                                  │
+│    "chapters": [                                                    │
+│      {                                                              │
+│        "chapter_id": 1,                                             │
+│        "title": "피싱 공격이란?",                                    │
+│        "scenes": [                                                  │
+│          {                                                          │
+│            "scene_id": 1,                                           │
+│            "narration": "안녕하세요...",                             │
+│            "on_screen_text": "피싱 공격의 정의",                     │
+│            "duration_sec": 15.0                                     │
+│          }                                                          │
+│        ]                                                            │
+│      }                                                              │
+│    ]                                                                │
+│  }                                                                  │
+│                                                                     │
+│  📏 크기: ~5KB                                                       │
+│  📊 구조: 2-3 챕터 × 3-6 씬 = 10-18개 씬                             │
+└─────────────────────────────────────────────────────────────────────┘
+````
+
+### 4.2 Phase 2: 영상 렌더링 데이터 흐름
+
+#### Step 1: VALIDATE_SCRIPT
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  입력: script_json (Dict)                                           │
+│  📏 ~5KB                                                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  _extract_scenes() 변환                                             │
+├─────────────────────────────────────────────────────────────────────┤
+│  출력: List[SceneInfo]                                              │
+│  [                                                                  │
+│    SceneInfo(                                                       │
+│      scene_id=1,                                                    │
+│      narration="안녕하세요...",                                      │
+│      caption="피싱 공격의 정의",                                     │
+│      duration_sec=15.0,                                             │
+│      image_path=None                                                │
+│    ),                                                               │
+│    ...                                                              │
+│  ]                                                                  │
+│  📏 ~3KB, 📊 10-18개 객체                                            │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Step 2: GENERATE_TTS
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  입력: 모든 narration 연결                                           │
+│  full_text = " ".join(scene.narration for scene in scenes)          │
+│  📏 ~1,500-3,000자 (3분 영상 기준)                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│  TTS Provider 호출                                                   │
+│  • Mock: 무음 MP3                                                    │
+│  • gTTS: Google TTS API                                             │
+│  • Polly: AWS Voice "Seoyeon"                                       │
+│  • GCP: Voice "ko-KR-Wavenet-A"                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  출력: audio.mp3                                                     │
+│  📏 ~500KB - 2MB (128kbps)                                          │
+│  ⏱️ ~180초 (3분)                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Step 3-4: GENERATE_SUBTITLE & RENDER_SLIDES
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  SUBTITLE (SRT 생성)                                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  입력: List[SceneInfo]                                              │
+│  출력: job-xxx.srt                                                   │
+│                                                                     │
+│  1                                                                  │
+│  00:00:00,000 --> 00:00:15,000                                      │
+│  피싱 공격의 정의                                                    │
+│                                                                     │
+│  📏 ~1KB                                                             │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  RENDER_SLIDES (Animated 모드만)                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  1. VisualPlanExtractor → VisualPlan                                │
+│  2. ImageAssetService → PNG 이미지                                   │
+│                                                                     │
+│  출력: scene_images/scene_0.png, scene_1.png, ...                   │
+│  📏 ~150KB/씬, 총 ~2MB                                               │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Step 5: COMPOSE_VIDEO
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  입력                                                                │
+│  • scenes: List[SceneInfo] (~3KB)                                   │
+│  • audio: MP3 (~1.5MB)                                              │
+│  • images: PNG×N (~2MB, animated)                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│  FFmpeg 처리                                                         │
+│                                                                     │
+│  BASIC 모드:                                                         │
+│  ffmpeg -f lavfi -i "color=c=0x1E1E1E:s=1280x720:d=180:r=24" \      │
+│         -i audio.mp3 -vf "drawtext=..." \                           │
+│         -c:v libx264 -preset medium -b:v 2M output.mp4              │
+│                                                                     │
+│  ANIMATED 모드:                                                      │
+│  ffmpeg -loop 1 -t 15 -i scene_0.png ... \                          │
+│         -filter_complex "zoompan=...; xfade=fade:duration=0.5" \    │
+│         output.mp4                                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  출력                                                                │
+│  • video.mp4: ~25MB (H.264, 2Mbps)                                  │
+│  • subtitles.srt: ~1KB                                              │
+│  • thumb.jpg: ~50KB                                                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Step 6: UPLOAD_ASSETS
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  업로드 대상                                                         │
+├─────────────────────────────────────────────────────────────────────┤
+│  로컬 파일              →    Object Key                              │
+│  ─────────────────────────────────────────────────────────────────  │
+│  job-xxx.mp4 (~25MB)    →    videos/{video_id}/{script_id}/         │
+│                               {job_id}/video.mp4                    │
+│                                                                     │
+│  job-xxx.srt (~1KB)     →    videos/.../subtitles.srt               │
+│                                                                     │
+│  job-xxx_thumb.jpg      →    videos/.../thumb.jpg                   │
+│  (~50KB)                                                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  Storage Provider                                                    │
+│  • LOCAL: ./data/assets/ → /assets URL                              │
+│  • S3: boto3.put_object → S3 URL                                    │
+│  • BACKEND_PRESIGNED: Presign → PUT → Complete                      │
+├─────────────────────────────────────────────────────────────────────┤
+│  출력: StorageResult                                                 │
+│  {                                                                  │
+│    key: "videos/.../video.mp4",                                     │
+│    url: "https://cdn.example.com/.../video.mp4",                    │
+│    size_bytes: 26214400,                                            │
+│    content_type: "video/mp4"                                        │
+│  }                                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.3 데이터 크기 변환 요약
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                 데이터 크기 변환 흐름 (3분 영상 기준)                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Phase 1: 스크립트 생성                                              │
+│  ───────────────────────────────────────────────────────────────── │
+│                                                                     │
+│  source_text  →  LLM Prompt  →  raw_output  →  raw_json             │
+│  ┌────────┐     ┌─────────┐    ┌─────────┐    ┌─────────┐          │
+│  │ ~2 KB  │  →  │ ~6 KB   │ →  │ ~5 KB   │ →  │ ~5 KB   │          │
+│  │ 문자열  │     │messages │    │JSON str │    │ Dict    │          │
+│  └────────┘     └─────────┘    └─────────┘    └─────────┘          │
+│                                                                     │
+│  Phase 2: 영상 렌더링                                                │
+│  ───────────────────────────────────────────────────────────────── │
+│                                                                     │
+│  raw_json  →  SceneInfo[]  →  TTS     →  Images  →  Video           │
+│  ┌───────┐   ┌──────────┐   ┌───────┐   ┌──────┐   ┌────────┐      │
+│  │ ~5 KB │ → │ ~3 KB    │ → │~1.5MB │ → │ ~2MB │ → │ ~25 MB │      │
+│  │ Dict  │   │ 10-18개   │   │ MP3   │   │ PNG  │   │  MP4   │      │
+│  └───────┘   └──────────┘   └───────┘   └──────┘   └────────┘      │
+│                                                                     │
+│  + SRT (~1KB) + Thumbnail (~50KB) → Upload → URLs                   │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.4 각 단계별 데이터 형태 요약 표
+
+| 단계           | 입력 형태         | 입력 크기 | 출력 형태         | 출력 크기 |
+| -------------- | ----------------- | --------- | ----------------- | --------- |
+| source_text    | `str`             | ~2KB      | -                 | -         |
+| LLM Prompt     | `List[Dict]`      | ~6KB      | -                 | -         |
+| LLM Response   | -                 | -         | `str`             | ~5KB      |
+| Pydantic 검증  | `Dict`            | ~5KB      | `Dict`            | ~5KB      |
+| SceneInfo 추출 | `Dict`            | ~5KB      | `List[SceneInfo]` | ~3KB      |
+| TTS 합성       | `str`             | ~2K자     | `Binary (MP3)`    | ~1.5MB    |
+| 이미지 생성    | `SceneInfo`       | ~200B/씬  | `Binary (PNG)`    | ~150KB/씬 |
+| FFmpeg 합성    | MP3 + PNG         | ~3.5MB    | `Binary (MP4)`    | ~25MB     |
+| 자막 생성      | `List[SceneInfo]` | ~3KB      | `Text (SRT)`      | ~1KB      |
+| 썸네일 추출    | MP4               | ~25MB     | `Binary (JPG)`    | ~50KB     |
+| Storage 업로드 | Binary Files      | ~25MB     | `StorageResult`   | URLs      |
+
+---
+
+## 5. 외부 서비스 통합
+
+### 5.1 서비스 통합 맵
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        External Services                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────┐ │
+│  │   LLM       │    │    TTS      │    │       Storage           │ │
+│  │  (Qwen)     │    │  Provider   │    │                         │ │
+│  ├─────────────┤    ├─────────────┤    ├─────────────────────────┤ │
+│  │ OpenAI API  │    │ • Polly     │    │ • Local (dev)           │ │
+│  │ 호환        │    │ • GCP TTS   │    │ • S3/MinIO (prod)       │ │
+│  │             │    │ • gTTS      │    │                         │ │
+│  └──────┬──────┘    └──────┬──────┘    └───────────┬─────────────┘ │
+│         │                  │                       │               │
+│         ▼                  ▼                       ▼               │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │                    Backend (Spring)                          │ │
+│  │  ────────────────────────────────────────────────────────────│ │
+│  │  GET  /internal/scripts/{id}/render-spec  ◄── 렌더 스펙 조회  │ │
+│  │  POST /video/script/complete              ◄── 스크립트 완료   │ │
+│  │  POST /video/job/{id}/complete            ◄── 렌더링 완료     │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 LLM Client
+
+**위치**: `app/clients/llm_client.py`
+
+| 설정        | 값                                    |
+| ----------- | ------------------------------------- |
+| API         | OpenAI-compatible                     |
+| Model       | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
+| Temperature | 0.3                                   |
+| Max Tokens  | 4096                                  |
+| Timeout     | 30초                                  |
+| Retry       | 1회                                   |
+
+### 5.3 TTS Provider
+
+**위치**: `app/clients/tts_provider.py`
+
+| Provider | 환경변수             | 음성            | 비고          |
+| -------- | -------------------- | --------------- | ------------- |
+| `mock`   | `TTS_PROVIDER=mock`  | -               | 테스트용 무음 |
+| `gtts`   | `TTS_PROVIDER=gtts`  | Google TTS      | 무료          |
+| `polly`  | `TTS_PROVIDER=polly` | Seoyeon (KR)    | AWS           |
+| `gcp`    | `TTS_PROVIDER=gcp`   | ko-KR-Wavenet-A | Google Cloud  |
+
+### 5.4 Storage Adapter
+
+**위치**: `app/clients/storage_adapter.py`
+
+| Provider            | 환경변수                             | 용도            |
+| ------------------- | ------------------------------------ | --------------- |
+| `local`             | `STORAGE_PROVIDER=local`             | 개발용          |
+| `s3`                | `STORAGE_PROVIDER=s3`                | 운영용 (AWS S3) |
+| `backend_presigned` | `STORAGE_PROVIDER=backend_presigned` | 백엔드 위임     |
+
+### 5.5 Backend Client
+
+**위치**: `app/clients/backend_client.py`
+
+**Integration Points**:
+
+1. **Render Spec 조회** (Phase 38):
+
+   - `GET /internal/scripts/{script_id}/render-spec`
+   - RenderSpec 스냅샷 반환
+
+2. **Script 완료 콜백**:
+
+   - `POST /video/script/complete`
+   - Payload: `{ material_id, script_id, script, version }`
+
+3. **Job 완료 콜백**:
+   - `POST /video/job/{job_id}/complete`
+   - Payload: `{ jobId, videoUrl, duration, status }`
+
+---
+
+## 6. API 엔드포인트 및 요청 흐름
+
+### 6.1 Script Generation Flow
+
+```
+POST /api/videos/{video_id}/scripts/generate
+├─ Input: ScriptGenerateRequest
+│   ├─ source_text (교육 원문)
+│   ├─ language (기본: ko)
+│   ├─ target_minutes (기본: 3)
+│   ├─ max_chapters (기본: 5)
+│   ├─ max_scenes_per_chapter (기본: 6)
+│   └─ style (기본: friendly_security_training)
+│
+├─ VideoScriptGenerationService.generate_script()
+│  └─ LLMClient.generate_chat_completion() → raw_json
+│
+├─ Service.create_script() → VideoScript (DRAFT status)
+│
+├─ [Async] _notify_script_complete() → Backend callback
+│
+└─ Response: ScriptGenerateResponse { script_id, status, raw_json }
+```
+
+### 6.2 Render Job Creation Flow
+
+```
+POST /api/videos/{video_id}/render-jobs
+├─ Input: Script must be APPROVED
+│
+├─ RenderJobRunner.create_job()
+│  ├─ Check: No PROCESSING/QUEUED job exists (idempotency)
+│  ├─ Create: RenderJobEntity { status: QUEUED }
+│  └─ Save to DB
+│
+├─ [Background] _execute_job() or _execute_job_with_spec()
+│  └─ Pipeline steps 1-7 executed sequentially
+│
+└─ Response: RenderJobCreateResponseV2 { job_id, status, created }
+```
+
+### 6.3 Job Start & Retry (Phase 38)
+
+```
+POST /video/job/{job_id}/start (Backend → AI)
+├─ RenderJobRunner.start_job()
+│  ├─ Fetch render-spec from backend (cached in DB)
+│  ├─ Validate & normalize spec
+│  ├─ Store snapshot in render_spec_json
+│  └─ Start _execute_job_with_spec()
+│
+└─ Response: JobStartResult { job, started, error_code }
+
+POST /video/job/{job_id}/retry (Backend → AI)
+├─ RenderJobRunner.retry_job()
+│  ├─ Use existing render_spec_json snapshot
+│  ├─ Reset job status to QUEUED
+│  └─ Start _execute_job_with_spec()
+│
+└─ Response: JobStartResult { job, started }
+```
+
+---
+
+## 7. WebSocket 실시간 진행률
+
+### 7.1 연결 및 이벤트
+
+```
+WS /ws/videos/{video_id}/render-progress
+              │
+              ▼
+┌─────────────────────────────────────────┐
+│       RenderProgressEvent               │
+│  ─────────────────────────────────────  │
+│  {                                      │
+│    job_id: "uuid",                      │
+│    video_id: "uuid",                    │
+│    status: "PROCESSING",                │
+│    step: "GENERATE_TTS",                │
+│    progress: 45,          ◄── 0~100%    │
+│    message: "TTS 생성 중...",            │
+│    timestamp: "2025-12-23T..."          │
+│  }                                      │
+└─────────────────────────────────────────┘
+              │
+              ▼
+    RenderProgressConnectionManager
+    └─ video_id 구독자에게 브로드캐스트
+```
+
+### 7.2 Progress 단계별 범위
+
+| Step              | 시작 | 종료 | 메시지                |
+| ----------------- | ---- | ---- | --------------------- |
+| VALIDATE_SCRIPT   | 0%   | 15%  | 스크립트 검증 중...   |
+| GENERATE_TTS      | 15%  | 40%  | TTS 생성 중...        |
+| GENERATE_SUBTITLE | 40%  | 50%  | 자막 생성 중...       |
+| RENDER_SLIDES     | 50%  | 60%  | 슬라이드 렌더링 중... |
+| COMPOSE_VIDEO     | 60%  | 85%  | 영상 합성 중...       |
+| UPLOAD_ASSETS     | 85%  | 95%  | 에셋 업로드 중...     |
+| FINALIZE          | 95%  | 100% | 완료 처리 중...       |
+
+---
+
+## 8. 에러 처리 및 복구
+
+### 8.1 Script Generation 에러
+
+- **Max retries**: 2 (initial + 1 fix attempt)
+- **에러 시나리오**:
+  - JSON parse errors → Fix prompt 재시도
+  - Validation errors → 스키마 리마인더로 재시도
+  - Empty LLM output → ValueError
+- **Status code**: 422 UNPROCESSABLE_ENTITY
+
+### 8.2 Rendering 에러
+
+| Error Code              | 원인           | 처리           |
+| ----------------------- | -------------- | -------------- |
+| `STORAGE_UPLOAD_FAILED` | S3 업로드 실패 | 임시 파일 정리 |
+| `CANCELED`              | 사용자 취소    | Task.cancel()  |
+| `NO_RENDER_SPEC`        | 스펙 없음      | FAILED 상태    |
+| `JOB_NOT_FOUND`         | Job 없음       | 404 반환       |
+
+### 8.3 Task 취소
+
+- 각 파이프라인 단계에서 취소 여부 모니터링
+- `cancel_job()` 호출 시:
+  1. DB 상태 → FAILED + error_code="CANCELED"
+  2. asyncio.Task.cancel()
+  3. 임시 파일 정리
+
+---
+
+## 9. 환경 설정
+
+### 9.1 Script Generation
+
+| 환경변수         | 설명           | 기본값                                |
+| ---------------- | -------------- | ------------------------------------- |
+| `LLM_BASE_URL`   | LLM 서버 URL   | -                                     |
+| `LLM_MODEL_NAME` | 모델명         | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
+| `AI_ENV`         | mock/real 모드 | `mock`                                |
+
+### 9.2 Video Rendering
+
+| 환경변수              | 설명                 | 기본값           |
+| --------------------- | -------------------- | ---------------- |
+| `TTS_PROVIDER`        | TTS 제공자           | `mock`           |
+| `RENDER_OUTPUT_DIR`   | 렌더링 출력 디렉토리 | `./video_output` |
+| `VIDEO_VISUAL_STYLE`  | basic/animated       | `basic`          |
+| `VIDEO_WIDTH`         | 영상 너비            | `1280`           |
+| `VIDEO_HEIGHT`        | 영상 높이            | `720`            |
+| `VIDEO_FPS`           | 프레임레이트         | `24`             |
+| `VIDEO_FADE_DURATION` | Fade 전환 시간 (초)  | `0.5`            |
+| `VIDEO_KENBURNS_ZOOM` | Ken Burns 줌 비율    | `1.1`            |
+
+### 9.3 Storage
+
+| 환경변수                  | 설명                | 기본값           |
+| ------------------------- | ------------------- | ---------------- |
+| `STORAGE_PROVIDER`        | 저장소 타입         | `local`          |
+| `STORAGE_LOCAL_DIR`       | 로컬 저장 경로      | `./data/assets`  |
+| `STORAGE_PUBLIC_BASE_URL` | 퍼블릭 URL 기본경로 | `/assets`        |
+| `AWS_S3_BUCKET`           | S3 버킷명           | -                |
+| `AWS_S3_REGION`           | S3 리전             | `ap-northeast-2` |
+| `S3_ENDPOINT_URL`         | MinIO 엔드포인트    | -                |
+
+### 9.4 Backend Integration
+
+| 환경변수                 | 설명              | 기본값 |
+| ------------------------ | ----------------- | ------ |
+| `BACKEND_BASE_URL`       | 백엔드 서버 URL   | -      |
+| `BACKEND_API_TOKEN`      | API 인증 토큰     | -      |
+| `BACKEND_INTERNAL_TOKEN` | Internal API 토큰 | -      |
+| `BACKEND_TIMEOUT_SEC`    | 요청 타임아웃     | `30`   |
+
+---
+
+## 10. 주요 파일 위치
+
+| 역할                | 파일 경로                                         |
+| ------------------- | ------------------------------------------------- |
+| 스크립트 생성       | `app/services/video_script_generation_service.py` |
+| LLM 클라이언트      | `app/clients/llm_client.py`                       |
+| 렌더 Job 관리       | `app/services/render_job_runner.py`               |
+| 실제 렌더러         | `app/services/video_renderer_real.py`             |
+| 비디오 합성         | `app/services/video_composer.py`                  |
+| TTS 제공자          | `app/clients/tts_provider.py`                     |
+| 스토리지            | `app/clients/storage_adapter.py`                  |
+| 백엔드 통신         | `app/clients/backend_client.py`                   |
+| API 엔드포인트 (v1) | `app/api/v1/videos.py`                            |
+| API 엔드포인트 (v2) | `app/api/v2/videos.py`                            |
+| WebSocket           | `app/api/v1/ws_render_progress.py`                |
+| Render Spec 모델    | `app/models/render_spec.py`                       |
+| Video Render 모델   | `app/models/video_render.py`                      |
+| 설정                | `app/core/config.py`                              |
+
+---
+
+## 부록: 기술적 결정 사항
+
+### A.1 Async/Await 패턴
+
+- 모든 I/O 작업 (TTS, FFmpeg, Storage, LLM)은 async
+- Job 실행은 background asyncio.Task
+- WebSocket 알림은 non-blocking
+
+### A.2 Idempotency & Job 중복 방지
+
+- `create_job()`: 기존 PROCESSING/QUEUED job 반환
+- DB 트랜잭션으로 thread-safety 보장
+
+### A.3 Snapshot 기반 렌더링 (Phase 38)
+
+- `render_spec_json`을 DB에 스냅샷으로 저장
+- 백엔드 상태 변경과 렌더링 분리
+- 동일 스펙으로 재시도 가능
+
+### A.4 Multi-modal Storage
+
+- 로컬/S3/MinIO 전환 가능
+- 환경변수로 provider 선택
+- 추상화 레이어로 코드 변경 최소화
+
+---
+
+_이 문서는 실제 코드 분석을 기반으로 작성되었습니다._

@@ -62,6 +62,7 @@ Phase 12 Fallback 전략:
 import asyncio
 import time
 from typing import Dict, List, Optional, Tuple
+from fastapi import BackgroundTasks
 
 from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
@@ -355,6 +356,19 @@ class ChatService:
         service = ChatService()
         response = await service.handle_chat(request)
     """
+    
+    def _fire_and_forget(self, coro) -> None:
+        """
+        BackgroundTasks에서 안전하게 async coroutine을 실행하기 위한 wrapper.
+        FastAPI BackgroundTasks는 async를 직접 관리하지 않으므로
+        running loop에서 create_task로 분리한다.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+        except RuntimeError:
+            logger.error("[AI_LOG] No running event loop, dropping log task")
+
 
     def __init__(
         self,
@@ -435,6 +449,13 @@ class ChatService:
             )
         else:
             self._forbidden_filter = None
+
+
+    async def handle_chat(
+        self,
+        req: ChatRequest,
+        background_tasks: BackgroundTasks,
+    ) -> ChatResponse:
 
         # 멀티턴 맥락 유지: ChatContextHandler 초기화
         self._context_handler = get_context_handler()
@@ -1269,6 +1290,8 @@ class ChatService:
         llm_prompt_tokens: Optional[int] = None
         llm_completion_tokens: Optional[int] = None
         llm_model_used: Optional[str] = None
+        
+        llm_start = time.perf_counter()
 
         # Phase 55: 환각 방지 - RAG 0건 시 LLM 호출 스킵
         settings = get_settings()
@@ -1618,33 +1641,33 @@ class ChatService:
             f"rag_used={rag_used}, masked={has_pii}"
         )
 
-        # Step 8: Generate and send AI log (fire-and-forget)
-        # Phase AB: A/B 테스트 정보 조회 (model 필드 직접 사용)
-        # TODO: get_client_info_by_model 함수 구현 필요
+        # Step 8: Generate and send AI log (fire-and-forget, FIXED)
         ab_info = {
             "model": ab_model,
             "embedding_model": None,
             "collection_name": None,
         }
-        await self._send_ai_log(
-            req=req,
-            response_answer=final_answer,
-            user_query=user_query,
-            intent=intent.value,
-            domain=domain,
-            route=final_route.value,
-            has_pii_input=pii_input.has_pii,
-            has_pii_output=pii_output.has_pii,
-            rag_used=rag_used,
-            rag_source_count=len(sources),
-            latency_ms=latency_ms,
-            model_name="internal-llm",
-            rag_gap_candidate=rag_gap_candidate_flag,
-            # Phase AB: A/B 테스트 정보
+    
+        background_tasks.add_task(
+            self._send_ai_log,
+            req,
+            final_answer,
+            user_query,
+            intent.value,
+            domain,
+            final_route.value,
+            pii_input.has_pii,
+            pii_output.has_pii,
+            rag_used,
+            len(sources),
+            latency_ms,
+            llm_model_used or "internal-llm",
+            error_type,
+            error_message,
+            rag_gap_candidate_flag,
             ab_model=ab_info.get("model"),
             ab_embedding_model=ab_info.get("embedding_model"),
             ab_collection_name=ab_info.get("collection_name"),
-        )
 
         # =====================================================================
         # 멀티턴 맥락 유지: Step 8 - 상태 저장 (TTL sliding 포함)
@@ -1711,6 +1734,7 @@ class ChatService:
         ab_embedding_model: Optional[str] = None,
         ab_collection_name: Optional[str] = None,
     ) -> None:
+        logger.warning("[FAQ_LOG] _send_ai_log CALLED")
         """
         AI 로그를 생성하고 백엔드로 전송합니다 (fire-and-forget).
 
@@ -1743,7 +1767,7 @@ class ChatService:
             # 로그 엔트리 생성
             log_entry = self._ai_log.create_log_entry(
                 request=req,
-                response=ChatResponse(answer=response_answer, sources=[], meta=ChatAnswerMeta()),
+                response=None,
                 intent=intent,
                 domain=domain,
                 route=route,
@@ -1765,11 +1789,11 @@ class ChatService:
             )
 
             # 비동기 전송 (fire-and-forget)
-            asyncio.create_task(self._ai_log.send_log_async(log_entry))
+            await self._ai_log.send_log_async(log_entry)
 
         except Exception as e:
             # 로그 생성/전송 실패는 메인 로직에 영향 주지 않음
-            logger.warning(f"Failed to send AI log: {e}")
+            logger.warning(f"[AI_LOG] Failed to send log (ignored): {e}")
 
     def _build_llm_messages(
         self,

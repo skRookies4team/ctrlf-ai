@@ -27,38 +27,32 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    # 베이스 서비스는 직접 실행하지 않음 (extends용)
-    # _base 프로필은 절대 사용하지 않으므로 이 서비스는 직접 시작되지 않음
-    profiles:
-      - _base
-    # 포트는 프로필별 서비스에서 설정 (충돌 방지)
     environment:
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
       - LOG_LEVEL=DEBUG
-      # Phase 9: AI_ENV 설정으로 mock/real 모드 전환
-      # mock 프로필: AI_ENV=mock (기본값)
-      # real 프로필: AI_ENV=real
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
       - AI_ENV=${AI_ENV:-mock}
-      # Mock 모드 URL (Docker 내부 네트워크)
       - RAGFLOW_BASE_URL_MOCK=http://ragflow:8080
       - LLM_BASE_URL_MOCK=http://llm-internal:8001
       - BACKEND_BASE_URL_MOCK=http://backend-mock:8081
-      # Real 모드 URL (외부에서 환경변수로 설정)
-      # TODO: 실제 서비스 URL이 확정되면 여기에 설정
       - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:-}
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:-}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:-}
-      # PII 마스킹은 내장 규칙 사용 (외부 서비스 없음)
       - PII_BASE_URL=
       - PII_ENABLED=true
-      # 내부 API 인증 토큰
       - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-ctrlf-b2a-x7k9m2p4q8r1}
       - RAGFLOW_CALLBACK_TOKEN=${RAGFLOW_CALLBACK_TOKEN:-ctrlf-r2a-w3e5t7y9u2i4}
       - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-ctrlf-a2b-z6x8c1v3b5n7}
       - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-ctrlf-a2b-h4j6k8l0m2n4}
+
     networks:
       - ctrlf-net
+
+    depends_on:   # 🔥 이게 핵심
+      elasticsearch:
+        condition: service_healthy
+
     healthcheck:
       test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
       interval: 10s
@@ -122,11 +116,13 @@ services:
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://58.127.241.84:1237}
+
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
       # BACKEND_INTERNAL_TOKEN은 RAGFlow 서버의 AI_TO_RAGFLOW_TOKEN과 일치해야 함
       # RAGFlow 서버는 AI_TO_RAGFLOW_TOKEN=${RAGFLOW_API_KEY}로 설정되어 있음
       # 코드에서 BACKEND_INTERNAL_TOKEN이 없으면 RAGFLOW_API_KEY를 사용하도록 처리됨
       - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
+
     # Real 모드에서는 Mock 서비스 의존성 없음
 
   # =============================================================================
@@ -197,6 +193,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: ctrlf-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    networks:
+      - ctrlf-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: ctrlf-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
+      - SERVER_NAME=ctrlf-kibana
+      - SERVER_HOST=0.0.0.0
+    ports:
+      - "5601:5601"
+    networks:
+      - ctrlf-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
 
 # =============================================================================
 # 네트워크 설정

@@ -13,6 +13,7 @@ Phase 42 (A안 확정):
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import BackgroundTasks
 
 from app.models.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
@@ -75,6 +76,7 @@ def get_chat_service() -> ChatService:
 )
 async def create_chat_message(
     req: ChatRequest,
+    background_tasks: BackgroundTasks,
     service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
     """
@@ -113,7 +115,10 @@ async def create_chat_message(
         HTTPException 503: RAGFlow 장애 시
     """
     try:
-        return await service.handle_chat(req)
+        return await service.handle_chat(
+            req=req,
+            background_tasks=background_tasks,
+        )
     except RagSearchUnavailableError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
