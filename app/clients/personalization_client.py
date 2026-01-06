@@ -367,6 +367,87 @@ class PersonalizationClient:
                     {"type": "review", "title": "상반기 성과 평가", "deadline": "2025-06-30"},
                 ],
             },
+            "Q2": {  # 수료현황/진도
+                "metrics": {
+                    "total_educations": 10,
+                    "completed_educations": 7,
+                    "in_progress_educations": 2,
+                    "not_started_educations": 1,
+                    "completion_rate": 70.0,
+                },
+                "items": [
+                    {"education_id": "EDU001", "title": "개인정보보호 교육", "status": "완료", "progress_percent": 100},
+                    {"education_id": "EDU002", "title": "정보보안 교육", "status": "진행중", "progress_percent": 45},
+                    {"education_id": "EDU003", "title": "직장 내 괴롭힘 예방", "status": "미시작", "progress_percent": 0},
+                ],
+            },
+            "Q5": {  # 퀴즈 평균 점수
+                "metrics": {
+                    "average_score": 82.5,
+                    "total_quizzes": 8,
+                    "passed_quizzes": 7,
+                    "failed_quizzes": 1,
+                },
+                "items": [
+                    {"quiz_id": "QUIZ001", "title": "개인정보보호 퀴즈", "score": 90, "pass_score": 70, "status": "합격"},
+                    {"quiz_id": "QUIZ002", "title": "정보보안 퀴즈", "score": 85, "pass_score": 70, "status": "합격"},
+                    {"quiz_id": "QUIZ003", "title": "직장내괴롭힘 퀴즈", "score": 60, "pass_score": 70, "status": "불합격"},
+                ],
+            },
+            "Q6": {  # 낮은/높은 점수 과목
+                "metrics": {
+                    "lowest_score": 60,
+                    "highest_score": 95,
+                },
+                "items": [
+                    {"quiz_id": "QUIZ003", "title": "직장내괴롭힘 퀴즈", "score": 60, "rank": "lowest"},
+                    {"quiz_id": "QUIZ005", "title": "성희롱예방 퀴즈", "score": 95, "rank": "highest"},
+                ],
+            },
+            "Q7": {  # 미완료/재응시 퀴즈 조회
+                "metrics": {"pending_count": 2, "retry_count": 1},
+                "items": [
+                    {"quiz_id": "QUIZ006", "title": "개인정보보호 심화 퀴즈", "status": "미응시", "deadline": "2025-01-31"},
+                    {"quiz_id": "QUIZ003", "title": "직장내괴롭힘 퀴즈", "status": "재응시 필요", "last_score": 60, "pass_score": 70},
+                ],
+            },
+            "Q8": {  # 특정 토픽 교육 시청 완료 여부 (영상만)
+                "metrics": {
+                    "topic_label": "개인정보보호",
+                    "video_count": 3,
+                    "watched_count": 2,
+                    "is_all_watched": False,
+                },
+                "items": [
+                    {"video_id": "VID001", "title": "개인정보보호 기본", "watched": True, "watch_percent": 100},
+                    {"video_id": "VID002", "title": "개인정보보호 심화", "watched": True, "watch_percent": 100},
+                    {"video_id": "VID003", "title": "개인정보보호 사례", "watched": False, "watch_percent": 35},
+                ],
+            },
+            "Q18": {  # 특정 토픽 전체 완료 여부 (영상 + 퀴즈)
+                "metrics": {
+                    "topic_label": "개인정보보호",
+                    "is_completed": False,
+                    "video_completed": True,
+                    "quiz_completed": False,
+                    "video_count": 3,
+                    "quiz_count": 1,
+                },
+                "items": [
+                    {"type": "video", "title": "개인정보보호 교육 영상", "status": "완료"},
+                    {"type": "quiz", "title": "개인정보보호 퀴즈", "status": "미완료", "score": None, "pass_score": 70},
+                ],
+            },
+            "Q19": {  # 특정 토픽 교육 마감일 조회
+                "metrics": {
+                    "topic_label": "개인정보보호",
+                    "deadline": "2025-01-31",
+                    "days_left": 13,
+                },
+                "items": [
+                    {"education_id": "EDU001", "title": "개인정보보호 교육", "deadline": "2025-01-31", "status": "진행중"},
+                ],
+            },
         }
 
         return mock_responses.get(sub_intent_id, {"metrics": {}, "items": []})

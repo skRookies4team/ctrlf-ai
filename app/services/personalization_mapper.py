@@ -55,6 +55,42 @@ EDU_STATUS_KEYWORDS: dict[str, list[str]] = {
     "Q9": ["이번 주", "이번주", "할 일", "해야 할", "해야할", "이주", "이주 내", "금주"],
 }
 
+# =============================================================================
+# 토픽 기반 인텐트 세분화용 키워드 (Q8, Q18, Q19)
+# =============================================================================
+
+# 교육 토픽 키워드 (4대교육 + 직무교육)
+EDUCATION_TOPIC_KEYWORDS = frozenset([
+    # 성희롱 예방
+    "성희롱", "성희롱예방", "성희롱 예방",
+    # 직장내 괴롭힘
+    "괴롭힘", "직장내괴롭힘", "직장 내 괴롭힘", "괴롭힘예방", "괴롭힘 예방",
+    # 개인정보보호
+    "개인정보", "개인정보보호", "개인정보 보호", "정보보안", "보안교육", "보안 교육",
+    # 장애인 인식 개선
+    "장애인", "장애인인식", "장애인 인식", "장애인인식개선", "장애인 인식 개선",
+    # 직무교육
+    "직무", "직무교육", "직무 교육",
+])
+
+# Q8: 특정 토픽 교육 시청 완료 여부 (영상만)
+EDU_WATCH_COMPLETE_KEYWORDS = frozenset([
+    "다 봤", "다봤", "시청 완료", "시청완료", "봤어", "봤나", "봤는지",
+    "다 들었", "다들었", "끝까지 봤", "끝까지봤", "영상 봤", "영상봤",
+])
+
+# Q18: 보안교육/특정 토픽 전체 완료 여부 (영상 + 퀴즈)
+EDU_FULL_COMPLETE_KEYWORDS = frozenset([
+    "이수했", "이수 했", "완료했", "완료 했", "수료했", "수료 했",
+    "다 했", "다했", "끝났", "끝냈", "이수", "수료", "완료",
+])
+
+# Q19: 특정 토픽 교육 마감일 조회
+EDU_TOPIC_DEADLINE_KEYWORDS = frozenset([
+    "언제까지", "마감일", "기한", "마감 언제", "언제 마감",
+    "데드라인", "deadline", "까지야", "까지인지", "까지에요", "언제",
+])
+
 # QUIZ_SCORE_CHECK 세분화용 키워드 (Q5: 평균 점수, Q6: 낮은 점수 과목)
 QUIZ_SCORE_Q6_KEYWORDS = frozenset([
     "낮은", "가장 낮", "제일 낮", "취약", "약한", "못한",
@@ -63,19 +99,10 @@ QUIZ_SCORE_Q6_KEYWORDS = frozenset([
 
 # Q로 시작하는지 확인
 def is_personalization_q(sub_intent_id: str) -> bool:
-    """sub_intent_id가 이미 Q1-Q20 형식인지 확인합니다.
-
-    Args:
-        sub_intent_id: 확인할 sub_intent_id
-
-    Returns:
-        bool: Q1-Q20 형식이면 True
-    """
     if not sub_intent_id:
         return False
     if not sub_intent_id.startswith("Q"):
         return False
-    # Q 다음이 숫자인지 확인
     rest = sub_intent_id[1:]
     return rest.isdigit() and 1 <= int(rest) <= 20
 
@@ -84,86 +111,73 @@ def to_personalization_q(
     sub_intent_id: str,
     query: str,
 ) -> Optional[str]:
-    """SubIntentId를 PersonalizationSubIntentId(Q1-Q20)로 변환합니다.
-
-    Args:
-        sub_intent_id: rule_router에서 반환된 sub_intent_id
-                      (예: "HR_LEAVE_CHECK", "EDU_STATUS_CHECK", 또는 이미 "Q11")
-        query: 사용자 질문 (EDU_STATUS_CHECK 세분화에 사용)
-
-    Returns:
-        Optional[str]: 변환된 Q ID (예: "Q11", "Q1") 또는 None (개인화 대상 아님)
-
-    Examples:
-        >>> to_personalization_q("HR_LEAVE_CHECK", "내 연차 며칠?")
-        "Q11"
-
-        >>> to_personalization_q("EDU_STATUS_CHECK", "미이수 교육 알려줘")
-        "Q1"
-
-        >>> to_personalization_q("EDU_STATUS_CHECK", "이번 주 할 일 뭐야?")
-        "Q9"
-
-        >>> to_personalization_q("QUIZ_START", "퀴즈 시작")
-        None  # 개인화 대상 아님 (액션)
-    """
     if not sub_intent_id:
         return None
 
-    # 이미 Q1-Q20 형식이면 그대로 반환
     if is_personalization_q(sub_intent_id):
         logger.debug(f"Already personalization Q: {sub_intent_id}")
         return sub_intent_id
 
-    # 직접 매핑 확인 (HR_WELFARE_CHECK, HR_ATTENDANCE_CHECK)
     if sub_intent_id in SUBINTENT_TO_Q:
         q = SUBINTENT_TO_Q[sub_intent_id]
         logger.debug(f"Mapped {sub_intent_id} -> {q}")
         return q
 
-    # HR_LEAVE_CHECK 세분화 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
     if sub_intent_id == "HR_LEAVE_CHECK":
         q = _classify_hr_leave(query)
         logger.debug(f"HR_LEAVE_CHECK classified as {q}, query_len={len(query)}")
         return q
 
-    # EDU_STATUS_CHECK 세분화
     if sub_intent_id == "EDU_STATUS_CHECK":
         q = _classify_edu_status(query)
         logger.debug(f"EDU_STATUS_CHECK classified as {q}, query_len={len(query)}")
         return q
 
-    # QUIZ_SCORE_CHECK 세분화 (Q5: 평균 점수, Q6: 낮은/높은 점수 과목)
     if sub_intent_id == "QUIZ_SCORE_CHECK":
         q = _classify_quiz_score(query)
         logger.debug(f"QUIZ_SCORE_CHECK classified as {q}, query_len={len(query)}")
         return q
 
-    # 매핑되지 않음 (개인화 대상 아님)
     logger.debug(f"No personalization mapping for: {sub_intent_id}")
     return None
 
 
+def _contains_any(text: str, keywords: frozenset) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
 def _classify_edu_status(query: str) -> str:
-    """EDU_STATUS_CHECK를 query 키워드로 Q1/Q2/Q3/Q9 중 하나로 세분화합니다.
-
-    Args:
-        query: 사용자 질문
-
-    Returns:
-        str: Q1 (미이수), Q3 (마감 임박), Q9 (이번 주 할 일), Q2 (기본: 수료현황)
-    """
     q_lower = query.lower()
+
+    # 토픽 기반 인텐트 우선 체크 (Q8, Q18, Q19)
+    has_topic = _contains_any(q_lower, EDUCATION_TOPIC_KEYWORDS)
+
+    if has_topic:
+        # Q19: 토픽 + 마감일
+        if _contains_any(q_lower, EDU_TOPIC_DEADLINE_KEYWORDS):
+            logger.debug(f"Topic-based Q19 detected (deadline)")
+            return "Q19"
+
+        # Q8: 토픽 + 시청 완료 (영상만)
+        if _contains_any(q_lower, EDU_WATCH_COMPLETE_KEYWORDS):
+            logger.debug(f"Topic-based Q8 detected (video watch)")
+            return "Q8"
+
+        # Q18: 토픽 + 이수/완료 (영상 + 퀴즈)
+        if _contains_any(q_lower, EDU_FULL_COMPLETE_KEYWORDS):
+            logger.debug(f"Topic-based Q18 detected (full completion)")
+            return "Q18"
 
     # Q1: 미이수 필수 교육
     for keyword in EDU_STATUS_KEYWORDS["Q1"]:
         if keyword in q_lower:
             return "Q1"
 
-    # Q3: 이번 달 데드라인
-    for keyword in EDU_STATUS_KEYWORDS["Q3"]:
-        if keyword in q_lower:
-            return "Q3"
+    # Q3: 이번 달 데드라인 (토픽 없는 경우)
+    if not has_topic:
+        for keyword in EDU_STATUS_KEYWORDS["Q3"]:
+            if keyword in q_lower:
+                return "Q3"
 
     # Q9: 이번 주 할 일
     for keyword in EDU_STATUS_KEYWORDS["Q9"]:
@@ -175,53 +189,26 @@ def _classify_edu_status(query: str) -> str:
 
 
 def _classify_quiz_score(query: str) -> str:
-    """QUIZ_SCORE_CHECK를 query 키워드로 Q5/Q6 중 하나로 세분화합니다.
-
-    Q5: 내 평균 vs 부서/전사 평균
-    Q6: 가장 낮은/높은 점수 교육 TOP3
-
-    Args:
-        query: 사용자 질문
-
-    Returns:
-        str: Q6 (낮은/높은 점수), Q5 (기본: 평균 점수)
-    """
     q_lower = query.lower()
 
-    # Q6: 낮은/높은 점수 과목
     for keyword in QUIZ_SCORE_Q6_KEYWORDS:
         if keyword in q_lower:
             return "Q6"
 
-    # 기본: Q5 (평균 점수)
     return "Q5"
 
 
 def _classify_hr_leave(query: str) -> str:
-    """HR_LEAVE_CHECK를 query 키워드로 Q11/Q14/Q10 중 하나로 세분화합니다.
-
-    RuleRouter가 모든 HR 관련 키워드를 HR_LEAVE_CHECK으로 분류하므로,
-    여기서 query를 분석하여 더 구체적인 Q로 매핑합니다.
-
-    Args:
-        query: 사용자 질문
-
-    Returns:
-        str: Q14 (복지포인트), Q10 (근태), Q11 (기본: 연차)
-    """
     q_lower = query.lower()
 
-    # Q14: 복지포인트/식대
     for keyword in HR_WELFARE_KEYWORDS:
         if keyword in q_lower:
             return "Q14"
 
-    # Q10: 근태 현황
     for keyword in HR_ATTENDANCE_KEYWORDS:
         if keyword in q_lower:
             return "Q10"
 
-    # 기본: Q11 (연차)
     return "Q11"
 
 
@@ -229,43 +216,24 @@ def _classify_hr_leave(query: str) -> str:
 # 개인화 대상 여부 판단
 # =============================================================================
 
-# 개인화 조회 대상 SubIntentId 집합
 PERSONALIZATION_SUBINTENTS = frozenset([
-    # 직접 매핑되는 SubIntentId - HR 도메인
     "HR_LEAVE_CHECK",
     "HR_WELFARE_CHECK",
     "HR_ATTENDANCE_CHECK",
     "HR_TODO_CHECK",
-    # 직접 매핑되는 SubIntentId - EDU 도메인
     "EDU_STATUS_CHECK",
-    "EDU_RESUME_CHECK",      # 교육 이어보기/재생 위치
-    # 직접 매핑되는 SubIntentId - QUIZ 도메인
-    "QUIZ_PENDING_CHECK",    # 미완료/재응시 퀴즈
-    "QUIZ_SCORE_CHECK",      # 퀴즈 점수/성적 조회 (Q5, Q6)
-    # 이미 Q 형식인 경우도 포함
+    "EDU_RESUME_CHECK",
+    "QUIZ_PENDING_CHECK",
+    "QUIZ_SCORE_CHECK",
     *[f"Q{i}" for i in range(1, 21)],
 ])
 
 
-def is_personalization_request(
-    sub_intent_id: str,
-) -> bool:
-    """개인화 조회 대상인지 확인합니다.
-
-    Args:
-        sub_intent_id: 확인할 sub_intent_id
-
-    Returns:
-        bool: 개인화 조회 대상이면 True
-    """
+def is_personalization_request(sub_intent_id: str) -> bool:
     if not sub_intent_id:
         return False
-
-    # Q1-Q20 형식
     if is_personalization_q(sub_intent_id):
         return True
-
-    # 매핑 가능한 SubIntentId
     return sub_intent_id in PERSONALIZATION_SUBINTENTS
 
 
@@ -273,23 +241,18 @@ def is_personalization_request(
 # 기간(Period) 파싱
 # =============================================================================
 
-# 기간 키워드 매핑
 PERIOD_KEYWORDS: dict[str, str] = {
-    # this-week
     "이번 주": "this-week",
     "이번주": "this-week",
     "금주": "this-week",
     "이주": "this-week",
-    # this-month
     "이번 달": "this-month",
     "이번달": "this-month",
     "이달": "this-month",
     "금월": "this-month",
-    # 3m (3개월)
     "3개월": "3m",
     "삼개월": "3m",
     "최근 3개월": "3m",
-    # this-year
     "올해": "this-year",
     "금년": "this-year",
     "이번 년도": "this-year",
@@ -298,24 +261,6 @@ PERIOD_KEYWORDS: dict[str, str] = {
 
 
 def extract_period_from_query(query: str) -> Optional[str]:
-    """사용자 쿼리에서 기간(period)을 추출합니다.
-
-    Args:
-        query: 사용자 질문
-
-    Returns:
-        Optional[str]: 추출된 기간 (this-week|this-month|3m|this-year) 또는 None
-
-    Examples:
-        >>> extract_period_from_query("이번 달 연차 현황")
-        "this-month"
-
-        >>> extract_period_from_query("올해 교육 이수 현황")
-        "this-year"
-
-        >>> extract_period_from_query("연차 며칠?")
-        None  # 기간 명시 없음 -> 디폴트 사용
-    """
     q_lower = query.lower()
 
     for keyword, period in PERIOD_KEYWORDS.items():
