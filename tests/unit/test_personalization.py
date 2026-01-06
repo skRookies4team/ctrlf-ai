@@ -50,11 +50,11 @@ class TestPersonalizationModels:
         assert PersonalizationSubIntentId.Q20.value == "Q20"
 
     def test_priority_sub_intents(self):
-        """우선순위 인텐트 13개 확인.
+        """우선순위 인텐트 14개 확인.
 
-        Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q11, Q14, Q18, Q19가 우선순위.
+        Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q11, Q12, Q14, Q18, Q19가 우선순위.
         """
-        assert len(PRIORITY_SUB_INTENTS) == 13
+        assert len(PRIORITY_SUB_INTENTS) == 14
         assert "Q1" in PRIORITY_SUB_INTENTS
         assert "Q2" in PRIORITY_SUB_INTENTS
         assert "Q3" in PRIORITY_SUB_INTENTS
@@ -65,6 +65,7 @@ class TestPersonalizationModels:
         assert "Q8" in PRIORITY_SUB_INTENTS
         assert "Q9" in PRIORITY_SUB_INTENTS
         assert "Q11" in PRIORITY_SUB_INTENTS
+        assert "Q12" in PRIORITY_SUB_INTENTS
         assert "Q14" in PRIORITY_SUB_INTENTS
         assert "Q18" in PRIORITY_SUB_INTENTS
         assert "Q19" in PRIORITY_SUB_INTENTS
