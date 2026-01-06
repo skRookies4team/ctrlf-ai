@@ -4,7 +4,7 @@ RAG Documents Ingest API 테스트
 사내규정(POLICY) 문서 Ingest 기능 테스트.
 
 테스트 케이스:
-1. POST /internal/ai/rag-documents/ingest
+1. POST /v1/internal_ragflow/internal/ai/rag-documents/ingest
    - 정상 요청 (202 + PROCESSING)
    - 중복 요청 - 처리 중 (202 + PROCESSING)
    - 중복 요청 - 완료됨 (200 + COMPLETED)
@@ -12,7 +12,7 @@ RAG Documents Ingest API 테스트
    - 토큰 누락 (401 UNAUTHORIZED)
    - 토큰 불일치 (401 UNAUTHORIZED)
 
-2. POST /v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest
+2. POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest
    - 정상 콜백 (200)
    - 캐시 상태 업데이트 확인
    - Backend 클라이언트 호출 확인
@@ -353,7 +353,7 @@ class TestIngestEndpointNoToken:
             mock_client.return_value.ingest = AsyncMock()
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
 
@@ -373,7 +373,7 @@ class TestIngestEndpointNoToken:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = None
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
 
@@ -390,7 +390,7 @@ class TestIngestEndpointNoToken:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = None
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
 
@@ -406,7 +406,7 @@ class TestIngestEndpointNoToken:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = None
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
 
@@ -430,7 +430,7 @@ class TestIngestEndpointNoToken:
             mock_client.return_value.ingest = AsyncMock()
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
 
@@ -454,7 +454,7 @@ class TestIngestEndpointWithToken:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = "valid-token"
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
 
@@ -468,7 +468,7 @@ class TestIngestEndpointWithToken:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = "valid-token"
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
                 headers={"X-Internal-Token": "wrong-token"},
             )
@@ -485,7 +485,7 @@ class TestIngestEndpointWithToken:
             mock_client.return_value.ingest = AsyncMock()
 
             response = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
                 headers={"X-Internal-Token": "valid-token"},
             )
@@ -509,7 +509,7 @@ class TestCallbackEndpoint:
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
 
@@ -528,7 +528,7 @@ class TestCallbackEndpoint:
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
 
@@ -550,7 +550,7 @@ class TestCallbackEndpoint:
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
 
@@ -570,7 +570,7 @@ class TestCallbackEndpoint:
             mock_get_client.return_value = mock_client
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
 
@@ -601,7 +601,7 @@ class TestCallbackEndpoint:
             mock_get_client.return_value = mock_client
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
 
@@ -625,7 +625,7 @@ class TestCallbackEndpointWithToken:
             mock_get_settings.return_value.AI_CALLBACK_TOKEN = "valid-ragflow-token"
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
 
@@ -639,7 +639,7 @@ class TestCallbackEndpointWithToken:
             mock_get_settings.return_value.AI_CALLBACK_TOKEN = "valid-ragflow-token"
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
                 headers={"X-Internal-Token": "wrong-token"},
             )
@@ -656,7 +656,7 @@ class TestCallbackEndpointWithToken:
 
             # Backend 토큰으로 콜백 시도 → 실패해야 함
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
                 headers={"X-Internal-Token": "valid-backend-token"},
             )
@@ -673,7 +673,7 @@ class TestCallbackEndpointWithToken:
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
                 headers={"X-Internal-Token": "valid-ragflow-token"},
             )
@@ -1090,7 +1090,7 @@ class TestFullFlow:
 
             # 1. 최초 ingest 요청 → 202
             response1 = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
             assert response1.status_code == 202
@@ -1098,7 +1098,7 @@ class TestFullFlow:
 
             # 2. 중복 요청 → 202 (처리 중)
             response2 = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
             assert response2.status_code == 202
@@ -1106,14 +1106,14 @@ class TestFullFlow:
 
             # 3. 콜백 수신 → 200
             response3 = client.post(
-                "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
+                "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
                 json=sample_callback_request,
             )
             assert response3.status_code == 200
 
             # 4. 완료 후 재요청 → 200 (완료됨)
             response4 = client.post(
-                "/internal/ai/rag-documents/ingest",
+                "/v1/internal_ragflow/internal/ai/rag-documents/ingest",
                 json=sample_ingest_request,
             )
             assert response4.status_code == 200

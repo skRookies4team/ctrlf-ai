@@ -123,7 +123,7 @@ OPENAI_EMBED_DIM=3072
 MILVUS_ENABLED=true
 MILVUS_HOST=your-server-host
 MILVUS_PORT=19540
-MILVUS_COLLECTION_NAME=ragflow_chunks
+MILVUS_COLLECTION_NAME=ragflow_chunks_openai
 
 # RAGFlow (MILVUS_ENABLED=false일 때 사용)
 RAGFLOW_BASE_URL=http://localhost:9380
@@ -227,7 +227,6 @@ ctrlf-ai/
 
 Private - CTRL+F Team
 
-
 ---
 
 ## 기능별 테스트 가이드
@@ -285,10 +284,10 @@ curl -X GET "http://localhost:9200/ctrlf-faq-log-*/_search?pretty" \
 
 #### 로그 인덱스 구조
 
-| 인덱스 패턴 | 용도 | 주요 필드 |
-|-------------|------|-----------|
-| `ctrlf-logs-YYYY.MM.DD` | AI 운영 로그 | domain, intent, question_masked, answer_masked, rag_used |
-| `ctrlf-faq-log-YYYY.MM.DD` | FAQ 후보 로그 | domain, intent, question_masked, source |
+| 인덱스 패턴                | 용도          | 주요 필드                                                |
+| -------------------------- | ------------- | -------------------------------------------------------- |
+| `ctrlf-logs-YYYY.MM.DD`    | AI 운영 로그  | domain, intent, question_masked, answer_masked, rag_used |
+| `ctrlf-faq-log-YYYY.MM.DD` | FAQ 후보 로그 | domain, intent, question_masked, source                  |
 
 ---
 

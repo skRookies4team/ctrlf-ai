@@ -1,5 +1,5 @@
 """
-ragflow_chunks → ragflow_chunks_sroberta 마이그레이션 스크립트
+ragflow_chunks_openai → ragflow_chunks_sroberta 마이그레이션 스크립트
 
 원본 컬렉션의 텍스트를 원격 임베딩 서버 (vLLM)를 통해 재임베딩하여 대상 컬렉션에 삽입합니다.
 
@@ -33,7 +33,7 @@ import numpy as np
 
 
 # 설정
-SOURCE_COLLECTION = "ragflow_chunks"
+SOURCE_COLLECTION = "ragflow_chunks_openai"
 TARGET_COLLECTION = "ragflow_chunks_sroberta"
 MILVUS_HOST = os.getenv("MILVUS_HOST", "58.127.241.84")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19540")

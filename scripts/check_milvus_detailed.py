@@ -22,7 +22,7 @@ def print_header(title: str):
 async def main():
     milvus_host = "58.127.241.84"
     milvus_port = 19540
-    collection_name = "ragflow_chunks"
+    collection_name = "ragflow_chunks_openai"
 
     connections.connect(alias="default", host=milvus_host, port=milvus_port)
     coll = Collection(collection_name)

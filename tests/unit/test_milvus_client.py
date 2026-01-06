@@ -361,7 +361,7 @@ class TestVectorSearch:
 
     @pytest.mark.anyio
     async def test_search_with_domain_filter(self, milvus_client):
-        """도메인 필터 적용 검색 테스트 (ragflow_chunks 스키마는 domain 필드 없음)."""
+        """도메인 필터 적용 검색 테스트 (ragflow_chunks_openai 스키마는 domain 필드 없음)."""
         milvus_client.generate_embedding = AsyncMock(return_value=[0.1] * 1024)
 
         # Mock _search_sync (sync 메서드 직접 mock - anyio.to_thread.run_sync에서 호출됨)

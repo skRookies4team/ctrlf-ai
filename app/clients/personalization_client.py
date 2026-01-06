@@ -348,6 +348,64 @@ class PersonalizationClient:
                     {"type": "education", "title": "개인정보보호 교육", "deadline": "2025-01-21"},
                 ],
             },
+            "Q10": {  # 내 근태 현황 조회
+                "metrics": {
+                    "work_days": 22,         # 이번 달 근무일수
+                    "actual_work_days": 20,  # 실제 출근일
+                    "late_count": 1,         # 지각 횟수
+                    "early_leave_count": 0,  # 조퇴 횟수
+                    "absent_count": 0,       # 결근 횟수
+                    "remote_days": 4,        # 재택근무 일수
+                    "overtime_hours": 12.5,  # 초과근무 시간
+                },
+                "items": [
+                    {
+                        "date": "2025-01-06",
+                        "day_of_week": "월",
+                        "check_in": "09:00",
+                        "check_out": "18:30",
+                        "work_hours": 8.5,
+                        "status": "정상",
+                        "work_type": "출근",
+                    },
+                    {
+                        "date": "2025-01-03",
+                        "day_of_week": "금",
+                        "check_in": "09:15",
+                        "check_out": "18:00",
+                        "work_hours": 7.75,
+                        "status": "지각",
+                        "work_type": "출근",
+                    },
+                    {
+                        "date": "2025-01-02",
+                        "day_of_week": "목",
+                        "check_in": "09:00",
+                        "check_out": "19:30",
+                        "work_hours": 9.5,
+                        "status": "정상",
+                        "work_type": "재택",
+                    },
+                    {
+                        "date": "2024-12-30",
+                        "day_of_week": "월",
+                        "check_in": "08:55",
+                        "check_out": "18:00",
+                        "work_hours": 8.0,
+                        "status": "정상",
+                        "work_type": "출근",
+                    },
+                    {
+                        "date": "2024-12-27",
+                        "day_of_week": "금",
+                        "check_in": "09:00",
+                        "check_out": "20:00",
+                        "work_hours": 10.0,
+                        "status": "정상",
+                        "work_type": "재택",
+                    },
+                ],
+            },
             "Q11": {  # 남은 연차 일수
                 "metrics": {
                     "total_days": 15,
@@ -355,11 +413,126 @@ class PersonalizationClient:
                     "remaining_days": 7,
                 },
             },
+            "Q12": {  # 연차 사용 이력 조회
+                "metrics": {
+                    "total_days": 15,
+                    "used_days": 8,
+                    "remaining_days": 7,
+                    "usage_count": 5,
+                },
+                "items": [
+                    {
+                        "leave_id": "LV001",
+                        "leave_type": "연차",
+                        "start_date": "2025-01-02",
+                        "end_date": "2025-01-03",
+                        "days": 2,
+                        "reason": "개인 사유",
+                        "status": "승인완료",
+                    },
+                    {
+                        "leave_id": "LV002",
+                        "leave_type": "연차",
+                        "start_date": "2024-12-24",
+                        "end_date": "2024-12-25",
+                        "days": 2,
+                        "reason": "연말 휴가",
+                        "status": "승인완료",
+                    },
+                    {
+                        "leave_id": "LV003",
+                        "leave_type": "반차",
+                        "start_date": "2024-11-15",
+                        "end_date": "2024-11-15",
+                        "days": 0.5,
+                        "reason": "병원 방문",
+                        "status": "승인완료",
+                    },
+                    {
+                        "leave_id": "LV004",
+                        "leave_type": "연차",
+                        "start_date": "2024-10-01",
+                        "end_date": "2024-10-02",
+                        "days": 2,
+                        "reason": "가족 행사",
+                        "status": "승인완료",
+                    },
+                    {
+                        "leave_id": "LV005",
+                        "leave_type": "반차",
+                        "start_date": "2024-09-10",
+                        "end_date": "2024-09-10",
+                        "days": 0.5,
+                        "reason": "개인 사유",
+                        "status": "승인완료",
+                    },
+                ],
+            },
             "Q14": {  # 복지/식대 포인트 잔액
                 "metrics": {
                     "welfare_points": 150000,
                     "meal_allowance": 280000,
+                    "total_granted": 500000,
+                    "total_used": 350000,
                 },
+            },
+            "Q15": {  # 복지 포인트 사용 내역 조회
+                "metrics": {
+                    "total_granted": 500000,
+                    "total_used": 350000,
+                    "remaining": 150000,
+                    "usage_count": 6,
+                },
+                "items": [
+                    {
+                        "usage_id": "WF001",
+                        "category": "건강/의료",
+                        "merchant": "강남세브란스병원",
+                        "amount": 85000,
+                        "date": "2025-01-03",
+                        "description": "건강검진 비용",
+                    },
+                    {
+                        "usage_id": "WF002",
+                        "category": "자기계발",
+                        "merchant": "교보문고",
+                        "amount": 45000,
+                        "date": "2024-12-20",
+                        "description": "도서 구입",
+                    },
+                    {
+                        "usage_id": "WF003",
+                        "category": "여가/문화",
+                        "merchant": "CGV",
+                        "amount": 28000,
+                        "date": "2024-12-15",
+                        "description": "영화 관람",
+                    },
+                    {
+                        "usage_id": "WF004",
+                        "category": "건강/의료",
+                        "merchant": "올리브영",
+                        "amount": 52000,
+                        "date": "2024-11-28",
+                        "description": "건강용품 구입",
+                    },
+                    {
+                        "usage_id": "WF005",
+                        "category": "자기계발",
+                        "merchant": "클래스101",
+                        "amount": 99000,
+                        "date": "2024-10-15",
+                        "description": "온라인 강의 수강",
+                    },
+                    {
+                        "usage_id": "WF006",
+                        "category": "여가/문화",
+                        "merchant": "스타벅스",
+                        "amount": 41000,
+                        "date": "2024-09-20",
+                        "description": "카페 이용",
+                    },
+                ],
             },
             "Q20": {  # 올해 HR 할 일 (미완료)
                 "metrics": {"todo_count": 4},

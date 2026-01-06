@@ -10,7 +10,7 @@ Backend → AI로 전달된 모델 선택 정보를 관리합니다.
 2. AI: set_ab_model(request_id, model) 호출
 3. MilvusSearchClient: get_ab_model(request_id)로 모델 조회
 4. model에 따라 임베딩/컬렉션 분기:
-   - openai: OpenAI text-embedding-3-large, ragflow_chunks
+   - openai: OpenAI text-embedding-3-large, ragflow_chunks_openai
    - sroberta: sentence-roberta 임베딩, ragflow_chunks_sroberta
 """
 
@@ -53,7 +53,7 @@ MODEL_CONFIG: Dict[str, Tuple[str, int, str]] = {
     ABModelType.OPENAI.value: (
         "text-embedding-3-large",  # OpenAI 임베딩 모델
         3072,                       # OpenAI 임베딩 차원
-        "ragflow_chunks",          # Milvus 컬렉션
+        "ragflow_chunks_openai",          # Milvus 컬렉션
     ),
     ABModelType.SROBERTA.value: (
         "jhgan/ko-sroberta-multitask",  # RAGFlow와 동일한 sRoBERTa 모델

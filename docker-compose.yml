@@ -104,7 +104,7 @@ services:
       - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
       - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
       - MILVUS_PORT=${MILVUS_PORT:-19540}
-      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
       - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
       # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
       - OPENAI_API_KEY=${OPENAI_API_KEY}

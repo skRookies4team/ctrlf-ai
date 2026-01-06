@@ -9,20 +9,23 @@
 ## 1. 개요
 
 ### 1.1 목표
+
 RAGFlow를 우회하고 AI 서버가 직접 Milvus에 문서를 인덱싱/삭제하는 Internal RAG API를 구현합니다.
 
 ### 1.2 배경
+
 - 기존 시스템은 RAGFlow를 통해 문서 인덱싱 수행
 - 백엔드(Spring)에서 AI 서버로 직접 인덱싱 요청을 보내 RAGFlow 의존성 제거
 - 문서 업로드 → 승인 → 인덱싱 워크플로우의 AI 측 구현
 - Phase 24의 Milvus 검색 기능을 확장하여 upsert/delete 기능 추가
 
 ### 1.3 API 엔드포인트
-| 엔드포인트 | 메서드 | 설명 |
-|-----------|--------|------|
-| `/internal/rag/index` | POST | 문서 인덱싱 요청 (비동기, 202 Accepted) |
-| `/internal/rag/delete` | POST | 문서 삭제 (동기) |
-| `/internal/jobs/{jobId}` | GET | 작업 상태 조회 |
+
+| 엔드포인트               | 메서드 | 설명                                    |
+| ------------------------ | ------ | --------------------------------------- |
+| `/internal/rag/index`    | POST   | 문서 인덱싱 요청 (비동기, 202 Accepted) |
+| `/internal/rag/delete`   | POST   | 문서 삭제 (동기)                        |
+| `/internal/jobs/{jobId}` | GET    | 작업 상태 조회                          |
 
 ---
 
@@ -30,19 +33,19 @@ RAGFlow를 우회하고 AI 서버가 직접 Milvus에 문서를 인덱싱/삭제
 
 ### 2.1 파일 변경 요약
 
-| 파일 | 변경 유형 | 설명 |
-|------|-----------|------|
-| `requirements.txt` | 수정 | pytest-asyncio, PyMuPDF, python-docx, olefile 추가 |
-| `pytest.ini` | 수정 | asyncio 테스트 설정 추가 |
-| `app/core/config.py` | 수정 | 문서 처리 설정 변수 추가 |
-| `app/models/internal_rag.py` | **신규** | Internal RAG 모델 정의 |
-| `app/services/document_processor.py` | **신규** | 문서 다운로드/추출/청킹 서비스 |
-| `app/services/job_service.py` | **신규** | 작업 상태 관리 서비스 |
-| `app/services/indexing_service.py` | **신규** | 인덱싱 파이프라인 오케스트레이터 |
-| `app/api/v1/internal_rag.py` | **신규** | Internal RAG API 엔드포인트 |
-| `app/clients/milvus_client.py` | 수정 | upsert/delete 메서드 추가 |
-| `app/main.py` | 수정 | Internal RAG 라우터 등록 |
-| `tests/test_internal_rag.py` | **신규** | 21개 단위 테스트 |
+| 파일                                 | 변경 유형 | 설명                                               |
+| ------------------------------------ | --------- | -------------------------------------------------- |
+| `requirements.txt`                   | 수정      | pytest-asyncio, PyMuPDF, python-docx, olefile 추가 |
+| `pytest.ini`                         | 수정      | asyncio 테스트 설정 추가                           |
+| `app/core/config.py`                 | 수정      | 문서 처리 설정 변수 추가                           |
+| `app/models/internal_rag.py`         | **신규**  | Internal RAG 모델 정의                             |
+| `app/services/document_processor.py` | **신규**  | 문서 다운로드/추출/청킹 서비스                     |
+| `app/services/job_service.py`        | **신규**  | 작업 상태 관리 서비스                              |
+| `app/services/indexing_service.py`   | **신규**  | 인덱싱 파이프라인 오케스트레이터                   |
+| `app/api/v1/internal_rag.py`         | **신규**  | Internal RAG API 엔드포인트                        |
+| `app/clients/milvus_client.py`       | 수정      | upsert/delete 메서드 추가                          |
+| `app/main.py`                        | 수정      | Internal RAG 라우터 등록                           |
+| `tests/test_internal_rag.py`         | **신규**  | 21개 단위 테스트                                   |
 
 ### 2.2 환경변수 설정
 
@@ -51,7 +54,7 @@ RAGFlow를 우회하고 AI 서버가 직접 Milvus에 문서를 인덱싱/삭제
 MILVUS_ENABLED=true
 MILVUS_HOST=your-milvus-server
 MILVUS_PORT=19530
-MILVUS_COLLECTION_NAME=ragflow_chunks
+MILVUS_COLLECTION_NAME=ragflow_chunks_openai
 
 # Phase 25: 문서 인덱싱 설정
 CHUNK_SIZE=512                    # 청크 크기 (문자 수)
@@ -203,6 +206,7 @@ MILVUS_PASSWORD=                  # Milvus 비밀번호 (선택)
 문서 인덱싱을 요청합니다. 비동기 처리 후 202 Accepted 반환.
 
 **Request:**
+
 ```json
 {
   "documentId": "DOC-001",
@@ -216,6 +220,7 @@ MILVUS_PASSWORD=                  # Milvus 비밀번호 (선택)
 ```
 
 **Response (202 Accepted):**
+
 ```json
 {
   "jobId": "job-uuid-1234",
@@ -229,6 +234,7 @@ MILVUS_PASSWORD=                  # Milvus 비밀번호 (선택)
 문서를 Milvus에서 삭제합니다. 동기 처리.
 
 **Request:**
+
 ```json
 {
   "documentId": "DOC-001",
@@ -237,6 +243,7 @@ MILVUS_PASSWORD=                  # Milvus 비밀번호 (선택)
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "status": "completed",
@@ -246,6 +253,7 @@ MILVUS_PASSWORD=                  # Milvus 비밀번호 (선택)
 ```
 
 **전체 버전 삭제 (versionNo 생략):**
+
 ```json
 {
   "documentId": "DOC-001"
@@ -257,6 +265,7 @@ MILVUS_PASSWORD=                  # Milvus 비밀번호 (선택)
 작업 상태를 조회합니다.
 
 **Response (200 OK):**
+
 ```json
 {
   "jobId": "job-uuid-1234",
@@ -418,18 +427,18 @@ class DocumentChunk(BaseModel):
 
 ### 5.2 Milvus 컬렉션 스키마
 
-| 필드명 | 타입 | 설명 |
-|--------|------|------|
-| `id` | INT64 (PK) | 자동 생성 ID |
-| `document_id` | VARCHAR | 문서 ID |
-| `version_no` | INT32 | 버전 번호 |
-| `domain` | VARCHAR | 도메인 |
-| `title` | VARCHAR | 문서 제목 |
-| `chunk_id` | INT32 | 청크 순번 |
-| `chunk_text` | VARCHAR | 청크 텍스트 |
-| `embedding` | FLOAT_VECTOR(1024) | BGE-M3 임베딩 |
-| `page` | INT32 | 페이지 번호 |
-| `section_path` | VARCHAR | 섹션 경로 |
+| 필드명         | 타입               | 설명          |
+| -------------- | ------------------ | ------------- |
+| `id`           | INT64 (PK)         | 자동 생성 ID  |
+| `document_id`  | VARCHAR            | 문서 ID       |
+| `version_no`   | INT32              | 버전 번호     |
+| `domain`       | VARCHAR            | 도메인        |
+| `title`        | VARCHAR            | 문서 제목     |
+| `chunk_id`     | INT32              | 청크 순번     |
+| `chunk_text`   | VARCHAR            | 청크 텍스트   |
+| `embedding`    | FLOAT_VECTOR(1024) | BGE-M3 임베딩 |
+| `page`         | INT32              | 페이지 번호   |
+| `section_path` | VARCHAR            | 섹션 경로     |
 
 ---
 
@@ -437,15 +446,15 @@ class DocumentChunk(BaseModel):
 
 ### 6.1 단위 테스트
 
-| 테스트 카테고리 | 테스트 수 | 상태 |
-|---------------|----------|------|
-| 모델 검증 | 5 | ✅ PASS |
-| JobService | 6 | ✅ PASS |
-| API 엔드포인트 | 5 | ✅ PASS |
-| IndexingService | 2 | ✅ PASS |
-| MilvusClient 확장 | 2 | ✅ PASS |
-| 버전 삭제 | 1 | ✅ PASS |
-| **합계** | **21** | ✅ **ALL PASS** |
+| 테스트 카테고리   | 테스트 수 | 상태            |
+| ----------------- | --------- | --------------- |
+| 모델 검증         | 5         | ✅ PASS         |
+| JobService        | 6         | ✅ PASS         |
+| API 엔드포인트    | 5         | ✅ PASS         |
+| IndexingService   | 2         | ✅ PASS         |
+| MilvusClient 확장 | 2         | ✅ PASS         |
+| 버전 삭제         | 1         | ✅ PASS         |
+| **합계**          | **21**    | ✅ **ALL PASS** |
 
 ### 6.2 전체 테스트
 
@@ -463,6 +472,7 @@ Phase 25 테스트: 50 passed (test_internal_rag.py + test_milvus_client.py)
 **결정**: POST /internal/rag/index는 202 Accepted 즉시 반환, 백그라운드에서 처리
 
 **이유**:
+
 - 대용량 문서 처리 시 HTTP 타임아웃 방지
 - 백엔드가 다른 작업 수행 가능
 - 상태 폴링으로 진행 상황 확인 가능
@@ -472,6 +482,7 @@ Phase 25 테스트: 50 passed (test_internal_rag.py + test_milvus_client.py)
 **결정**: 동일 document_id + version_no 요청 시 기존 청크 삭제 후 재삽입
 
 **이유**:
+
 - 네트워크 오류로 인한 재요청 안전하게 처리
 - 중복 데이터 방지
 - 최신 상태 보장
@@ -481,6 +492,7 @@ Phase 25 테스트: 50 passed (test_internal_rag.py + test_milvus_client.py)
 **결정**: 새 버전 성공 후에만 이전 버전 삭제
 
 **이유**:
+
 - 인덱싱 실패 시 기존 버전 유지 (무손실)
 - 롤백 불필요
 - 검색 서비스 연속성 보장
@@ -490,6 +502,7 @@ Phase 25 테스트: 50 passed (test_internal_rag.py + test_milvus_client.py)
 **결정**: JobService는 인메모리 딕셔너리 사용
 
 **이유**:
+
 - 단순한 구현으로 MVP 빠른 개발
 - 1시간 후 자동 정리로 메모리 관리
 - 프로덕션에서는 Redis/DB로 확장 가능
@@ -498,29 +511,32 @@ Phase 25 테스트: 50 passed (test_internal_rag.py + test_milvus_client.py)
 
 ## 8. 지원 파일 형식
 
-| 확장자 | 라이브러리 | 지원 수준 |
-|--------|-----------|----------|
-| `.pdf` | PyMuPDF (fitz) | ✅ 완전 지원 (페이지 정보 포함) |
-| `.txt` | 내장 | ✅ 완전 지원 (UTF-8, CP949) |
-| `.docx` | python-docx | ✅ 완전 지원 |
-| `.doc` | python-docx | ⚠️ 제한적 (DOCX 변환 필요) |
-| `.hwp` | olefile | ⚠️ 제한적 (PrvText 스트림만) |
+| 확장자  | 라이브러리     | 지원 수준                       |
+| ------- | -------------- | ------------------------------- |
+| `.pdf`  | PyMuPDF (fitz) | ✅ 완전 지원 (페이지 정보 포함) |
+| `.txt`  | 내장           | ✅ 완전 지원 (UTF-8, CP949)     |
+| `.docx` | python-docx    | ✅ 완전 지원                    |
+| `.doc`  | python-docx    | ⚠️ 제한적 (DOCX 변환 필요)      |
+| `.hwp`  | olefile        | ⚠️ 제한적 (PrvText 스트림만)    |
 
 ---
 
 ## 9. 향후 개선 사항
 
 ### 9.1 단기
+
 - [ ] 배치 임베딩 생성 (청크별 → 배치)
 - [ ] HWP 완전 지원 (hwp5txt 또는 LibreOffice 변환)
 - [ ] 작업 상태 Redis 저장소
 
 ### 9.2 중기
+
 - [ ] 대용량 파일 스트리밍 처리
 - [ ] 섹션 경로(section_path) 자동 추출
 - [ ] 작업 취소 API
 
 ### 9.3 장기
+
 - [ ] 분산 작업 큐 (Celery, RQ)
 - [ ] 실시간 인덱싱 진행률 WebSocket
 - [ ] 문서 형식 자동 변환 파이프라인

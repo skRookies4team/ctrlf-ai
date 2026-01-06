@@ -21,7 +21,7 @@ from pymilvus import connections, Collection, utility
 # 설정 (.env에서 로드)
 HOST = os.getenv("MILVUS_HOST", "localhost")
 PORT = os.getenv("MILVUS_PORT", "19530")
-COLLECTION = os.getenv("MILVUS_COLLECTION_NAME", os.getenv("MILVUS_COLLECTION", "ragflow_chunks"))
+COLLECTION = os.getenv("MILVUS_COLLECTION_NAME", os.getenv("MILVUS_COLLECTION", "ragflow_chunks_openai"))
 
 
 def main():
