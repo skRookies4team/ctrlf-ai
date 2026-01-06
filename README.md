@@ -16,161 +16,77 @@ FastAPI 기반으로 RAG, LLM, 벡터 검색, 교육 영상 자동 생성 기능
 
 ## 연동 서비스
 
-| 서비스          | 주소                         | 설명                              |
-| --------------- | ---------------------------- | --------------------------------- |
-| **vLLM**        | `your-llm-server:port`       | LLM (EXAONE-3.5-7.8B-Instruct)    |
-| **Embedding**   | OpenAI API                   | 임베딩 (text-embedding-3-large)   |
-| **Milvus**      | `your-milvus-host:19540`     | 벡터 DB                           |
-| **RAGFlow**     | `localhost:9380`             | RAG 파이프라인 (문서 처리)        |
-| **ctrlf-back**  | Spring                       | 백엔드 API                        |
-| **ctrlf-front** | React                        | 프론트엔드                        |
-
-## 빠른 테스트 (Mock 모드)
-
-**외부 서비스(vLLM, Milvus, RAGFlow) 없이** Mock 응답으로 바로 테스트:
-
-```bash
-# 1. 환경 설정
-git clone https://github.com/skRookies4team/ctrlf-ai.git
-cd ctrlf-ai
-python -m venv venv
-.\venv\Scripts\activate  # Windows
-pip install -r requirements.txt
-
-# 2. Mock 모드 설정
-copy .env.example .env   # Windows
-# .env 파일에서 AI_ENV=mock 확인 (기본값)
-
-# 3. 서버 실행
-uvicorn app.main:app --reload --port 8000
-
-# 4. 테스트
-curl http://localhost:8000/health
-```
-
-**Swagger UI에서 테스트:**
-
-```
-브라우저에서 http://localhost:8000/docs 접속
-→ /ai/chat/messages 선택 → Try it out → Execute
-```
-
-**예상 응답 (Mock 모드):**
-
-```json
-{
-  "answer": "[Mock] 연차휴가는 근로기준법에 따라...",
-  "meta": {
-    "route_type": "MOCK",
-    "latency_ms": 50
-  }
-}
-```
-
-> **Note**: Mock 모드는 실제 LLM/RAG 없이 테스트용 응답을 반환합니다.
-> 실제 서비스 연동은 `.env`에서 `AI_ENV=real` 설정 후 vLLM, Milvus 연결이 필요합니다.
+| 서비스          | 주소                     | 설명                            |
+| --------------- | ------------------------ | ------------------------------- |
+| **vLLM**        | `your-llm-server:port`   | LLM (EXAONE-3.5-7.8B-Instruct)  |
+| **Embedding**   | OpenAI API               | 임베딩 (text-embedding-3-large) |
+| **Milvus**      | `your-milvus-host:19540` | 벡터 DB                         |
+| **RAGFlow**     | `localhost:9380`         | RAG 파이프라인 (문서 처리)      |
+| **ctrlf-back**  | Spring                   | 백엔드 API                      |
+| **ctrlf-front** | React                    | 프론트엔드                      |
 
 ---
 
-## 빠른 시작 (Real 모드)
+## 실행 방법
 
-### 1. 환경 설정
+### 방법 1: Docker (프로덕션/배포)
 
 ```bash
-# 가상환경 생성
+# 환경변수 설정
+cp .env.example .env
+# .env 파일에서 필수 값 설정 (RAGFLOW_BASE_URL_REAL, LLM_BASE_URL_REAL, BACKEND_BASE_URL_REAL, RAGFLOW_API_KEY, OPENAI_API_KEY)
+
+# 실행
+docker compose --profile real up -d
+
+# 확인
+curl http://localhost:8000/health
+```
+
+### 방법 2: 로컬 개발 (Hot Reload)
+
+```bash
+# 가상환경 생성 및 활성화
 python -m venv venv
+.\venv\Scripts\activate  # Windows
+source venv/bin/activate # Linux/Mac
 
-# 가상환경 활성화
-# Windows PowerShell:
-.\venv\Scripts\activate
-# Windows CMD:
-venv\Scripts\activate.bat
-# Linux/Mac:
-source venv/bin/activate
-
-# 의존성 설치 (Python 3.12+ 권장)
+# 의존성 설치
 pip install -r requirements.txt
 
 # 환경변수 설정
-cp .env.example .env   # Linux/Mac
-copy .env.example .env # Windows
+cp .env.example .env
+# .env 파일 수정
 
-# .env 파일에서 서비스 URL 수정
-```
-
-### 2. 서버 실행
-
-```bash
-# 개발 모드
+# 서버 실행 (코드 수정 시 자동 재시작)
 uvicorn app.main:app --reload --port 8000
 
-# 프로덕션 모드
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-### 3. 확인
-
-```bash
-# 헬스체크
+# 확인
 curl http://localhost:8000/health
-
-# API 문서 (브라우저)
-http://localhost:8000/docs
 ```
 
-## 채팅 테스트
-
-### CLI 도구 (권장)
-
-`chat_cli.py`는 실제 서비스(vLLM, Milvus, RAGFlow)를 사용하여 챗봇을 테스트합니다.
-
-```
-chat_cli.py → localhost:8000 (FastAPI) → 실제 서비스들
-                                         ├── vLLM (LLM 응답 생성)
-                                         ├── Milvus (벡터 검색)
-                                         └── RAGFlow (RAG 파이프라인)
-```
-
-**사용 방법:**
+### Mock 모드 (외부 서비스 없이 테스트)
 
 ```bash
-# 1. 서버 실행 (터미널 1)
-uvicorn app.main:app --reload --port 8000
+# Docker Mock 모드
+docker compose --profile mock up -d
 
-# 2. CLI 테스트 (터미널 2)
+# 또는 로컬에서 AI_ENV=mock 설정 후 실행
+```
+
+---
+
+## API 테스트
+
+### Swagger UI
+
+브라우저에서 http://localhost:8000/docs 접속
+
+### CLI 도구
+
+```bash
 python chat_cli.py
 ```
-
-**실행 예시:**
-
-```
-==================================================
-CTRL+F AI 채팅 테스트 (종료: q 또는 Ctrl+C)
-==================================================
-
-질문> 연차휴가 규정 알려줘
-응답 대기중...
-
-연차휴가는 근로기준법에 따라...
-
-(RAG_INTERNAL | 3500ms)
-
-질문> q
-종료합니다.
-```
-
-> **참고**: `.env`의 `AI_ENV=real` 설정 시 실제 서비스 연동, `AI_ENV=mock` 설정 시 Mock 응답
-
-**필수 서비스:**
-
-| 환경변수               | RAGFlow | Milvus | vLLM | 설명                    |
-| ---------------------- | ------- | ------ | ---- | ----------------------- |
-| `MILVUS_ENABLED=true`  | 불필요  | 필수   | 필수 | Milvus 직접 연동 (권장) |
-| `MILVUS_ENABLED=false` | 필수    | 불필요 | 필수 | RAGFlow 파이프라인 사용 |
-
-- **vLLM**: 항상 필수 (LLM 응답 생성, 임베딩)
-- **RAGFlow 없이 테스트**: `MILVUS_ENABLED=true` 설정 후 Milvus만 연결하면 됨
-- **모든 서비스 없이 테스트**: `AI_ENV=mock` 설정 시 Mock 응답 반환
 
 ### curl
 
@@ -186,117 +102,37 @@ curl -X POST http://localhost:8000/ai/chat/messages \
   }'
 ```
 
-## 연결 테스트 (단계별)
+---
 
-### Step 1: AI Gateway 실행
+## 환경변수 (.env)
 
-```powershell
-# Windows PowerShell
-cd ctrlf-ai
-.\venv\Scripts\activate
-uvicorn app.main:app --reload --port 8000
+```env
+# AI 환경 (mock / real)
+AI_ENV=real
+
+# LLM 서버 (vLLM)
+LLM_BASE_URL=http://your-llm-server:port
+LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
+
+# 임베딩 (OpenAI API)
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_EMBED_MODEL=text-embedding-3-large
+OPENAI_EMBED_DIM=3072
+
+# Milvus
+MILVUS_ENABLED=true
+MILVUS_HOST=your-server-host
+MILVUS_PORT=19540
+MILVUS_COLLECTION_NAME=ragflow_chunks
+
+# RAGFlow (MILVUS_ENABLED=false일 때 사용)
+RAGFLOW_BASE_URL=http://localhost:9380
+RAGFLOW_API_KEY=your-api-key
 ```
 
-### Step 2: 헬스체크
+전체 환경변수는 `.env.example` 참고
 
-```bash
-curl http://localhost:8000/health
-```
-
-**성공 응답:**
-
-```json
-{ "status": "healthy", "version": "0.1.0" }
-```
-
-### Step 3: 채팅 테스트
-
-**방법 A - CLI (권장):**
-
-```bash
-python chat_cli.py
-```
-
-**방법 B - Swagger UI:**
-
-```
-브라우저에서 http://localhost:8000/docs 접속
-→ /ai/chat/messages → Try it out → Execute
-```
-
-**방법 C - curl (PowerShell):**
-
-```powershell
-curl -X POST http://localhost:8000/ai/chat/messages `
-  -H "Content-Type: application/json" `
-  -d '{\"session_id\":\"test\",\"user_id\":\"user1\",\"user_role\":\"EMPLOYEE\",\"domain\":\"POLICY\",\"messages\":[{\"role\":\"user\",\"content\":\"연차휴가 규정 알려줘\"}]}'
-```
-
-### Step 4: 스크립트/영상 테스트 (선택)
-
-```powershell
-# 소스셋 처리 시작 (스크립트 자동 생성)
-curl -X POST http://localhost:8000/internal/ai/source-sets/test-001/start `
-  -H "Content-Type: application/json" `
-  -H "X-Internal-Token: your-token" `
-  -d '{\"video_id\":\"v1\",\"education_id\":\"e1\"}'
-
-# 렌더 잡 시작 (영상 생성)
-curl -X POST http://localhost:8000/internal/ai/render-jobs `
-  -H "Content-Type: application/json" `
-  -H "X-Internal-Token: your-token" `
-  -d '{\"job_id\":\"job-001\",\"video_id\":\"v1\",\"script_id\":\"s1\"}'
-```
-
-### 문제 해결
-
-| 증상                 | 해결 방법                    |
-| -------------------- | ---------------------------- |
-| `Connection refused` | AI Gateway 실행 확인         |
-| `LLM timeout`        | .env의 LLM_BASE_URL 확인     |
-| `Milvus error`       | .env의 MILVUS_HOST/PORT 확인 |
-| `Callback failed`    | 백엔드 서비스 실행 확인      |
-| `UnicodeDecodeError` | 아래 인코딩 오류 해결 참고   |
-
-#### requirements.txt 인코딩 오류
-
-`pip install -r requirements.txt` 실행 시 다음 오류가 발생하는 경우:
-
-```
-UnicodeDecodeError: 'cp949' codec can't decode byte ...
-```
-
-**해결 방법:**
-
-```cmd
-# 기존 파일 삭제 후 새로 생성 (Windows CMD)
-del requirements.txt
-echo fastapi>=0.115.0 > requirements.txt
-echo uvicorn[standard]>=0.32.0 >> requirements.txt
-echo pydantic>=2.9.0 >> requirements.txt
-echo pydantic-settings>=2.6.0 >> requirements.txt
-echo httpx>=0.27.0 >> requirements.txt
-echo python-dotenv>=1.0.0 >> requirements.txt
-echo pytest>=8.3.0 >> requirements.txt
-echo pytest-anyio>=0.0.0 >> requirements.txt
-echo pytest-asyncio>=0.24.0 >> requirements.txt
-echo anyio>=4.6.0 >> requirements.txt
-echo PyMuPDF>=1.24.0 >> requirements.txt
-echo python-docx>=1.1.0 >> requirements.txt
-echo olefile>=0.47 >> requirements.txt
-echo gTTS>=2.5.0 >> requirements.txt
-echo Pillow>=10.0.0 >> requirements.txt
-echo pymilvus>=2.5.0 >> requirements.txt
-echo pandas>=2.0.0 >> requirements.txt
-echo openpyxl>=3.1.0 >> requirements.txt
-echo rapidfuzz>=3.0.0 >> requirements.txt
-echo numpy>=1.26.0 >> requirements.txt
-
-# 다시 설치
-pip install -r requirements.txt
-```
-
-> **원인**: Git에서 파일을 받을 때 UTF-8 BOM이나 다른 인코딩이 섞여서 발생합니다.
+---
 
 ## API 엔드포인트
 
@@ -307,7 +143,7 @@ pip install -r requirements.txt
 | POST   | `/ai/chat/messages` | AI 채팅       |
 | POST   | `/ai/chat/stream`   | 스트리밍 채팅 |
 
-### 교육 영상 생성 (Backend → AI)
+### 교육 영상 생성
 
 | 메서드 | 경로                                   | 설명             |
 | ------ | -------------------------------------- | ---------------- |
@@ -323,7 +159,7 @@ pip install -r requirements.txt
 | POST   | `/ai/faq/generate`  | FAQ 생성  |
 | POST   | `/ai/quiz/generate` | 퀴즈 생성 |
 
-### Internal RAG (백엔드 연동)
+### Internal RAG
 
 | 메서드 | 경로                     | 설명           |
 | ------ | ------------------------ | -------------- |
@@ -331,94 +167,7 @@ pip install -r requirements.txt
 | POST   | `/internal/rag/delete`   | 문서 삭제      |
 | GET    | `/internal/jobs/{jobId}` | 작업 상태 조회 |
 
-## 환경변수 (.env)
-
-```env
-# AI 환경 (mock / real)
-AI_ENV=real
-
-# LLM 서버 (vLLM)
-LLM_BASE_URL=http://your-llm-server:port
-LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
-SCRIPT_LLM_MODEL=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct  # 스크립트 생성용 (미설정 시 LLM_MODEL_NAME 사용)
-
-# 임베딩 (OpenAI API 사용)
-OPENAI_API_KEY=your-openai-api-key
-OPENAI_EMBED_MODEL=text-embedding-3-large
-OPENAI_EMBED_DIM=3072
-
-# Milvus (MILVUS_ENABLED=true면 RAGFlow 대신 Milvus 직접 사용)
-MILVUS_ENABLED=true
-MILVUS_HOST=your-server-host
-MILVUS_PORT=19540
-MILVUS_COLLECTION_NAME=ragflow_chunks
-
-# RAGFlow (MILVUS_ENABLED=false일 때 사용)
-RAGFLOW_BASE_URL=http://localhost:9380
-RAGFLOW_API_KEY=your-api-key
-
-# TTS (mock / gtts / polly / gcp)
-TTS_PROVIDER=gtts
-
-# Storage (local / s3 / backend_presigned)
-STORAGE_PROVIDER=local
-
-# 금지질문 필터
-FORBIDDEN_QUERY_FILTER_ENABLED=true
-FORBIDDEN_QUERY_FUZZY_ENABLED=true
-```
-
-## 로깅 설정
-
-### 로그 포맷
-
-| 환경변수 | 값 | 설명 |
-|---------|-----|------|
-| `LOG_FORMAT` | `json` | ELK 수집용 JSON 1라인 포맷 (기본값) |
-| `LOG_FORMAT` | `text` | 개발용 텍스트 포맷 (읽기 쉬움) |
-| `LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | 로그 레벨 |
-
-### 개발 환경에서 로그 보기
-
-`.env`에 다음 설정 추가:
-
-```env
-LOG_FORMAT=text
-LOG_LEVEL=DEBUG
-```
-
-**텍스트 로그 출력 예시:**
-
-```
-2026-01-03 09:50:00 | INFO     | app.main | Starting ctrlf-ai-gateway...
-2026-01-03 09:50:01 | DEBUG    | app.services.chat | [trace_id=abc123] Processing request
-```
-
-### 서버 실행 시 로그 확인
-
-```bash
-# 방법 1: .env 설정 후 실행
-uvicorn app.main:app --reload --port 8000
-
-# 방법 2: 환경변수 직접 지정 (Windows PowerShell)
-$env:LOG_FORMAT="text"; uvicorn app.main:app --reload --port 8000
-
-# 방법 3: 환경변수 직접 지정 (Windows CMD)
-set LOG_FORMAT=text && uvicorn app.main:app --reload --port 8000
-```
-
-### Docker 로그 확인
-
-```bash
-# 실시간 로그 보기
-docker logs -f <container_name>
-
-# docker-compose 사용 시
-docker-compose logs -f ai
-```
-
-> **Note**: JSON 포맷(`LOG_FORMAT=json`)은 ELK 스택에서 수집/분석에 최적화되어 있습니다.
-> 로컬 개발 시에는 `LOG_FORMAT=text`를 권장합니다.
+---
 
 ## 테스트
 
@@ -433,295 +182,24 @@ pytest -v
 pytest tests/test_internal_rag.py -v
 ```
 
-## 배치 Q&A 테스트 (모델 성능 평가)
-
-`qa_batch_test.py`는 질문 리스트를 AI 챗봇에 일괄 전송하여 성능 평가용 Q&A 리스트를 생성합니다.
-
-### 사용 방법
-
-```bash
-# 1. AI Gateway 서버 실행 (별도 터미널)
-uvicorn app.main:app --reload --port 8000
-
-# 2. 배치 테스트 실행
-python scripts/test/qa_batch_test.py              # 전체 테스트
-python scripts/test/qa_batch_test.py -n 50        # 50개만 랜덤 샘플링
-python scripts/test/qa_batch_test.py --sample 100 # 100개만 랜덤 샘플링
-python scripts/test/qa_batch_test.py -n 50 --seed 123  # 다른 시드로 샘플링
-```
-
-### 옵션
-
-| 옵션 | 설명 | 기본값 |
-|------|------|--------|
-| `-n`, `--sample` | 테스트할 질문 수 (미지정 시 전체) | 전체 |
-| `--seed` | 랜덤 시드 (재현 가능한 샘플링) | 42 |
-
-### 필수 파일
-
-- **입력**: `scripts/test/질문리스트.xlsx` (질문 ID, 페르소나, 카테고리, 질문 등 컬럼 필요)
-- **출력**: `scripts/test/docs/질답리스트_EXAONE_YYYYMMDD_HHMMSS.xlsx`
-
-### 출력 컬럼
-
-| 컬럼              | 설명                         |
-| ----------------- | ---------------------------- |
-| ID                | 질문 ID                      |
-| 페르소나          | 사용자 역할 (EMPLOYEE, etc.) |
-| 카테고리          | 질문 카테고리                |
-| 질문              | 원본 질문                    |
-| 답변              | AI 응답                      |
-| 모델              | 사용된 LLM 모델              |
-| prompt_tokens     | 프롬프트 토큰 수             |
-| completion_tokens | 생성 토큰 수                 |
-| latency_ms        | 응답 시간 (ms)               |
-| route             | 라우팅 경로                  |
-| rag_used          | RAG 사용 여부                |
-| rag_source_count  | 참조 문서 수                 |
-| error             | 오류 메시지 (실패 시)        |
-
-### 설정
-
-스크립트 상단에서 조정 가능:
-
-```python
-CONCURRENT_REQUESTS = 1   # 동시 요청 수 (LLM 타임아웃 방지를 위해 1 권장)
-TIMEOUT_SECONDS = 120     # 요청 타임아웃
-```
-
-> **Note**: 동시 요청 수를 늘리면 LLM 서버 과부하로 타임아웃이 발생할 수 있습니다.
-
-### 예시 출력
-
-```
-============================================================
-EXAONE 모델 질답리스트 생성 스크립트
-============================================================
-
-1. 질문리스트 로딩: scripts/test/질문리스트.xlsx
-   -> 총 595개 질문 로드됨
-   -> 50개 랜덤 샘플링 (seed=42)
-
-2. AI 서버 연결 테스트...
-   -> 연결 성공! 모델: LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
-
-3. 배치 처리 시작 (동시 요청: 1개)
-[50/50] (100.0%) EMP-001: OK
-
-4. 처리 완료!
-   -> 총 소요 시간: 600.5초 (10.0분)
-   -> 평균 응답 시간: 12000ms
-
-5. 결과 저장: scripts/test/docs/질답리스트_EXAONE_n50_20260101_120000.xlsx
-```
-
-> **출력 파일명**: 샘플링 시 `_n50` 형태로 샘플 수가 파일명에 포함됩니다.
-
-## Mock 서버 구성 및 분리 테스트
-
-### Mock 서버 목록
-
-| Mock 서버       | 포트 | 용도                                   |
-| --------------- | ---- | -------------------------------------- |
-| `mock_ragflow/` | 8080 | RAG 문서 검색 API 시뮬레이션           |
-| `mock_llm/`     | 8001 | OpenAI 호환 LLM API 시뮬레이션         |
-| `mock_backend/` | 8081 | Spring 백엔드 로그 수집 API 시뮬레이션 |
-
-### URL 우선순위
-
-환경변수 우선순위에 따라 개별 Mock/Real 혼합이 가능합니다:
-
-```
-1. 직접 지정 URL (최우선): RAGFLOW_BASE_URL, LLM_BASE_URL, BACKEND_BASE_URL
-2. AI_ENV=real → *_REAL URL 사용
-3. AI_ENV=mock → *_MOCK URL 사용
-```
-
-### 분리 테스트 시나리오
-
-#### 시나리오 1: 백엔드 API 테스트 (RAGFlow/LLM Mock 사용)
-
-실제 백엔드를 테스트하면서 RAGFlow와 LLM은 Mock 사용:
-
-```bash
-# Mock 서버 실행
-docker compose --profile mock up -d ragflow llm-internal
-
-# 환경변수 설정
-export RAGFLOW_BASE_URL=http://localhost:8080      # Mock RAGFlow
-export LLM_BASE_URL=http://localhost:8001          # Mock LLM
-export BACKEND_BASE_URL=http://real-backend:8085   # 실제 백엔드
-
-# AI Gateway 실행
-uvicorn app.main:app --reload --port 8000
-```
-
-#### 시나리오 2: RAGFlow API 테스트 (백엔드 Mock 사용)
-
-실제 RAGFlow를 테스트하면서 백엔드는 Mock 사용:
-
-```bash
-# Mock 서버 실행
-docker compose --profile mock up -d backend-mock
-
-# 환경변수 설정
-export RAGFLOW_BASE_URL=http://real-ragflow:9380   # 실제 RAGFlow
-export LLM_BASE_URL=http://real-llm:8001           # 실제 LLM
-export BACKEND_BASE_URL=http://localhost:8081      # Mock 백엔드
-
-# AI Gateway 실행
-uvicorn app.main:app --reload --port 8000
-```
-
-### Mock 서버 개별 실행
-
-```bash
-# RAGFlow Mock만 실행
-cd mock_ragflow && docker build -t mock-ragflow . && docker run -p 8080:8080 mock-ragflow
-
-# LLM Mock만 실행
-cd mock_llm && docker build -t mock-llm . && docker run -p 8001:8001 mock-llm
-
-# Backend Mock만 실행
-cd mock_backend && docker build -t mock-backend . && docker run -p 8081:8081 mock-backend
-```
-
-### Mock 통계 확인
-
-각 Mock 서버는 `/stats` 엔드포인트로 호출 정보를 제공합니다:
-
-```bash
-# RAGFlow Mock 통계
-curl http://localhost:8080/stats
-
-# LLM Mock 통계
-curl http://localhost:8001/stats
-
-# Backend Mock 통계
-curl http://localhost:8081/stats
-
-# 통계 초기화
-curl -X POST http://localhost:8080/stats/reset
-```
-
-### Mock RAGFlow로 스크립트 생성 테스트
-
-Mock RAGFlow는 문서 처리 API도 지원하여 스크립트 생성 파이프라인을 테스트할 수 있습니다.
-
-**지원 API:**
-| 엔드포인트 | 설명 |
-|-----------|------|
-| `POST /api/v1/datasets/{id}/documents` | 문서 업로드 |
-| `POST /api/v1/datasets/{id}/documents/{doc_id}/run` | 파싱 트리거 (즉시 완료) |
-| `GET /api/v1/datasets/{id}/documents/{doc_id}` | 문서 상태 조회 |
-| `GET /api/v1/datasets/{id}/documents/{doc_id}/chunks` | 청크 조회 |
-| `GET /stats/documents` | 문서 처리 통계 |
-
-**테스트 방법:**
-
-```bash
-# 1. Mock RAGFlow 실행 (포트 8090 권장, 8080이 사용 중일 수 있음)
-cd mock_ragflow
-python -m uvicorn main:app --port 8090
-
-# 2. 헬스체크
-curl http://localhost:8090/health
-
-# 3. 테스트 스크립트 실행
-export RAGFLOW_BASE_URL=http://localhost:8090
-python test_mock_ragflow_script.py
-```
-
-**예상 출력:**
-
-```
-============================================================
-Mock RAGFlow 스크립트 생성 테스트
-============================================================
-1. RagflowClient 직접 테스트
-   ✓ 업로드 완료: doc_id=doc-xxx
-   ✓ 파싱 트리거 완료
-   ✓ 상태: run=DONE, progress=1.0, chunks=5
-
-2. SourceSetOrchestrator 문서 처리 테스트
-   ✓ 성공: True
-   ✓ 청크 수: 5
-
-✓ 모든 테스트 통과!
-```
-
-**Mock 청크 생성 규칙:**
-
-- 파일명에서 주제를 추출하여 Mock 청크 내용 자동 생성
-- 예: `장애인식개선교육.pdf` → "장애인식개선교육에 대한 개요입니다..."
-- 기본 5개 청크 생성 (개요, 정책/절차, 법률/규정, 사례, FAQ)
-
 ---
 
-## Docker 배포 (ELK 로그 수집)
-
-Docker로 AI Gateway를 실행하면 ELK 스택을 통해 로그가 자동 수집됩니다.
-
-### 1. Docker 실행
+## Docker + ELK 로그 수집
 
 ```bash
 # 네트워크 생성 (최초 1회)
 docker network create ctrlf-network
 
-# AI Gateway + ELK 실행 (Mock 모드)
-docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile mock up -d
-
-# 프로덕션 (Real 모드)
+# AI Gateway + ELK 실행
 docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile real up -d
+
+# Kibana 접속
+http://localhost:5601
 ```
 
-### 2. 컨테이너 확인
+자세한 ELK 설정은 [elk/README.md](elk/README.md) 참고
 
-```bash
-docker ps
-```
-
-| 컨테이너            | 포트 | 설명        |
-| ------------------- | ---- | ----------- |
-| ctrlf-ai-gateway    | 8000 | AI Gateway  |
-| ctrlf-elasticsearch | 9200 | 로그 저장소 |
-| ctrlf-kibana        | 5601 | 로그 시각화 |
-| ctrlf-fluent-bit    | -    | 로그 수집기 |
-
-### 3. ES 초기 설정 (최초 1회)
-
-```bash
-# Git Bash에서 실행
-./elk/setup-elasticsearch.sh
-```
-
-### 4. 테스트
-
-```bash
-# 헬스체크
-curl http://localhost:8000/health
-
-# 채팅 테스트
-python chat_cli.py
-```
-
-### 5. Kibana에서 로그 확인
-
-1. 브라우저에서 http://localhost:5601 접속
-2. **Stack Management** → **Data Views** → **Create data view**
-   - Name: `ctrlf-ai`
-   - Index pattern: `ctrlf-ai-*`
-   - Timestamp field: `@timestamp`
-3. **Discover**에서 로그 조회
-
-### 6. 종료
-
-```bash
-docker compose -f docker-compose.yml -f elk/docker-compose.elk.yml --profile mock down
-```
-
-> **Note**: 로컬 개발 시에는 uvicorn을 사용하고, Docker 배포 시에만 ELK 로그 수집이 동작합니다.
-> 자세한 ELK 설정은 [elk/README.md](elk/README.md)를 참고하세요.
+---
 
 ## 프로젝트 구조
 
@@ -730,25 +208,11 @@ ctrlf-ai/
 ├── app/
 │   ├── main.py                 # FastAPI 진입점
 │   ├── api/v1/                 # API 엔드포인트
-│   ├── clients/                # 외부 서비스 클라이언트 (LLM, Milvus, Backend)
+│   ├── clients/                # 외부 서비스 클라이언트
 │   ├── services/               # 비즈니스 로직
-│   │   ├── chat_service.py         # 채팅 서비스
-│   │   ├── chat/                    # 채팅 서브모듈 (RAG 핸들러 등)
-│   │   ├── scene_based_script_generator.py  # 씬 기반 스크립트 생성
-│   │   ├── forbidden_query_filter.py        # 금지질문 필터
-│   │   └── ...
 │   ├── models/                 # Pydantic 모델
-│   ├── core/                   # 설정, 로깅
-│   ├── resources/              # 금지질문 룰셋 등 정적 리소스
-│   ├── repositories/           # 데이터 저장소 추상화
-│   ├── adapters/               # 어댑터 패턴 구현
-│   ├── telemetry/              # 모니터링/로깅
-│   └── utils/                  # 유틸리티
-├── scripts/
-│   └── test/                   # 테스트 스크립트
-│       ├── qa_batch_test.py        # 배치 Q&A 테스트
-│       └── 질문리스트.xlsx          # 테스트 질문 목록
-├── tests/                      # 단위/통합 테스트
+│   └── core/                   # 설정, 로깅
+├── tests/                      # 테스트
 ├── docs/                       # 개발 문서
 ├── elk/                        # ELK 로그 수집 설정
 ├── mock_*/                     # Mock 서버들
@@ -757,61 +221,240 @@ ctrlf-ai/
 └── .env
 ```
 
-## 아키텍처
-
-```
-┌──────────────┐      ┌──────────────┐      ┌──────────────────────────────┐
-│   Frontend   │─────▶│   Backend    │◀────▶│      AI Gateway (FastAPI)   │
-│   (React)    │      │   (Spring)   │      │                              │
-└──────────────┘      └──────┬───────┘      │  ┌────────────────────────┐  │
-                             │              │  │   Router Orchestrator   │  │
-                        ┌────┴────┐         │  └───────────┬────────────┘  │
-                        │         │         │              │               │
-                        ▼         ▼         │  ┌───────────▼────────────┐  │
-                     ┌────┐   ┌────┐        │  │  Chat / Video Service  │  │
-                     │ DB │   │ S3 │        │  └───────────┬────────────┘  │
-                     └────┘   └────┘        └──────────────┼───────────────┘
-                                                           │
-                                            ┌──────────────┼──────────────┐
-                                            │              │              │
-                                      ┌─────▼─────┐  ┌─────▼─────┐  ┌─────▼─────┐
-                                      │  Milvus   │◀─│  RAGFlow  │  │   vLLM    │
-                                      │ (벡터검색) │  │ (문서처리) │  │   (LLM)   │
-                                      └───────────┘  └───────────┘  └───────────┘
-```
-
-**요청 흐름:**
-
-1. **채팅 (RAG 검색)**: Frontend → Backend → AI Gateway → **Milvus 직접 검색** → vLLM → 응답 반환
-2. **개인화**: AI Gateway → Backend API 호출 → Backend가 DB 조회 → AI Gateway에 데이터 반환
-3. **문서 인덱싱**: Backend가 S3에 문서 저장 → S3 URL을 AI Gateway에 전달 → AI Gateway가 RAGFlow에 URL 전달 → RAGFlow가 문서 전처리 후 Milvus에 벡터 저장
-
-## 개발 히스토리
-
-### 스크립트 생성 고도화
-
-- **Phase 55**: 씬 기반 RAG 스크립트 생성, 한국어 검증
-- **Phase 54**: 스크립트 모델 필드 확장 (visual_type, highlight_terms 등)
-
-### 금지질문 필터
-
-- **Phase 50**: 금지질문 필터 3단계 (Exact → Fuzzy → Embedding)
-- **Phase 48-49**: Low-relevance Gate, EDUCATION dataset 필터
-
-### 영상 생성 파이프라인
-
-- **Phase 37**: Ken Burns + Fade 효과
-- **Phase 36**: Presigned 업로드
-- **Phase 33-35**: Render Job 운영화
-- **Phase 29-32**: KB Index, Script Gen, Video Rendering
-
-### RAG/채팅
-
-- **Phase 25**: Internal RAG (Milvus 직접 연동)
-- **Phase 24**: Milvus 벡터 검색
-- **Phase 22-23**: Router Orchestrator, 개인화
-- **Phase 10-12**: 역할×도메인 라우팅, Fallback
+---
 
 ## 라이선스
 
 Private - CTRL+F Team
+
+
+---
+
+## 기능별 테스트 가이드
+
+### 1. Elasticsearch 로그 적재 테스트
+
+AI 채팅 요청 시 운영 로그와 FAQ 후보 로그가 자동으로 Elasticsearch에 적재됩니다.
+
+#### 1-1. ES + Kibana 실행
+
+```bash
+# ES + Kibana 실행
+docker compose up elasticsearch kibana -d
+
+# ES 상태 확인 (약 30초 대기 후)
+curl http://localhost:9200
+```
+
+#### 1-2. 테스트 스크립트 실행
+
+```bash
+# ES 상태만 확인
+python scripts/test_es_log.py --es-only
+
+# 채팅 API + ES 로그 확인 (서버가 실행 중이어야 함)
+python scripts/test_es_log.py --full
+
+# ES URL 지정
+python scripts/test_es_log.py --es-url http://localhost:9200
+```
+
+#### 1-3. ES에서 로그 직접 조회
+
+```bash
+# 인덱스 목록 확인
+curl http://localhost:9200/_cat/indices?v
+
+# AI 운영 로그 조회
+curl -X GET "http://localhost:9200/ctrlf-logs-*/_search?pretty" \
+  -H "Content-Type: application/json" \
+  -d '{"query": {"match_all": {}}, "size": 10, "sort": [{"@timestamp": "desc"}]}'
+
+# FAQ 후보 로그 조회
+curl -X GET "http://localhost:9200/ctrlf-faq-log-*/_search?pretty" \
+  -H "Content-Type: application/json" \
+  -d '{"query": {"match_all": {}}, "size": 10, "sort": [{"@timestamp": "desc"}]}'
+```
+
+#### 1-4. Kibana에서 확인
+
+1. **접속**: http://localhost:5601
+2. **메뉴**: Stack Management → Index Patterns
+3. **인덱스 패턴 생성**: `ctrlf-logs-*` 또는 `ctrlf-faq-log-*`
+4. **메뉴**: Discover → 로그 확인
+
+#### 로그 인덱스 구조
+
+| 인덱스 패턴 | 용도 | 주요 필드 |
+|-------------|------|-----------|
+| `ctrlf-logs-YYYY.MM.DD` | AI 운영 로그 | domain, intent, question_masked, answer_masked, rag_used |
+| `ctrlf-faq-log-YYYY.MM.DD` | FAQ 후보 로그 | domain, intent, question_masked, source |
+
+---
+
+### 2. FAQ API 테스트
+
+#### 2-1. 테스트 스크립트 실행
+
+```bash
+# Mock 기반 단위 테스트
+python scripts/test_faq_api_http.py
+```
+
+#### 2-2. 실제 서버 HTTP 호출
+
+```bash
+# 서버 실행
+uvicorn app.main:app --port 8000
+
+# FAQ 단건 생성
+curl -X POST http://localhost:8000/ai/faq/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "SEC_POLICY",
+    "cluster_id": "cluster-001",
+    "canonical_question": "USB 반출 절차는?",
+    "sample_questions": ["USB 어떻게 반출해요?"],
+    "top_docs": [{
+      "doc_id": "SEC-001",
+      "title": "정보보안 정책",
+      "snippet": "USB 반출 시 정보보호팀 승인 필요"
+    }]
+  }'
+
+# FAQ 배치 생성
+curl -X POST http://localhost:8000/ai/faq/generate/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"domain": "SEC_POLICY", "cluster_id": "c1", "canonical_question": "USB 반출 절차?"},
+      {"domain": "HR_POLICY", "cluster_id": "c2", "canonical_question": "연차 신청 방법?"}
+    ],
+    "concurrency": 2
+  }'
+
+# FAQ 자동 생성 (로그 분석 기반)
+curl -X POST http://localhost:8000/ai/faq/generate/auto \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "SEC_POLICY", "min_frequency": 3, "days_back": 30}'
+```
+
+---
+
+### 3. 채팅 API 테스트
+
+#### 3-1. 기본 채팅
+
+```bash
+curl -X POST http://localhost:8000/ai/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "test-001",
+    "user_id": "user1",
+    "message": "연차 규정 알려줘",
+    "channel": "WEB",
+    "user_role": "EMPLOYEE",
+    "department": "개발팀"
+  }'
+```
+
+#### 3-2. 스트리밍 채팅
+
+```bash
+curl -X POST http://localhost:8000/ai/chat/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "session_id": "test-002",
+    "user_id": "user1",
+    "message": "정보보안 교육 내용 요약해줘",
+    "channel": "WEB",
+    "stream": true
+  }'
+```
+
+#### 3-3. 채팅 CLI 도구
+
+```bash
+python chat_cli.py
+```
+
+---
+
+### 4. RAGFlow Callback API 테스트
+
+```bash
+# 테스트 스크립트 실행
+python scripts/test_callback_api.py
+
+# 원격 서버 테스트
+python scripts/test_callback_api.py http://your-server:8000
+```
+
+---
+
+### 5. 단위/통합 테스트
+
+#### 5-1. 전체 테스트
+
+```bash
+# 전체 테스트 실행
+pytest
+
+# 상세 출력
+pytest -v
+
+# 병렬 실행 (빠름)
+pytest -n auto
+```
+
+#### 5-2. 기능별 테스트
+
+```bash
+# FAQ 관련 테스트
+pytest tests/ -k "faq" -v
+
+# 채팅 관련 테스트
+pytest tests/ -k "chat" -v
+
+# RAG 관련 테스트
+pytest tests/ -k "rag" -v
+
+# PII 마스킹 테스트
+pytest tests/ -k "pii" -v
+
+# 의도 분류 테스트
+pytest tests/ -k "intent" -v
+```
+
+#### 5-3. 특정 파일 테스트
+
+```bash
+pytest tests/unit/test_phase50_low_relevance_gate.py -v
+pytest tests/unit/test_ai_log.py -v
+pytest tests/unit/test_faq_api_phase19.py -v
+```
+
+---
+
+### 6. QA 배치 테스트 및 품질 평가
+
+```bash
+# 배치 테스트
+python scripts/test/qa_batch_test.py
+
+# 품질평가 (GPT-4o-mini 기반)
+python scripts/test/qa_quality_evaluator.py -n 30 --model gpt-4o-mini
+```
+
+---
+
+### 7. 헬스체크
+
+```bash
+# 서버 상태 확인
+curl http://localhost:8000/health
+
+# 예상 응답
+# {"status":"ok","app":"ctrlf-ai-gateway","version":"0.1.0","env":"local"}
+```

@@ -110,7 +110,7 @@ URL : `/documents`
 
 카테고리 : RAG(적재)  
 method : POST  
-URL : `/internal/ragflow/ingests`  
+URL : `/v1/internal_ragflow/internal/ragflow/ingest`  
 사용자 : 시스템(내부)  
 요청자 : 백엔드  
 응답자 : RAGFlow  
@@ -121,7 +121,7 @@ URL : `/internal/ragflow/ingests`
 
 | 항목 | 내용 |
 | --- | --- |
-| **URL** | `POST /internal/ragflow/ingests` |
+| **URL** | `POST /v1/internal_ragflow/internal/ragflow/ingest` |
 | **설명** | 문서를 RAGFlow로 적재 요청(전처리/청킹/임베딩/밀버스 저장) |
 | **호출 주체** | Backend → RAGFlow |
 | **권한** | 내부 호출 전용 |

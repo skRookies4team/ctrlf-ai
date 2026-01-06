@@ -385,7 +385,7 @@ class PiiMaskResult:
 ┌────────────┐ ┌──────────────┐ ┌─────────────┐
 │PII Service │ │   Milvus     │ │ LLM Service │
 │ (GLiNER)   │ │ Vector DB    │ │/v1/chat/cmp │
-│:8003/mask  │ │              │ │(Qwen2.5-7B) │
+│:8003/mask  │ │              │ │(LLM)        │
 └────────────┘ └──────────────┘ └─────────────┘
 ```
 
@@ -487,7 +487,7 @@ results = await self._milvus_client.search(
 ```python
 llm_response = await self._llm.generate_chat_completion(
     messages=messages,
-    model=None,  # 설정에서 LLM_MODEL_NAME 사용 (Qwen2.5-7B)
+    model=None,  # 설정에서 LLM_MODEL_NAME 사용
     temperature=0.3,
     max_tokens=2048,
 )
@@ -789,7 +789,7 @@ POST /ai/faq/generate/batch
 | --------------- | -------------------- | ----------------------------------------- | --------------------- |
 | **PII Service** | `PiiService`         | `POST {PII_BASE_URL}/mask`                | 개인정보 검출/마스킹  |
 | **Milvus**      | `MilvusSearchClient` | Milvus gRPC/HTTP                          | 벡터 검색             |
-| **LLM**         | `LLMClient`          | `POST {LLM_BASE_URL}/v1/chat/completions` | FAQ 생성 (Qwen2.5-7B) |
+| **LLM**         | `LLMClient`          | `POST {LLM_BASE_URL}/v1/chat/completions` | FAQ 생성 |
 
 ### 8.2 외부 서비스 호출 횟수
 
@@ -811,7 +811,7 @@ POST /ai/faq/generate/batch
 │  (컨텍스트 검사)                 (Milvus 결과 snippet별)                    │
 │                                                                             │
 │  LLM Service        Stage 5      1회                요청 ~8-9KB            │
-│  (FAQ 생성)                      (Qwen2.5-7B)       응답 ~2-3KB            │
+│  (FAQ 생성)                      (LLM)              응답 ~2-3KB            │
 │                                                                             │
 │  PII Service        Stage 7      2회                ~200-450B/건           │
 │  (출력 검사)                     (answer_markdown + summary)               │
@@ -927,7 +927,7 @@ LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 | 날짜       | 내용                                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------------------- |
 | 2026-01-02 | End-to-End 시스템 플로우 및 백엔드-AI 서버 역할 분담 섹션 추가                                          |
-| 2025-12-31 | RAGFlow 제거 반영, Milvus 직접 검색으로 변경, API 경로 수정 (`/ai/faq/*`), LLM 모델명 수정 (Qwen2.5-7B) |
+| 2025-12-31 | RAGFlow 제거 반영, Milvus 직접 검색으로 변경, API 경로 수정 (`/ai/faq/*`) |
 | 2024-12-23 | 초기 작성                                                                                               |
 
 ---

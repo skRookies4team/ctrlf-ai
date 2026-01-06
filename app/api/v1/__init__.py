@@ -17,9 +17,12 @@ Included routers:
     - feedback: 피드백 수신 endpoints (/internal/ai/feedback)
 
 FE용 API는 모두 제거됨 (FE는 백엔드 경유).
+
+Note: ab_context API는 deprecated됨. ChatRequest.model 필드 직접 사용 (방식 B).
 """
 
 from app.api.v1 import (
+    # ab_context,  # DEPRECATED: 방식 B로 전환 - ChatRequest.model 필드 직접 사용
     chat,
     chat_stream,
     faq,
@@ -45,4 +48,5 @@ __all__ = [
     "render_jobs",
     "ws_render_progress",
     "source_sets",
+    # "ab_context",  # DEPRECATED
 ]

@@ -91,6 +91,10 @@ class AILogService:
         question_masked: Optional[str] = None,
         answer_masked: Optional[str] = None,
         rag_gap_candidate: bool = False,
+        # Phase AB: A/B 테스트 정보
+        ab_model: Optional[str] = None,
+        ab_embedding_model: Optional[str] = None,
+        ab_collection_name: Optional[str] = None,
     ) -> AILogEntry:
         return AILogEntry(
             session_id=request.session_id,
@@ -113,6 +117,10 @@ class AILogService:
             question_masked=question_masked,
             answer_masked=answer_masked,
             rag_gap_candidate=rag_gap_candidate,
+            # Phase AB: A/B 테스트 정보
+            ab_model=ab_model,
+            ab_embedding_model=ab_embedding_model,
+            ab_collection_name=ab_collection_name,
         )
 
     # ==================================================
@@ -188,9 +196,30 @@ class AILogService:
             "question_masked": log_entry.question_masked,
             "source": "ai",
         })
-
+        
+        
+        # 로컬 로그 기록 (항상)
+        # Phase AB: A/B 테스트 정보 추가
+        ab_info = ""
+        if log_entry.ab_model:
+            ab_info = (
+                f", ab_model={log_entry.ab_model}, "
+                f"ab_embedding={log_entry.ab_embedding_model}, "
+                f"ab_collection={log_entry.ab_collection_name}"
+            )
         logger.info(
             f"[FAQ_LOG] SAVE | domain={doc['domain']} | intent={doc['intent']}"
+            f"AI Log: session={log_entry.session_id}, "
+            f"user={log_entry.user_id}, "
+            f"intent={log_entry.intent}, "
+            f"route={log_entry.route}, "
+            f"domain={log_entry.domain}, "
+            f"pii_input={log_entry.has_pii_input}, "
+            f"pii_output={log_entry.has_pii_output}, "
+            f"rag_used={log_entry.rag_used}, "
+            f"rag_sources={log_entry.rag_source_count}, "
+            f"latency_ms={log_entry.latency_ms}"
+            f"{ab_info}"
         )
 
         try:

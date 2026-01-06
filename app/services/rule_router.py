@@ -24,6 +24,12 @@ Phase 49 업데이트 (도메인 라우팅 개선):
 - POLICY 키워드 체크 우선순위를 EDU_CONTENT보다 앞으로 조정
 - 연차/휴가/근태/징계/복무 등은 POLICY로 우선 분류
 - 디버그 로깅에 ASCII-safe preview 적용 (Git Bash 파이프 한글 깨짐 방지)
+
+Phase 52 업데이트 (라우팅 정확도 개선):
+- 정규화(공백 제거) 기반 키워드 매칭 도입 ("보안사고" == "보안 사고")
+- 절차/대응 트리거 AND 조건 기반 RAG 우선 분류
+- PROCEDURE_WORDS + SECURITY_HINTS → POLICY_QA
+- PROCEDURE_WORDS + EDU_HINTS → EDUCATION_QA
 """
 
 import random
@@ -72,6 +78,38 @@ def ascii_safe_preview(text: str, max_len: int = 50) -> str:
 
 
 # =============================================================================
+# Phase 52: 정규화 유틸 (공백 제거 기반 키워드 매칭)
+# =============================================================================
+
+def normalize_for_matching(text: str) -> str:
+    """
+    키워드 매칭을 위한 텍스트 정규화 (공백 제거).
+
+    "보안 사고" → "보안사고" 로 변환하여 공백 변형에 robust하게 매칭.
+
+    Args:
+        text: 원본 텍스트 (소문자 변환은 호출자가 수행)
+
+    Returns:
+        str: 공백이 제거된 정규화 텍스트
+    """
+    return re.sub(r"\s+", "", text)
+
+
+def normalize_keyword_set(keywords: frozenset) -> frozenset:
+    """
+    키워드 세트를 정규화된 버전으로 변환합니다.
+
+    Args:
+        keywords: 원본 키워드 frozenset
+
+    Returns:
+        frozenset: 공백이 제거된 정규화 키워드 세트
+    """
+    return frozenset(normalize_for_matching(kw) for kw in keywords)
+
+
+# =============================================================================
 # 키워드 정의
 # =============================================================================
 
@@ -90,7 +128,10 @@ POLICY_KEYWORDS = frozenset([
     "인사", "근로기준", "취업규칙", "휴일", "휴무", "초과근무",
     # Q세트 도메인: 개인정보보호 (PIP)
     "개인정보", "민감정보", "클라우드", "usb", "이메일", "외부전송",
-    "개인정보유출", "마스킹", "암호화", "보안사고", "정보주체",
+    "개인정보유출", "마스킹", "암호화", "보안사고", "보안 사고", "정보주체",
+    # 사고/대응 절차 (RAG로 처리해야 함)
+    "사고 대응", "사고대응", "대응 절차", "대응절차", "1차 대응", "초기 대응", "초기대응",
+    "사고 발생", "사고발생", "보고 절차", "보고절차", "신고 절차", "신고절차",
     "열람권", "정정권", "삭제권", "동의", "수집", "이용", "제공",
     "개인정보처리", "cctv", "영상정보", "익명처리", "가명처리",
     # Q세트 도메인: 성희롱 방지 (SHP)
@@ -131,22 +172,67 @@ EDU_CONTENT_KEYWORDS = frozenset([
 ])
 
 # 교육 현황/개인화 키워드 (BACKEND_STATUS - EDU)
+# Phase 50: 개인화 Q1/Q3/Q9 키워드와 동기화
 EDU_STATUS_KEYWORDS = frozenset([
+    # 이수/수료 상태 조회
     "수료", "이수", "미이수", "미수료", "수료율", "이수율",
     "진도", "진행률", "시청률", "완료율",
+    # 내 교육 현황 조회
     "내 교육", "나의 교육", "내가 들은", "내가 수강",
     "교육현황", "수강현황", "학습현황",
-    "언제까지", "기한", "마감",
+    # Q1: 미이수 교육 패턴 (Phase 50)
+    "안 들은", "안들은", "필수 미이수", "안한 교육", "안 한 교육",
+    # Q3: 마감 임박 교육 패턴 (Phase 50)
+    "데드라인", "마감", "곧 마감", "마감 임박",
+    "이번 달", "이번달", "이달",
+    "언제까지", "기한",
+    # Q9: 이번 주 할 일 패턴 (Phase 50)
+    "이번 주", "이번주", "금주", "이주",
+    "할 일", "해야 할", "해야할", "해야 하는",
+    # 진도 확인 패턴
     "어디까지", "몇 퍼센트", "얼마나 했",
 ])
 
+# 교육 이어보기/재생 위치 조회 키워드 (EDU_RESUME_CHECK - 개인화)
+# Phase 50: 보던/듣던/최근/마지막 패턴 확장
+EDU_RESUME_KEYWORDS = frozenset([
+    # 이어보기 패턴
+    "이어서", "이어보기", "이어 보기", "계속 보기", "계속보기",
+    "끊긴", "끊어진", "중단", "멈춘", "멈춰진",
+    # 재생 위치 패턴
+    "어디까지 봤", "어디서 끊", "마지막으로 본", "마지막 위치",
+    "재생 위치", "시청 위치", "보던 거", "듣던 거",
+    # 다시 보기/듣기 패턴
+    "다시 재생", "다시 틀어", "이어 재생", "이어 틀어",
+    # Phase 50: "보던/듣던 교육" 패턴 추가
+    "보던 교육", "듣던 교육", "보던 강의", "듣던 강의",
+    "다시 보고", "다시 듣고", "다시 보기", "다시 듣기",
+    # Phase 50: 최근/마지막 시청 기록 패턴 추가
+    "최근에 본", "최근에 보던", "최근에 듣던", "최근 본", "최근 보던",
+    "마지막에 본", "마지막에 보던", "마지막에 듣던", "마지막 본", "마지막 보던",
+    "마지막에 들은", "마지막에 듣던", "마지막 듣던",
+])
+
 # HR/근태/복지/연차 개인화 키워드 (BACKEND_STATUS - HR)
+# Phase 50: 개인화 질문 패턴 대폭 확장 (연차/휴가/복지 조회 질문)
 HR_PERSONAL_KEYWORDS = frozenset([
-    "내 연차", "나의 연차", "연차 잔여", "연차 남은",
-    "휴가 잔여", "휴가 남은", "내 휴가",
+    # 연차 개인화 패턴 (Phase 50 확장)
+    "내 연차", "나의 연차", "연차 잔여", "연차 남은", "남은 연차", "잔여 연차",
+    "연차 며칠", "연차 얼마", "연차 몇", "연차 확인", "연차 조회",
+    "연차가 며칠", "연차가 얼마", "연차가 몇",
+    # 휴가 개인화 패턴 (Phase 50 확장)
+    "휴가 잔여", "휴가 남은", "내 휴가", "남은 휴가", "잔여 휴가",
+    "휴가 며칠", "휴가 얼마", "휴가 몇", "휴가 확인", "휴가 조회",
+    "휴가가 며칠", "휴가가 얼마", "휴가가 몇",
+    # 급여 패턴
     "급여", "월급", "봉급", "내 급여", "급여명세",
+    # 근태 패턴
     "근태", "출근", "퇴근", "내 근태", "근태현황",
+    # 복지/포인트 패턴 (Phase 50 확장)
     "복지", "복지포인트", "포인트 잔액", "내 포인트",
+    "포인트 얼마", "포인트 조회", "포인트 확인",
+    "식대", "식대 잔액", "식대 얼마", "식대 조회",
+    # 일반 개인정보 조회 패턴
     "내 정보", "나의 정보", "내 현황", "나의 현황",
     "내가 얼마", "내 잔여", "나 몇 개",
 ])
@@ -168,10 +254,12 @@ QUIZ_START_KEYWORDS = frozenset([
 ])
 
 # 퀴즈 제출 키워드 (QUIZ_SUBMIT)
+# 주의: "완료"는 "미완료"에도 매칭되므로 더 구체적인 표현 사용
 QUIZ_SUBMIT_KEYWORDS = frozenset([
     "퀴즈 제출", "답안 제출", "정답 제출",
     "채점해", "채점 해", "점수 확인",
-    "제출할게", "제출합니다", "완료",
+    "제출할게", "제출합니다",
+    "퀴즈 완료", "시험 완료", "테스트 완료",
 ])
 
 # 퀴즈 생성 키워드 (QUIZ_GENERATION)
@@ -179,6 +267,55 @@ QUIZ_GENERATION_KEYWORDS = frozenset([
     "퀴즈 생성", "문제 생성", "문항 생성",
     "퀴즈 만들", "문제 만들", "시험 만들",
     "퀴즈 출제", "문제 출제",
+])
+
+# 퀴즈 미완료/재응시 조회 키워드 (QUIZ_PENDING_CHECK - 개인화)
+QUIZ_PENDING_KEYWORDS = frozenset([
+    # 미완료/미응시 패턴
+    "안 푼 퀴즈", "안푼 퀴즈", "미완료 퀴즈", "미응시 퀴즈",
+    "남은 퀴즈", "남아있는 퀴즈", "안 본 시험", "안본 시험",
+    # 재응시/다시 풀기 패턴
+    "다시 풀어야", "재응시", "재시험", "다시 봐야",
+    "풀어야 할 퀴즈", "봐야 할 시험", "응시해야 할",
+    # 퀴즈 현황 조회 패턴
+    "퀴즈 현황", "시험 현황", "내 퀴즈", "나의 퀴즈",
+    "퀴즈 목록", "시험 목록", "퀴즈 있", "시험 있",
+])
+
+# 퀴즈 점수/성적 조회 키워드 (QUIZ_SCORE_CHECK - 개인화 Q5, Q6)
+QUIZ_SCORE_KEYWORDS = frozenset([
+    # 평균 점수 패턴 (Q5)
+    "평균 점수", "점수 평균", "퀴즈 평균", "시험 평균",
+    "내 평균", "나의 평균", "평균점수", "점수평균",
+    "퀴즈 점수", "시험 점수", "내 점수", "나의 점수",
+    "성적 평균", "평균 성적",
+    # 부서/전사 비교 패턴 (Q5)
+    "부서 평균", "전사 평균", "회사 평균", "팀 평균",
+    "다른 사람", "비교",
+    # 낮은/높은 점수 패턴 (Q6)
+    "낮은 점수", "점수가 낮은", "점수 낮은",
+    "높은 점수", "점수가 높은", "점수 높은",
+    "가장 낮", "가장 높", "제일 낮", "제일 높",
+    "취약", "취약한", "약한 과목", "못한 과목",
+    # 성적 조회 일반 패턴
+    "성적 조회", "점수 조회", "성적 확인", "점수 확인",
+    "성적 알려", "점수 알려",
+])
+
+# 퀴즈 문맥 키워드 (치명 액션 판정 시 오탐 방지용)
+# "채점해", "점수 확인" 같은 범용 키워드가 퀴즈 외 맥락에서 매칭되지 않도록
+QUIZ_CONTEXT_KEYWORDS = frozenset(["퀴즈", "시험", "테스트"])
+
+# HR 할 일/미완료 항목 키워드 (HR_TODO_CHECK - Q20)
+# 주의: query가 lower()로 변환되므로 키워드도 소문자로 정의
+# 범용 키워드("올해 할 일", "해야 할 일")는 EDU와 충돌하므로 제외
+HR_TODO_KEYWORDS = frozenset([
+    # HR 명시 키워드
+    "hr 할 일", "인사 할 일", "hr 투두", "hr todo",
+    "미완료 hr", "미완료 인사", "인사 업무",
+    # HR 고유 업무 키워드
+    "연말정산", "성과 평가", "인사 평가",
+    "서류 제출", "인사 서류", "hr 업무",
 ])
 
 # 일반 잡담 키워드 (GENERAL_CHAT)
@@ -204,6 +341,116 @@ SYSTEM_HELP_KEYWORDS = frozenset([
     "검색하는 방법", "사용방법", "이용방법",
     "도움말", "헬프", "help",
 ])
+
+# =============================================================================
+# Phase 52.1: Smalltalk Gate (초단문/일상 패턴 → GENERAL_CHAT)
+# =============================================================================
+# "미분류=POLICY_QA" 전략 유지하되, 초단문/일상 패턴만 예외로 GENERAL_CHAT
+# RAG가 억지로 근거 없는 정책 안내를 하는 것 방지
+
+# Smalltalk 인사/반응 키워드
+SMALLTALK_GREETINGS = frozenset([
+    "안녕", "안녕하세요", "안녕요", "하이", "헬로", "hi", "hello",
+    "반가워", "반갑습니다", "반가", "잘가", "바이", "bye",
+    "고마워", "고맙", "감사", "감사해", "땡큐", "thanks",
+    "수고", "수고해", "수고하세요",
+    "ㅎㅎ", "ㅋㅋ", "ㅋㅋㅋ", "ㅎㅎㅎ", "ㅇㅇ", "ㄴㄴ", "ㅎㅇ", "ㅂㅇ",
+    "네", "응", "ㅇㅋ", "ok", "오케이", "알겠어", "알았어",
+    # Phase 52.1: 일상 대화 패턴 추가
+    "뭐해", "머해", "뭐하세요", "뭐해요", "머해요",
+    "뭐야", "머야", "뭐", "머",
+])
+
+# Smalltalk 상태/감정 키워드
+SMALLTALK_EMOTIONS = frozenset([
+    "심심", "심심해", "심심하다", "지루해", "지루하다",
+    "피곤", "피곤해", "피곤하다", "졸려", "졸리다",
+    "배고파", "배고프다", "배불러", "배부르다",
+    "기분", "기분이", "화나", "화난다", "짜증", "짜증나",
+    "좋아", "좋다", "싫어", "싫다", "재밌어", "재미없어",
+])
+
+# Smalltalk 희망/의지 접미사 패턴 (정규화 후 적용)
+# "사고싶어", "먹고싶어", "가고싶어" 등
+# Phase 52.1: 공손형(요, 습니다)도 포함
+SMALLTALK_DESIRE_PATTERN = re.compile(
+    r"(고싶어|고싶다|고싶네|고싶은데|고파|고프다|"
+    r"고싶어요|고싶어여|고싶습니다|고싶네요|고싶은데요)$"
+)
+
+# 업무 도메인 힌트 키워드 (이것이 있으면 Smalltalk이 아님)
+# 이 키워드가 하나라도 있으면 Smalltalk Gate 통과 불가
+DOMAIN_HINT_KEYWORDS = frozenset([
+    # 인사/근태/연차
+    "연차", "휴가", "근태", "출근", "퇴근", "지각", "결근", "조퇴",
+    "반차", "병가", "육아휴직", "출산휴가", "경조사",
+    # 교육/퀴즈
+    "교육", "수강", "이수", "수료", "퀴즈", "시험", "테스트", "강의",
+    "진도", "진행률", "마감", "데드라인",
+    # 보안/규정/신고
+    "보안", "규정", "정책", "사규", "지침", "신고", "절차", "대응",
+    "유출", "침해", "개인정보", "성희롱", "괴롭힘", "장애인",
+    # HR/복지
+    "급여", "월급", "봉급", "복지", "포인트", "식대",
+    # 기타 업무
+    "결재", "승인", "보고", "회의", "업무", "프로젝트",
+])
+
+# =============================================================================
+# Phase 52: 절차/대응 트리거 키워드 (AND 조건 기반)
+# =============================================================================
+
+# 절차/단계/대응 관련 트리거 워드
+PROCEDURE_WORDS = frozenset([
+    "절차", "단계", "단계별", "단계별로",
+    "보고", "신고", "대응", "처리",
+    "어떻게해야", "뭘해야", "해야하는", "해야할",
+    "누구에게", "어디로", "어디에",
+    "1차", "2차", "초기", "즉시",
+])
+
+# 보안/사고 관련 힌트 (PROCEDURE_WORDS와 AND로 결합 → POLICY_QA)
+SECURITY_INCIDENT_HINTS = frozenset([
+    "보안", "사고", "유출", "침해", "반출",
+    "usb", "메일", "외부전송", "악성코드", "랜섬웨어",
+    "해킹", "피싱", "스팸", "바이러스",
+    "개인정보유출", "정보유출", "데이터유출",
+])
+
+# 교육 관련 힌트 (PROCEDURE_WORDS와 AND로 결합 → EDUCATION_QA)
+EDU_PROCEDURE_HINTS = frozenset([
+    "교육", "수강", "이수", "수료", "강의",
+    "학습", "과정", "커리큘럼",
+])
+
+# =============================================================================
+# Phase 52: 정규화된 키워드셋 (모듈 초기화 시 1회 생성)
+# =============================================================================
+
+# 정규화된 키워드셋 (공백 제거된 버전)
+POLICY_KEYWORDS_NORM = normalize_keyword_set(POLICY_KEYWORDS)
+EDU_CONTENT_KEYWORDS_NORM = normalize_keyword_set(EDU_CONTENT_KEYWORDS)
+EDU_STATUS_KEYWORDS_NORM = normalize_keyword_set(EDU_STATUS_KEYWORDS)
+EDU_RESUME_KEYWORDS_NORM = normalize_keyword_set(EDU_RESUME_KEYWORDS)
+HR_PERSONAL_KEYWORDS_NORM = normalize_keyword_set(HR_PERSONAL_KEYWORDS)
+LEAVE_POLICY_KEYWORDS_NORM = normalize_keyword_set(LEAVE_POLICY_KEYWORDS)
+QUIZ_START_KEYWORDS_NORM = normalize_keyword_set(QUIZ_START_KEYWORDS)
+QUIZ_SUBMIT_KEYWORDS_NORM = normalize_keyword_set(QUIZ_SUBMIT_KEYWORDS)
+QUIZ_GENERATION_KEYWORDS_NORM = normalize_keyword_set(QUIZ_GENERATION_KEYWORDS)
+QUIZ_PENDING_KEYWORDS_NORM = normalize_keyword_set(QUIZ_PENDING_KEYWORDS)
+QUIZ_SCORE_KEYWORDS_NORM = normalize_keyword_set(QUIZ_SCORE_KEYWORDS)
+QUIZ_CONTEXT_KEYWORDS_NORM = normalize_keyword_set(QUIZ_CONTEXT_KEYWORDS)
+HR_TODO_KEYWORDS_NORM = normalize_keyword_set(HR_TODO_KEYWORDS)
+GENERAL_CHAT_KEYWORDS_NORM = normalize_keyword_set(GENERAL_CHAT_KEYWORDS)
+SYSTEM_HELP_KEYWORDS_NORM = normalize_keyword_set(SYSTEM_HELP_KEYWORDS)
+PROCEDURE_WORDS_NORM = normalize_keyword_set(PROCEDURE_WORDS)
+SECURITY_INCIDENT_HINTS_NORM = normalize_keyword_set(SECURITY_INCIDENT_HINTS)
+EDU_PROCEDURE_HINTS_NORM = normalize_keyword_set(EDU_PROCEDURE_HINTS)
+
+# Phase 52.1: Smalltalk Gate용 정규화 키워드셋
+SMALLTALK_GREETINGS_NORM = normalize_keyword_set(SMALLTALK_GREETINGS)
+SMALLTALK_EMOTIONS_NORM = normalize_keyword_set(SMALLTALK_EMOTIONS)
+DOMAIN_HINT_KEYWORDS_NORM = normalize_keyword_set(DOMAIN_HINT_KEYWORDS)
 
 # 애매한 경계 감지용 키워드 조합
 
@@ -273,13 +520,45 @@ class RuleRouter:
             - needs_clarify=True: 되묻기 필요
         """
         query_lower = user_query.lower()
+        # Phase 52: 정규화된 텍스트 생성 (공백 제거)
+        query_normalized = normalize_for_matching(query_lower)
         debug_info = RouterDebugInfo()
 
         # Phase 49: ASCII-safe 로깅
         query_safe = ascii_safe_preview(user_query, 50)
 
-        # Step 1: 애매한 경계 체크 (최우선)
-        clarify_result = self._check_ambiguous_boundaries(query_lower, debug_info)
+        # Phase 52.1: Step -1 - Smalltalk Gate (초단문/일상 패턴 → GENERAL_CHAT)
+        # RAG가 억지로 근거 없는 정책 안내를 하는 것 방지
+        smalltalk_result = self._check_smalltalk_gate(
+            query_lower, query_normalized, debug_info
+        )
+        if smalltalk_result:
+            logger.info(
+                f"RuleRouter: Smalltalk gate triggered, "
+                f"intent=GENERAL_CHAT, "
+                f"rule_hits={debug_info.rule_hits}, "
+                f"query='{query_safe}'"
+            )
+            return smalltalk_result
+
+        # Phase 52: Step 0 - 절차/대응 트리거 AND 조건 체크 (최우선)
+        # "절차/단계" + "보안/사고" → POLICY_QA (RAG)
+        # "절차/단계" + "교육" → EDUCATION_QA (RAG)
+        procedure_result = self._check_procedure_triggers(
+            query_normalized, debug_info
+        )
+        if procedure_result:
+            logger.info(
+                f"RuleRouter: Procedure trigger detected (AND condition), "
+                f"intent={procedure_result.tier0_intent.value}, "
+                f"query='{query_safe}'"
+            )
+            return procedure_result
+
+        # Step 1: 애매한 경계 체크
+        clarify_result = self._check_ambiguous_boundaries(
+            query_lower, query_normalized, debug_info
+        )
         if clarify_result:
             logger.info(
                 f"RuleRouter: Ambiguous boundary detected, needs_clarify=True, "
@@ -288,7 +567,7 @@ class RuleRouter:
             return clarify_result
 
         # Step 2: 치명 액션(퀴즈 3종) 체크
-        critical_result = self._check_critical_actions(query_lower, debug_info)
+        critical_result = self._check_critical_actions(query_normalized, debug_info)
         if critical_result:
             logger.info(
                 f"RuleRouter: Critical action detected, "
@@ -297,8 +576,10 @@ class RuleRouter:
             )
             return critical_result
 
-        # Step 3: 명확한 키워드 매칭 (Phase 43: 원본 질문도 전달)
-        intent_result = self._classify_by_keywords(query_lower, user_query, debug_info)
+        # Step 3: 명확한 키워드 매칭 (Phase 52: 정규화된 텍스트 사용)
+        intent_result = self._classify_by_keywords(
+            query_lower, query_normalized, user_query, debug_info
+        )
 
         logger.info(
             f"RuleRouter: intent={intent_result.tier0_intent.value}, "
@@ -310,9 +591,147 @@ class RuleRouter:
 
         return intent_result
 
+    def _check_smalltalk_gate(
+        self,
+        query_lower: str,
+        query_normalized: str,
+        debug_info: RouterDebugInfo,
+    ) -> Optional[RouterResult]:
+        """Phase 52.1: Smalltalk Gate를 체크합니다.
+
+        초단문/일상 패턴을 GENERAL_CHAT으로 보내서
+        RAG가 억지로 근거 없는 정책 안내를 하는 것을 방지합니다.
+
+        조건 (AND):
+        1. 정규화 후 길이가 짧음 (2~10자)
+        2. 업무 도메인 힌트가 없음
+        3. 아래 패턴 중 하나:
+           - 인사/반응 키워드
+           - 상태/감정 키워드
+           - *싶어 접미사 (정규화 후)
+
+        Args:
+            query_lower: 소문자로 변환된 질문
+            query_normalized: 정규화된(공백 제거) 질문 텍스트
+            debug_info: 디버그 정보 객체
+
+        Returns:
+            Optional[RouterResult]: Smalltalk이면 GENERAL_CHAT, 아니면 None
+        """
+        # Step 1: 길이 체크 (정규화 후 2~10자)
+        # 너무 긴 문장은 Smalltalk이 아님
+        query_len = len(query_normalized)
+        if query_len < 2 or query_len > 10:
+            return None
+
+        # Step 2: 도메인 힌트 체크 (하나라도 있으면 Smalltalk 아님)
+        if self._contains_any_normalized(query_normalized, DOMAIN_HINT_KEYWORDS_NORM):
+            return None
+
+        # Step 3: Smalltalk 패턴 체크
+        is_smalltalk = False
+        matched_pattern = None
+
+        # 3-1: 인사/반응 키워드
+        if self._contains_any_normalized(query_normalized, SMALLTALK_GREETINGS_NORM):
+            is_smalltalk = True
+            matched_pattern = "GREETING"
+
+        # 3-2: 상태/감정 키워드
+        elif self._contains_any_normalized(query_normalized, SMALLTALK_EMOTIONS_NORM):
+            is_smalltalk = True
+            matched_pattern = "EMOTION"
+
+        # 3-3: *싶어 접미사 패턴 (정규화 후 적용)
+        elif SMALLTALK_DESIRE_PATTERN.search(query_normalized):
+            is_smalltalk = True
+            matched_pattern = "DESIRE_SUFFIX"
+
+        if not is_smalltalk:
+            return None
+
+        # Smalltalk으로 판정 → GENERAL_CHAT
+        debug_info.rule_hits.append(f"SMALLTALK_GATE_{matched_pattern}")
+        return RouterResult(
+            tier0_intent=Tier0Intent.GENERAL_CHAT,
+            domain=RouterDomain.GENERAL,
+            route_type=RouterRouteType.LLM_ONLY,
+            confidence=0.95,
+            debug=debug_info,
+        )
+
+    def _check_procedure_triggers(
+        self,
+        query_normalized: str,
+        debug_info: RouterDebugInfo,
+    ) -> Optional[RouterResult]:
+        """Phase 52: 절차/대응 트리거 AND 조건을 체크합니다.
+
+        절차/단계 키워드 + 보안/사고 힌트 → POLICY_QA (RAG)
+        절차/단계 키워드 + 교육 힌트 → EDUCATION_QA (RAG)
+
+        이 체크는 개인화 키워드보다 먼저 수행되어,
+        "보안 사고 대응 절차" 같은 질문이 개인화로 오분류되는 것을 방지합니다.
+
+        Args:
+            query_normalized: 정규화된(공백 제거) 질문 텍스트
+            debug_info: 디버그 정보 객체
+
+        Returns:
+            Optional[RouterResult]: 트리거 발동 시 RouterResult, 아니면 None
+        """
+        has_procedure = self._contains_any_normalized(
+            query_normalized, PROCEDURE_WORDS_NORM
+        )
+        if not has_procedure:
+            return None
+
+        # 절차 + 보안/사고 힌트 → POLICY_QA
+        has_security_hint = self._contains_any_normalized(
+            query_normalized, SECURITY_INCIDENT_HINTS_NORM
+        )
+        if has_security_hint:
+            debug_info.rule_hits.append("PROCEDURE_AND_SECURITY")
+            debug_info.keywords.extend([
+                kw for kw in PROCEDURE_WORDS_NORM if kw in query_normalized
+            ])
+            debug_info.keywords.extend([
+                kw for kw in SECURITY_INCIDENT_HINTS_NORM if kw in query_normalized
+            ])
+            return RouterResult(
+                tier0_intent=Tier0Intent.POLICY_QA,
+                domain=RouterDomain.POLICY,
+                route_type=RouterRouteType.RAG_INTERNAL,
+                confidence=0.92,
+                debug=debug_info,
+            )
+
+        # 절차 + 교육 힌트 → EDUCATION_QA
+        has_edu_hint = self._contains_any_normalized(
+            query_normalized, EDU_PROCEDURE_HINTS_NORM
+        )
+        if has_edu_hint:
+            debug_info.rule_hits.append("PROCEDURE_AND_EDU")
+            debug_info.keywords.extend([
+                kw for kw in PROCEDURE_WORDS_NORM if kw in query_normalized
+            ])
+            debug_info.keywords.extend([
+                kw for kw in EDU_PROCEDURE_HINTS_NORM if kw in query_normalized
+            ])
+            return RouterResult(
+                tier0_intent=Tier0Intent.EDUCATION_QA,
+                domain=RouterDomain.EDU,
+                route_type=RouterRouteType.RAG_INTERNAL,
+                confidence=0.92,
+                debug=debug_info,
+            )
+
+        return None
+
     def _check_ambiguous_boundaries(
         self,
         query_lower: str,
+        query_normalized: str,
         debug_info: RouterDebugInfo,
     ) -> Optional[RouterResult]:
         """애매한 경계를 체크하고 되묻기 결과를 반환합니다.
@@ -322,13 +741,14 @@ class RuleRouter:
 
         Args:
             query_lower: 소문자로 변환된 질문
+            query_normalized: 정규화된(공백 제거) 질문 텍스트
             debug_info: 디버그 정보 객체
 
         Returns:
             Optional[RouterResult]: 되묻기가 필요하면 RouterResult, 아니면 None
         """
-        # 경계 A: 교육 관련 애매함 체크
-        if self._is_boundary_a_ambiguous(query_lower):
+        # 경계 A: 교육 관련 애매함 체크 (정규화 텍스트 사용)
+        if self._is_boundary_a_ambiguous(query_lower, query_normalized):
             debug_info.rule_hits.append("BOUNDARY_A_AMBIGUOUS")
             return RouterResult(
                 tier0_intent=Tier0Intent.UNKNOWN,
@@ -340,8 +760,8 @@ class RuleRouter:
                 debug=debug_info,
             )
 
-        # 경계 B: 연차/휴가 관련 애매함 체크
-        if self._is_boundary_b_ambiguous(query_lower):
+        # 경계 B: 연차/휴가 관련 애매함 체크 (정규화 텍스트 사용)
+        if self._is_boundary_b_ambiguous(query_lower, query_normalized):
             debug_info.rule_hits.append("BOUNDARY_B_AMBIGUOUS")
             return RouterResult(
                 tier0_intent=Tier0Intent.UNKNOWN,
@@ -355,7 +775,9 @@ class RuleRouter:
 
         return None
 
-    def _is_boundary_a_ambiguous(self, query_lower: str) -> bool:
+    def _is_boundary_a_ambiguous(
+        self, query_lower: str, query_normalized: str
+    ) -> bool:
         """경계 A (교육 내용 vs 이수현황) 애매함을 체크합니다.
 
         애매한 패턴 예시:
@@ -366,20 +788,31 @@ class RuleRouter:
         명확하지 않은 패턴:
         - 교육 키워드 + 애매한 동사
         - 단, EDU_CONTENT_KEYWORDS나 EDU_STATUS_KEYWORDS에 명확히 해당하면 제외
-        """
-        # 먼저 명확한 키워드가 있는지 체크
-        if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
-            return False  # 명확히 교육 내용 질문
-        if self._contains_any(query_lower, EDU_STATUS_KEYWORDS):
-            return False  # 명확히 교육 현황 질문
 
-        # 교육 키워드 + 애매한 동사 조합 체크
+        Phase 50: EDU_RESUME_KEYWORDS, QUIZ 키워드도 명확한 개인화 패턴으로 인식
+        Phase 52: 정규화된 텍스트로 매칭 (공백 변형 무시)
+        """
+        # 먼저 명확한 키워드가 있는지 체크 (정규화된 텍스트 사용)
+        if self._contains_any_normalized(query_normalized, EDU_CONTENT_KEYWORDS_NORM):
+            return False  # 명확히 교육 내용 질문
+        if self._contains_any_normalized(query_normalized, EDU_STATUS_KEYWORDS_NORM):
+            return False  # 명확히 교육 현황 질문
+        # Phase 50: 이어보기/다시보기 패턴도 명확한 개인화 질문
+        if self._contains_any_normalized(query_normalized, EDU_RESUME_KEYWORDS_NORM):
+            return False  # 명확히 교육 이어보기/재생 위치 질문
+        # Phase 50: 퀴즈 미완료 조회도 명확한 개인화 질문
+        if self._contains_any_normalized(query_normalized, QUIZ_PENDING_KEYWORDS_NORM):
+            return False  # 명확히 퀴즈 미완료 조회 질문
+
+        # 교육 키워드 + 애매한 동사 조합 체크 (원본 텍스트로 체크)
         has_edu_keyword = self._contains_any(query_lower, EDU_AMBIGUOUS_KEYWORDS)
         has_ambiguous_verb = self._contains_any(query_lower, EDU_AMBIGUOUS_VERBS)
 
         return has_edu_keyword and has_ambiguous_verb
 
-    def _is_boundary_b_ambiguous(self, query_lower: str) -> bool:
+    def _is_boundary_b_ambiguous(
+        self, query_lower: str, query_normalized: str
+    ) -> bool:
         """경계 B (규정 질문 vs HR 개인화) 애매함을 체크합니다.
 
         애매한 패턴 예시:
@@ -392,11 +825,12 @@ class RuleRouter:
         - 단, LEAVE_POLICY_KEYWORDS나 HR_PERSONAL_KEYWORDS에 명확히 해당하면 제외
 
         Phase 49: "규정", "정책" 등이 있으면 명확히 정책 질문으로 판단
+        Phase 52: 정규화된 텍스트로 매칭 (공백 변형 무시)
         """
-        # 먼저 명확한 키워드가 있는지 체크
-        if self._contains_any(query_lower, LEAVE_POLICY_KEYWORDS):
+        # 먼저 명확한 키워드가 있는지 체크 (정규화된 텍스트 사용)
+        if self._contains_any_normalized(query_normalized, LEAVE_POLICY_KEYWORDS_NORM):
             return False  # 명확히 정책 질문
-        if self._contains_any(query_lower, HR_PERSONAL_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, HR_PERSONAL_KEYWORDS_NORM):
             return False  # 명확히 개인화 질문
 
         # Phase 49: "규정", "정책" 등이 있으면 명확히 정책 질문
@@ -404,7 +838,7 @@ class RuleRouter:
         if self._contains_any(query_lower, policy_clarifiers):
             return False  # 명확히 정책 질문
 
-        # 연차/휴가 키워드 + 애매한 동사 조합 체크
+        # 연차/휴가 키워드 + 애매한 동사 조합 체크 (원본 텍스트로 체크)
         has_leave_keyword = self._contains_any(query_lower, LEAVE_AMBIGUOUS_KEYWORDS)
         has_ambiguous_verb = self._contains_any(query_lower, LEAVE_AMBIGUOUS_VERBS)
 
@@ -412,23 +846,25 @@ class RuleRouter:
 
     def _check_critical_actions(
         self,
-        query_lower: str,
+        query_normalized: str,
         debug_info: RouterDebugInfo,
     ) -> Optional[RouterResult]:
         """치명 액션(퀴즈 3종)을 체크하고 확인 게이트를 설정합니다.
 
         Args:
-            query_lower: 소문자로 변환된 질문
+            query_normalized: 정규화된(공백 제거) 질문 텍스트
             debug_info: 디버그 정보 객체
 
         Returns:
             Optional[RouterResult]: 치명 액션이면 RouterResult, 아니면 None
+
+        Phase 52: 정규화된 텍스트로 매칭 (공백 변형 무시)
         """
-        # QUIZ_START 체크
-        if self._contains_any(query_lower, QUIZ_START_KEYWORDS):
+        # QUIZ_START 체크 (정규화된 텍스트 사용)
+        if self._contains_any_normalized(query_normalized, QUIZ_START_KEYWORDS_NORM):
             debug_info.rule_hits.append("QUIZ_START")
             debug_info.keywords.extend(
-                [kw for kw in QUIZ_START_KEYWORDS if kw in query_lower]
+                [kw for kw in QUIZ_START_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.BACKEND_STATUS,
@@ -442,27 +878,36 @@ class RuleRouter:
             )
 
         # QUIZ_SUBMIT 체크
-        if self._contains_any(query_lower, QUIZ_SUBMIT_KEYWORDS):
-            debug_info.rule_hits.append("QUIZ_SUBMIT")
-            debug_info.keywords.extend(
-                [kw for kw in QUIZ_SUBMIT_KEYWORDS if kw in query_lower]
+        # 오탐 방지: "채점해", "점수 확인" 같은 범용 키워드는 퀴즈 문맥이 있어야만 매칭
+        if self._contains_any_normalized(query_normalized, QUIZ_SUBMIT_KEYWORDS_NORM):
+            # 퀴즈 문맥 확인 (키워드에 "퀴즈/시험/테스트"가 포함되어 있으면 자동 통과)
+            has_quiz_context = self._contains_any_normalized(
+                query_normalized, QUIZ_CONTEXT_KEYWORDS_NORM
             )
-            return RouterResult(
-                tier0_intent=Tier0Intent.BACKEND_STATUS,
-                domain=RouterDomain.QUIZ,
-                route_type=RouterRouteType.BACKEND_API,
-                sub_intent_id=SubIntentId.QUIZ_SUBMIT.value,
-                confidence=0.95,
-                requires_confirmation=True,
-                confirmation_prompt=ConfirmationTemplates.QUIZ_SUBMIT,
-                debug=debug_info,
-            )
+            if not has_quiz_context:
+                # 퀴즈 문맥 없음 → 치명 액션으로 판정하지 않음 (다른 라우팅으로 진행)
+                debug_info.rule_hits.append("QUIZ_SUBMIT_SKIPPED_NO_CONTEXT")
+            else:
+                debug_info.rule_hits.append("QUIZ_SUBMIT")
+                debug_info.keywords.extend(
+                    [kw for kw in QUIZ_SUBMIT_KEYWORDS_NORM if kw in query_normalized]
+                )
+                return RouterResult(
+                    tier0_intent=Tier0Intent.BACKEND_STATUS,
+                    domain=RouterDomain.QUIZ,
+                    route_type=RouterRouteType.BACKEND_API,
+                    sub_intent_id=SubIntentId.QUIZ_SUBMIT.value,
+                    confidence=0.95,
+                    requires_confirmation=True,
+                    confirmation_prompt=ConfirmationTemplates.QUIZ_SUBMIT,
+                    debug=debug_info,
+                )
 
         # QUIZ_GENERATION 체크
-        if self._contains_any(query_lower, QUIZ_GENERATION_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, QUIZ_GENERATION_KEYWORDS_NORM):
             debug_info.rule_hits.append("QUIZ_GENERATION")
             debug_info.keywords.extend(
-                [kw for kw in QUIZ_GENERATION_KEYWORDS if kw in query_lower]
+                [kw for kw in QUIZ_GENERATION_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.BACKEND_STATUS,
@@ -502,6 +947,7 @@ class RuleRouter:
     def _classify_by_keywords(
         self,
         query_lower: str,
+        query_normalized: str,
         query_original: str,
         debug_info: RouterDebugInfo,
     ) -> RouterResult:
@@ -517,8 +963,12 @@ class RuleRouter:
         - 연차/휴가/근태/징계/복무 등은 POLICY로 우선 분류
         - 요약 인텐트 감지 (SUMMARY_INTENT_ENABLED=True일 때)
 
+        Phase 52 업데이트:
+        - 정규화된 텍스트로 키워드 매칭 (공백 변형 무시)
+
         Args:
             query_lower: 소문자로 변환된 질문
+            query_normalized: 정규화된(공백 제거) 질문 텍스트
             query_original: 원본 질문 (질문형 판정용)
             debug_info: 디버그 정보 객체
 
@@ -542,11 +992,11 @@ class RuleRouter:
 
         # Phase 49: 복합 조건 - "교육"이 포함되면 EDU 우선 체크
         # "정보보호교육", "성희롱예방교육" 등은 EDU로 분류해야 함
-        if "교육" in query_lower:
-            if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
+        if "교육" in query_normalized:
+            if self._contains_any_normalized(query_normalized, EDU_CONTENT_KEYWORDS_NORM):
                 debug_info.rule_hits.append("EDU_CONTENT_PRIORITY")
                 debug_info.keywords.extend(
-                    [kw for kw in EDU_CONTENT_KEYWORDS if kw in query_lower]
+                    [kw for kw in EDU_CONTENT_KEYWORDS_NORM if kw in query_normalized]
                 )
                 return RouterResult(
                     tier0_intent=Tier0Intent.EDUCATION_QA,
@@ -560,8 +1010,8 @@ class RuleRouter:
         # "연차 규정", "근태 규정" 등은 POLICY로 분류해야 함
         policy_clarifiers = {"규정", "정책", "규칙", "지침", "제도"}
         if self._contains_any(query_lower, policy_clarifiers):
-            if self._contains_any(query_lower, POLICY_KEYWORDS) or \
-               self._contains_any(query_lower, LEAVE_POLICY_KEYWORDS) or \
+            if self._contains_any_normalized(query_normalized, POLICY_KEYWORDS_NORM) or \
+               self._contains_any_normalized(query_normalized, LEAVE_POLICY_KEYWORDS_NORM) or \
                self._contains_any(query_lower, LEAVE_AMBIGUOUS_KEYWORDS):
                 debug_info.rule_hits.append("POLICY_PRIORITY")
                 debug_info.keywords.extend(
@@ -575,14 +1025,14 @@ class RuleRouter:
                     debug=debug_info,
                 )
 
-        # 우선순위 순서대로 체크
+        # 우선순위 순서대로 체크 (Phase 52: 정규화된 텍스트 사용)
         # Phase 49: POLICY를 EDU_CONTENT보다 앞으로 이동
 
         # 1. HR 개인화 (가장 명확한 개인화 패턴)
-        if self._contains_any(query_lower, HR_PERSONAL_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, HR_PERSONAL_KEYWORDS_NORM):
             debug_info.rule_hits.append("HR_PERSONAL")
             debug_info.keywords.extend(
-                [kw for kw in HR_PERSONAL_KEYWORDS if kw in query_lower]
+                [kw for kw in HR_PERSONAL_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.BACKEND_STATUS,
@@ -593,11 +1043,26 @@ class RuleRouter:
                 debug=debug_info,
             )
 
+        # 1-1. HR 할 일/미완료 항목 조회 (Q20 개인화) - EDU_STATUS보다 먼저 체크
+        if self._contains_any_normalized(query_normalized, HR_TODO_KEYWORDS_NORM):
+            debug_info.rule_hits.append("HR_TODO_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in HR_TODO_KEYWORDS_NORM if kw in query_normalized]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.HR,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.HR_TODO_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
         # 2. 교육 현황 조회 (개인화)
-        if self._contains_any(query_lower, EDU_STATUS_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, EDU_STATUS_KEYWORDS_NORM):
             debug_info.rule_hits.append("EDU_STATUS")
             debug_info.keywords.extend(
-                [kw for kw in EDU_STATUS_KEYWORDS if kw in query_lower]
+                [kw for kw in EDU_STATUS_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.BACKEND_STATUS,
@@ -608,11 +1073,69 @@ class RuleRouter:
                 debug=debug_info,
             )
 
+        # 2-1. 교육 이어보기/재생 위치 조회 (개인화)
+        if self._contains_any_normalized(query_normalized, EDU_RESUME_KEYWORDS_NORM):
+            debug_info.rule_hits.append("EDU_RESUME_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in EDU_RESUME_KEYWORDS_NORM if kw in query_normalized]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.EDU,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.EDU_RESUME_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
+        # 2-2. 퀴즈 미완료/재응시 조회 (개인화)
+        if self._contains_any_normalized(query_normalized, QUIZ_PENDING_KEYWORDS_NORM):
+            debug_info.rule_hits.append("QUIZ_PENDING_CHECK")
+            debug_info.keywords.extend(
+                [kw for kw in QUIZ_PENDING_KEYWORDS_NORM if kw in query_normalized]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.QUIZ,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.QUIZ_PENDING_CHECK.value,
+                confidence=0.9,
+                debug=debug_info,
+            )
+
+        # 2-3. 퀴즈 점수/성적 조회 (개인화 Q5, Q6)
+        # Phase 52: 오탐 방지 - "점수 확인" 같은 범용 키워드는 퀴즈 문맥이 있어야만 매칭
+        if self._contains_any_normalized(query_normalized, QUIZ_SCORE_KEYWORDS_NORM):
+            # 퀴즈 문맥 확인 (키워드에 "퀴즈/시험/테스트/평균" 포함 시 자동 통과)
+            has_quiz_context = self._contains_any_normalized(
+                query_normalized, QUIZ_CONTEXT_KEYWORDS_NORM
+            )
+            # 평균/비교/취약 같은 개인화 컨텍스트도 허용
+            has_personalization_context = any(
+                kw in query_normalized for kw in ["평균", "비교", "취약", "낮은", "높은"]
+            )
+            if not has_quiz_context and not has_personalization_context:
+                # 퀴즈 문맥 없음 → QUIZ_SCORE로 판정하지 않음 (다른 라우팅으로 진행)
+                debug_info.rule_hits.append("QUIZ_SCORE_SKIPPED_NO_CONTEXT")
+            else:
+                debug_info.rule_hits.append("QUIZ_SCORE_CHECK")
+                debug_info.keywords.extend(
+                    [kw for kw in QUIZ_SCORE_KEYWORDS_NORM if kw in query_normalized]
+                )
+                return RouterResult(
+                    tier0_intent=Tier0Intent.BACKEND_STATUS,
+                    domain=RouterDomain.QUIZ,
+                    route_type=RouterRouteType.BACKEND_API,
+                    sub_intent_id=SubIntentId.QUIZ_SCORE_CHECK.value,
+                    confidence=0.9,
+                    debug=debug_info,
+                )
+
         # 3. 정책/규정 질문 (Phase 49: EDU_CONTENT보다 먼저 체크)
-        if self._contains_any(query_lower, POLICY_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, POLICY_KEYWORDS_NORM):
             debug_info.rule_hits.append("POLICY")
             debug_info.keywords.extend(
-                [kw for kw in POLICY_KEYWORDS if kw in query_lower]
+                [kw for kw in POLICY_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.POLICY_QA,
@@ -623,10 +1146,10 @@ class RuleRouter:
             )
 
         # 4. 연차/휴가 규정 질문
-        if self._contains_any(query_lower, LEAVE_POLICY_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, LEAVE_POLICY_KEYWORDS_NORM):
             debug_info.rule_hits.append("LEAVE_POLICY")
             debug_info.keywords.extend(
-                [kw for kw in LEAVE_POLICY_KEYWORDS if kw in query_lower]
+                [kw for kw in LEAVE_POLICY_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.POLICY_QA,
@@ -637,10 +1160,10 @@ class RuleRouter:
             )
 
         # 5. 교육 내용 질문 (Phase 49: POLICY보다 뒤로 이동)
-        if self._contains_any(query_lower, EDU_CONTENT_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, EDU_CONTENT_KEYWORDS_NORM):
             debug_info.rule_hits.append("EDU_CONTENT")
             debug_info.keywords.extend(
-                [kw for kw in EDU_CONTENT_KEYWORDS if kw in query_lower]
+                [kw for kw in EDU_CONTENT_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.EDUCATION_QA,
@@ -651,10 +1174,10 @@ class RuleRouter:
             )
 
         # 6. 시스템 도움말
-        if self._contains_any(query_lower, SYSTEM_HELP_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, SYSTEM_HELP_KEYWORDS_NORM):
             debug_info.rule_hits.append("SYSTEM_HELP")
             debug_info.keywords.extend(
-                [kw for kw in SYSTEM_HELP_KEYWORDS if kw in query_lower]
+                [kw for kw in SYSTEM_HELP_KEYWORDS_NORM if kw in query_normalized]
             )
             return RouterResult(
                 tier0_intent=Tier0Intent.SYSTEM_HELP,
@@ -665,12 +1188,12 @@ class RuleRouter:
             )
 
         # 7. 일반 잡담 (Phase 43: 질문형 문장은 제외)
-        if self._contains_any(query_lower, GENERAL_CHAT_KEYWORDS):
+        if self._contains_any_normalized(query_normalized, GENERAL_CHAT_KEYWORDS_NORM):
             # 질문형 문장이면 잡담으로 분류하지 않음
             if not self._is_question_format(query_original):
                 debug_info.rule_hits.append("GENERAL_CHAT")
                 debug_info.keywords.extend(
-                    [kw for kw in GENERAL_CHAT_KEYWORDS if kw in query_lower]
+                    [kw for kw in GENERAL_CHAT_KEYWORDS_NORM if kw in query_normalized]
                 )
                 return RouterResult(
                     tier0_intent=Tier0Intent.GENERAL_CHAT,
@@ -713,3 +1236,19 @@ class RuleRouter:
             bool: 키워드 포함 여부
         """
         return any(keyword in text for keyword in keywords)
+
+    def _contains_any_normalized(
+        self, text_normalized: str, keywords_normalized: frozenset
+    ) -> bool:
+        """정규화된 텍스트에서 정규화된 키워드를 검색합니다.
+
+        Phase 52: 공백 제거 기반 매칭으로 "보안사고" == "보안 사고" 문제 해결.
+
+        Args:
+            text_normalized: 정규화된(공백 제거) 텍스트
+            keywords_normalized: 정규화된 키워드 집합
+
+        Returns:
+            bool: 키워드 포함 여부
+        """
+        return any(keyword in text_normalized for keyword in keywords_normalized)

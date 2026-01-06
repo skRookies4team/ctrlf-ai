@@ -172,14 +172,22 @@ class TestApplyLowRelevanceGate:
         assert "soft" in reason.lower() if reason else True
 
     def test_soft_demote_no_anchor_match_keeps_min(self):
-        """anchor 미매칭도 최소 1개는 유지 (Phase 50 안전장치)"""
+        """anchor 미매칭도 최소 1개는 유지 (Phase 50 안전장치, HARD_DROP 비활성 시)"""
         sources = [
             self._make_source(0.8, "완전 다른 내용"),
             self._make_source(0.7, "매칭 안 되는 내용"),
         ]
-        result, reason = apply_low_relevance_gate(sources, "보안 정책 알려줘", "POLICY")
-        # anchor "보안"이 sources에 없지만 최소 1개 유지
-        assert len(result) >= ANCHOR_GATE_MIN_KEEP
+        # HARD_DROP이 활성화되면 anchor 미매칭 시 sources=[]가 되므로,
+        # SOFT_DEMOTE 동작 테스트를 위해 HARD_DROP 비활성화
+        from unittest.mock import MagicMock
+        mock_settings = MagicMock()
+        mock_settings.RAG_QUALITY_HARD_DROP_ENABLED = False
+        mock_settings.RAG_QUALITY_DROP_THRESHOLD = 0.5
+        mock_settings.RAG_MAX_L2_DISTANCE = 0.55
+        with patch("app.services.chat.rag_handler.get_settings", return_value=mock_settings):
+            result, reason = apply_low_relevance_gate(sources, "보안 정책 알려줘", "POLICY")
+            # anchor "보안"이 sources에 없지만 최소 1개 유지
+            assert len(result) >= ANCHOR_GATE_MIN_KEEP
 
     def test_empty_sources_returns_empty(self):
         """빈 sources는 그대로 반환"""
@@ -306,33 +314,33 @@ class TestConfigValues:
 
 
 class TestAiLogUrlFix:
-    """ai_log URL 슬래시 중복 수정 테스트"""
+    """ai_log ES URL 테스트 (faq 브랜치: ES 직접 적재 방식으로 변경됨)"""
 
     def test_url_no_double_slash(self):
-        """URL에 이중 슬래시가 없는지 확인"""
-        from unittest.mock import patch, MagicMock
+        """ES URL에 이중 슬래시가 없는지 확인"""
+        from unittest.mock import patch
         from app.services.ai_log_service import AILogService
 
-        # backend_base_url이 trailing slash로 끝나는 경우 테스트
+        # ELASTICSEARCH_URL이 trailing slash로 끝나는 경우 테스트
         with patch('app.services.ai_log_service.settings') as mock_settings:
-            mock_settings.backend_base_url = "http://backend:8080/"
-            mock_settings.BACKEND_API_TOKEN = None
+            mock_settings.ELASTICSEARCH_URL = "http://elasticsearch:9200/"
+            mock_settings.FAQ_LOG_FORCE = False
 
             service = AILogService()
 
-            # 이중 슬래시가 없어야 함
-            assert "//" not in service._backend_log_endpoint.replace("http://", "")
-            assert service._backend_log_endpoint == "http://backend:8080/api/ai-logs"
+            # trailing slash가 제거되어야 함
+            assert service._es_base_url == "http://elasticsearch:9200"
+            assert not service._es_base_url.endswith("/")
 
     def test_url_without_trailing_slash(self):
-        """trailing slash 없는 URL도 정상 동작"""
+        """trailing slash 없는 ES URL도 정상 동작"""
         from unittest.mock import patch
         from app.services.ai_log_service import AILogService
 
         with patch('app.services.ai_log_service.settings') as mock_settings:
-            mock_settings.backend_base_url = "http://backend:8080"
-            mock_settings.BACKEND_API_TOKEN = None
+            mock_settings.ELASTICSEARCH_URL = "http://elasticsearch:9200"
+            mock_settings.FAQ_LOG_FORCE = False
 
             service = AILogService()
 
-            assert service._backend_log_endpoint == "http://backend:8080/api/ai-logs"
+            assert service._es_base_url == "http://elasticsearch:9200"

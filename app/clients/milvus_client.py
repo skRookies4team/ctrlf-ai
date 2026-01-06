@@ -138,6 +138,37 @@ def get_education_dataset_ids() -> List[str]:
     return [ds_id.strip() for ds_id in raw.split(",") if ds_id.strip()]
 
 
+def get_department_filter_expr(department: Optional[str]) -> Optional[str]:
+    """
+    Phase 56: 부서 필터 표현식을 생성합니다.
+
+    사용자 부서 교육영상 + 전체 부서 영상을 조회할 수 있도록
+    IN 연산자를 사용한 필터 표현식을 생성합니다.
+
+    Args:
+        department: 부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)
+
+    Returns:
+        Optional[str]: Milvus filter expression 또는 None
+
+    Example:
+        >>> get_department_filter_expr("개발팀")
+        'department in ["개발팀", "전체 부서"]'
+    """
+    if not department:
+        return None
+
+    # 허용된 부서 검증
+    valid_departments = {"전체 부서", "총무팀", "기획팀", "마케팅팀", "인사팀", "재무팀", "개발팀", "영업팀", "법무팀"}
+    if department not in valid_departments:
+        logger.warning(f"[Phase56] Unknown department: {department}")
+        return None
+
+    safe_dept = escape_milvus_string(department)
+    # 본인 부서 + 전체 부서
+    return f'department in ["{safe_dept}", "전체 부서"]'
+
+
 def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
     """
     Phase 48: domain에 해당하는 dataset_id 필터 표현식을 반환합니다.
@@ -321,6 +352,7 @@ class MilvusSearchClient:
         self._collection: Optional[Collection] = None
         self._collection_dim: Optional[int] = None  # 실제 컬렉션 dim (검증용)
         self._has_dataset_id_field: Optional[bool] = None  # Phase 48: 스키마 검사 결과 캐시
+        self._has_department_field: Optional[bool] = None  # Phase 56: department 필드 존재 여부
 
         logger.info(
             f"MilvusSearchClient initialized: host={self._host}:{self._port}, "
@@ -408,6 +440,16 @@ class MilvusSearchClient:
             logger.warning(
                 f"[Phase48] dataset_id field NOT found in schema. "
                 f"Dataset filtering will be disabled. Fields: {field_names}"
+            )
+
+        # Phase 56: department 필드 존재 여부 확인
+        self._has_department_field = "department" in field_names
+        if self._has_department_field:
+            logger.info(f"[Phase56] department field found in schema")
+        else:
+            logger.info(
+                f"[Phase56] department field NOT found in schema. "
+                f"Department filtering will be disabled until field is added."
             )
 
         logger.info(f"Loaded collection: {self._collection_name}")
@@ -602,14 +644,30 @@ class MilvusSearchClient:
         collection = self._get_collection_sync()
         search_params = self._search_params.copy()
 
-        results = collection.search(
-            data=[query_embedding],
-            anns_field="embedding",
-            param=search_params,
-            limit=top_k,
-            expr=expr,
-            output_fields=["text", "doc_id", "dataset_id", "chunk_id"],
-        )
+        # department 필드가 스키마에 없을 수 있으므로 기본 필드만 요청
+        base_output_fields = ["text", "doc_id", "dataset_id", "chunk_id"]
+        try:
+            results = collection.search(
+                data=[query_embedding],
+                anns_field="embedding",
+                param=search_params,
+                limit=top_k,
+                expr=expr,
+                output_fields=base_output_fields + ["department"],
+            )
+        except Exception as e:
+            if "department" in str(e):
+                # department 필드가 없으면 기본 필드만으로 재시도
+                results = collection.search(
+                    data=[query_embedding],
+                    anns_field="embedding",
+                    param=search_params,
+                    limit=top_k,
+                    expr=expr,
+                    output_fields=base_output_fields,
+                )
+            else:
+                raise
 
         output = []
         for hits in results:
@@ -620,6 +678,7 @@ class MilvusSearchClient:
                 content = getattr(entity, "text", "")
                 doc_id = getattr(entity, "doc_id", "")
                 chunk_id = getattr(entity, "chunk_id", None)
+                department = getattr(entity, "department", "")
 
                 domain_guess = self._extract_domain_from_dataset_id(dataset_id)
 
@@ -630,9 +689,11 @@ class MilvusSearchClient:
                     "domain": domain_guess,
                     "doc_id": doc_id,
                     "score": hit.score,
+                    "department": department,
                     "metadata": {
                         "dataset_id": dataset_id,
                         "chunk_id": chunk_id,
+                        "department": department,
                     },
                 })
 
@@ -709,6 +770,7 @@ class MilvusSearchClient:
 
         Phase 48: RAG_DATASET_FILTER_ENABLED=True 시 domain에 따른 dataset_id 필터 적용
         Phase 50: 2차 가드 - contextvars 플래그 체크
+        Phase 56: department 필터 추가 (부서별 교육영상 필터링)
 
         Raises:
             RetrievalBlockedError: 금지질문으로 retrieval이 차단된 경우
@@ -718,20 +780,39 @@ class MilvusSearchClient:
 
         settings = get_settings()
 
+        # 필터 표현식들을 수집하여 && 연산자로 조합
+        filter_exprs: List[str] = []
+
         # Phase 48: domain → dataset_id 필터 생성
         # 스키마에 dataset_id 필드가 없으면 필터 비활성화
-        filter_expr = None
         if settings.RAG_DATASET_FILTER_ENABLED:
             # 스키마 검사가 아직 안 됐으면 None (첫 검색 시 컬렉션 로드됨)
             # 스키마 검사 완료 후 dataset_id 필드가 없으면 필터 스킵
             if self._has_dataset_id_field is False:
                 logger.debug("[Phase48] Dataset filter skipped: dataset_id field not in schema")
             else:
-                filter_expr = get_dataset_filter_expr(domain)
-                if filter_expr:
+                dataset_expr = get_dataset_filter_expr(domain)
+                if dataset_expr:
+                    filter_exprs.append(dataset_expr)
                     logger.info(
-                        f"[Phase48] Dataset filter applied: domain={domain} -> {filter_expr}"
+                        f"[Phase48] Dataset filter applied: domain={domain} -> {dataset_expr}"
                     )
+
+        # Phase 56: department 필터 생성 (부서별 교육영상 필터링)
+        # 스키마에 department 필드가 없으면 필터 비활성화
+        if settings.RAG_DEPARTMENT_FILTER_ENABLED:
+            if self._has_department_field is False:
+                logger.debug("[Phase56] Department filter skipped: department field not in schema")
+            else:
+                dept_expr = get_department_filter_expr(department)
+                if dept_expr:
+                    filter_exprs.append(dept_expr)
+                    logger.info(
+                        f"[Phase56] Department filter applied: department={department} -> {dept_expr}"
+                    )
+
+        # 필터 조합 (여러 필터가 있으면 && 연산자로 연결)
+        filter_expr = " && ".join(filter_exprs) if filter_exprs else None
 
         # Phase 41: [B] retrieval_target 디버그 로그
         if request_id:
@@ -854,17 +935,33 @@ class MilvusSearchClient:
                 safe_dataset_id = escape_milvus_string(dataset_id)
                 expr = f'{expr} && dataset_id in ["{safe_dataset_id}"]'
 
-            output_fields = ["chunk_id", "text", "doc_id", "dataset_id"]
+            # department 필드가 스키마에 없을 수 있으므로 기본 필드만 요청
+            base_output_fields = ["chunk_id", "text", "doc_id", "dataset_id"]
+            output_fields = base_output_fields + ["department"]
             all_chunks: List[Dict[str, Any]] = []
             offset = 0
+            use_department = True
 
             # Pagination으로 전체 청크 조회
             while len(all_chunks) < max_chunks:
-                batch = await anyio.to_thread.run_sync(
-                    lambda: self._query_chunks_sync(
-                        expr, output_fields, offset, self.QUERY_BATCH_SIZE
+                current_fields = output_fields if use_department else base_output_fields
+                try:
+                    batch = await anyio.to_thread.run_sync(
+                        lambda fields=current_fields: self._query_chunks_sync(
+                            expr, fields, offset, self.QUERY_BATCH_SIZE
+                        )
                     )
-                )
+                except Exception as e:
+                    if use_department and "department" in str(e):
+                        # department 필드가 없으면 기본 필드만으로 재시도
+                        use_department = False
+                        batch = await anyio.to_thread.run_sync(
+                            lambda: self._query_chunks_sync(
+                                expr, base_output_fields, offset, self.QUERY_BATCH_SIZE
+                            )
+                        )
+                    else:
+                        raise
 
                 if not batch:
                     break

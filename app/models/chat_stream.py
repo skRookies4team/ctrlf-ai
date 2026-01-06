@@ -81,6 +81,12 @@ class ChatStreamRequest(BaseModel):
         description="대화 히스토리 (마지막 요소가 최신 메시지)",
     )
 
+    # LLM 프로바이더 선택 (관리자 대시보드에서 설정)
+    llm_model: Optional[Literal["exaone", "openai"]] = Field(
+        default=None,
+        description="LLM provider: 'exaone' (내부 EXAONE) or 'openai' (GPT). 미지정시 서버 기본값(exaone)",
+    )
+
 
 # =============================================================================
 # Stream Event Types (NDJSON Response)

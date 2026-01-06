@@ -38,7 +38,7 @@
 │   └──────────────────────┘           └────────────────────────────┘    │
 │            │                                    │                       │
 │            ▼                                    ▼                       │
-│      LLM (Qwen)                          TTS → FFmpeg → Storage        │
+│      LLM                                 TTS → FFmpeg → Storage        │
 │            │                                    │                       │
 │            ▼                                    ▼                       │
 │   VideoScript JSON                    MP4 + SRT + Thumbnail            │
@@ -717,7 +717,7 @@ CREATED → LOCKED → SCRIPT_READY | FAILED
 │                                                                  │
 │  ┌──────────┐    ┌──────────┐    ┌─────────────────────────────┐│
 │  │   LLM    │    │   TTS    │    │         Storage             ││
-│  │  (Qwen)  │    │ Provider │    │                             ││
+│  │          │    │ Provider │    │                             ││
 │  ├──────────┤    ├──────────┤    ├─────────────────────────────┤│
 │  │ OpenAI   │    │ • Polly  │    │ • Local (./data/assets)     ││
 │  │ 호환 API │    │ • GCP    │    │ • S3 (운영)                  ││

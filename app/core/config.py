@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     BACKEND_BASE_URL: Optional[HttpUrl] = None
 
     # ctrlf-back infra-service 연동 URL (S3 presigned URL 등)
-    BACKEND_BASE_URL: Optional[HttpUrl] = None
+    INFRA_BASE_URL: Optional[HttpUrl] = None
 
     # =========================================================================
     # PII 마스킹 서비스 설정
@@ -131,9 +131,11 @@ class Settings(BaseSettings):
     # Step 3: SourceSet 오케스트레이션 설정
     # =========================================================================
     # RAGFlow 파싱 완료 Polling 설정
+    RAGFLOW_POLL_INITIAL_DELAY_SEC: float = 600.0  # 폴링 시작 전 대기 (10분)
     RAGFLOW_POLL_INTERVAL_SEC: float = 3.0  # 폴링 간격 (초)
-    RAGFLOW_POLL_TIMEOUT_SEC: float = 900.0  # 폴링 타임아웃 (15분)
+    RAGFLOW_POLL_TIMEOUT_SEC: float = 2400.0  # 폴링 타임아웃 (40분)
     RAGFLOW_CHUNK_PAGE_SIZE: int = 1000  # 청크 조회 페이지 크기
+    RAGFLOW_MAX_RETRY_COUNT: int = 2  # FAIL 시 최대 재시도 횟수 (총 3번 시도)
 
     # =========================================================================
     # Phase 20: FAQ 생성 고도화 설정
@@ -175,11 +177,11 @@ class Settings(BaseSettings):
     # Phase 24: Milvus Vector Database 설정
     # =========================================================================
     # Milvus 서버 연결 정보 (환경변수로 설정 필요)
-    MILVUS_HOST: str = "localhost"
-    MILVUS_PORT: int = 19530
+    MILVUS_HOST: str = "58.127.241.84"
+    MILVUS_PORT: int = 19540
 
     # Milvus 컬렉션 설정
-    MILVUS_COLLECTION_NAME: str = "ragflow_chunks"
+    MILVUS_COLLECTION_NAME: str = "ragflow_chunks_openai"
 
     # 벡터 검색 설정
     MILVUS_TOP_K: int = 5  # 기본 검색 결과 수
@@ -202,6 +204,14 @@ class Settings(BaseSettings):
     FAQ_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
     CHAT_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
     SCRIPT_RETRIEVER_BACKEND: Optional[Literal["ragflow", "milvus"]] = None
+
+    # =========================================================================
+    # 개인화 API 모드 설정
+    # =========================================================================
+    # - mock: 무조건 mock 데이터 사용 (개발/데모용)
+    # - real: 무조건 실 백엔드 호출 (실패 시 에러 반환)
+    # - auto: 실 백엔드 호출, 네트워크 실패 시 mock fallback (기본값)
+    PERSONALIZATION_MODE: Literal["mock", "real", "auto"] = "auto"
 
     # 임베딩 계약 검증 (앱 시작 시 dim 불일치 감지)
     # True: dim 불일치 시 서버 기동 실패 (Fail-fast)
@@ -237,8 +247,38 @@ class Settings(BaseSettings):
         "또는,및,대한,대해,대해서,것,수,등,내용,사항,부분,전체,모든,각,해당"
     )
 
+    # =========================================================================
+    # Phase 52.1: RAG 품질 게이트 강화 설정
+    # =========================================================================
+    # 품질 게이트 강화 활성화 (True면 SOFT_DEMOTE 대신 HARD_DROP)
+    # HARD_DROP: low relevance 시 sources=[] 완전 drop (RAG 답변 금지)
+    RAG_QUALITY_HARD_DROP_ENABLED: bool = True
+
+    # HARD_DROP 임계치 (L2 거리 기준, 낮을수록 유사함)
+    # min_score(최소 거리)가 이 값보다 크면 완전 drop
+    # RAG_MAX_L2_DISTANCE(1.5)보다 높게 설정하여 극단적 케이스만 drop
+    RAG_QUALITY_DROP_THRESHOLD: float = 2.0
+
     # domain → dataset_id 매핑 강제 필터 활성화
     RAG_DATASET_FILTER_ENABLED: bool = True
+
+    # =========================================================================
+    # Phase 55: 환각(Hallucination) 방지 강화 설정
+    # =========================================================================
+    # RAG 0건 시 LLM 호출 스킵 (고정 템플릿만 반환)
+    # True: RAG 0건 + POLICY_QA/EDUCATION_QA면 LLM 호출 없이 고정 템플릿 반환
+    # False: 기존 동작 (LLM 호출 후 소프트 가드레일 적용)
+    HALLUCINATION_GUARD_STRICT: bool = True
+
+    # Citation validation 엄격 적용 (Phase 44 완화 롤백)
+    # True: RAG sources 없거나 sources에 없는 조항 인용 시 차단
+    # False: 기존 동작 (경고 로그만)
+    CITATION_VALIDATION_STRICT: bool = True
+
+    # 통계/순위 주장에 대한 추가 검증 활성화
+    # True: "TOP 5", "가장 많이", "N%" 등 통계 주장 시 sources 필수
+    # False: 통계 주장 검증 비활성화
+    STATISTICAL_CLAIM_VALIDATION: bool = True
 
     # =========================================================================
     # Phase 49: EDUCATION dataset_id allowlist 설정
@@ -246,8 +286,17 @@ class Settings(BaseSettings):
     # EDUCATION 도메인 검색 시 허용할 dataset_id 목록 (쉼표 구분)
     # Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
     RAG_EDUCATION_DATASET_IDS: str = (
-        "정보보안교육,성희롱예방교육,장애인식개선교육,직장내괴롭힘예방교육,개인정보보호교육"
+        "직무교육,장애인인식개선교육,직장내괴롭힘교육,직장내성희롱교육,정보보안교육,사내규정"
     )
+
+    # =========================================================================
+    # Phase 56: Department 필터 설정 (부서별 교육영상 필터링)
+    # =========================================================================
+    # 부서 필터 활성화 여부
+    # True: department 컬럼으로 부서별 교육영상 필터링 (본인 부서 + 전체 부서)
+    # False: 부서 필터 비활성화 (모든 교육영상 조회)
+    # 부서 범위: 전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀
+    RAG_DEPARTMENT_FILTER_ENABLED: bool = True
 
     # =========================================================================
     # Phase 49: Summary Intent 분리 (요약 인텐트)
@@ -319,11 +368,20 @@ class Settings(BaseSettings):
     OPENAI_EMBED_DIM: int = 3072
 
     # =========================================================================
-    # A/B 테스트: SRoberta 임베딩 설정
+    # OpenAI LLM 설정 (채팅용)
     # =========================================================================
-    # SRoberta 임베딩 모델 (sentence-transformers 호환)
-    SROBERTA_EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    SROBERTA_EMBED_DIM: int = 384
+    # 관리자 대시보드에서 OpenAI 모델 선택 시 사용
+    # OPENAI_API_KEY는 임베딩과 공유
+    OPENAI_LLM_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_LLM_MODEL: str = "gpt-4o-mini"  # 비용 효율적인 기본값
+
+    # =========================================================================
+    # A/B 테스트: SRoberta 임베딩 설정
+    # ⚠️ RAGFlow(ctrlf-ragflow) 설정과 동기화 필수!
+    # =========================================================================
+    # SRoberta 임베딩 모델 (RAGFlow sample/embedding_provider.py와 동일)
+    SROBERTA_EMBED_MODEL: str = "jhgan/ko-sroberta-multitask"
+    SROBERTA_EMBED_DIM: int = 768
 
     # SRoberta 임베딩 서버 URL (별도 서버 사용 시)
     SROBERTA_EMBED_URL: Optional[str] = None
@@ -473,9 +531,9 @@ class Settings(BaseSettings):
     BACKEND_INTERNAL_TOKEN: Optional[str] = None
 
     # RAGFlow 콜백 전용 인증 토큰 (X-Internal-Token 헤더)
-    # RAGFlow → AI 콜백 요청 시 사용 (예: /internal/ai/callbacks/ragflow/ingest)
+    # RAGFlow → AI 콜백 요청 시 사용 (예: /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest)
     # 보안: Backend 토큰과 분리하여 토큰 유출 시 피해 범위 제한
-    RAGFLOW_CALLBACK_TOKEN: Optional[str] = None
+    AI_CALLBACK_TOKEN: Optional[str] = None
 
     # 백엔드 API 타임아웃 (초)
     BACKEND_TIMEOUT_SEC: float = 30.0
@@ -494,6 +552,7 @@ class Settings(BaseSettings):
         "RAGFLOW_BASE_URL",
         "LLM_BASE_URL",
         "BACKEND_BASE_URL",
+        "INFRA_BASE_URL",
         "PII_BASE_URL",
         mode="before",
     )
@@ -509,6 +568,42 @@ class Settings(BaseSettings):
     BACKEND_API_TOKEN: Optional[str] = None
 
     # =========================================================================
+    # Conversation State 설정 (멀티턴 맥락 유지)
+    # =========================================================================
+    # 저장소 백엔드 선택 ("memory" | "redis")
+    # - memory: 단일 인스턴스용, 개발/테스트 환경
+    # - redis: 멀티 인스턴스용, Production 환경
+    STATE_STORE_BACKEND: str = "memory"
+
+    # Redis URL (STATE_STORE_BACKEND=redis 일 때 필수)
+    STATE_STORE_REDIS_URL: Optional[str] = None
+
+    # TTL 정책
+    STATE_TTL_SECONDS: int = 3600  # 기본 60분
+    STATE_TTL_SLIDING: bool = True  # 활동 시 TTL 갱신
+    STATE_TTL_MAX_SECONDS: int = 7200  # 최대 2시간 (sliding 상한)
+
+    # 상태 갱신 임계값 (B: 갱신 규칙)
+    STATE_UPDATE_HIGH_SCORE_THRESHOLD: float = 0.75  # 고신뢰 판정 임계값
+    STATE_UPDATE_SCORE_GAP_THRESHOLD: float = 0.1  # top1-top2 격차 임계값
+
+    # 히스토리 관리
+    CHAT_HISTORY_MAX_TURNS: int = 4  # 최근 N턴 (user 기준)
+    CHAT_HISTORY_MAX_TOKENS: int = 2000  # 히스토리 토큰 상한
+    CHAT_TOKEN_COUNTING_MODE: str = "char_conservative"  # "tiktoken" | "char_conservative"
+
+    # Recent docs 스택 크기
+    STATE_RECENT_DOCS_MAX_SIZE: int = 5
+
+    # 검색 병합 설정 (E)
+    SEARCH_MERGE_ENABLED: bool = True  # 일반 검색 + filter 검색 병합
+    SEARCH_RANK_BUMP_MAX: int = 2  # 최대 순위 승급 칸 수
+
+    # 품질 게이트 설정 (F)
+    QUALITY_TOP1_THRESHOLD: float = 0.55  # top1 점수 하한
+    QUALITY_GAP_THRESHOLD: float = 0.05  # top1-top2 격차 임계값
+
+    # =========================================================================
     # CORS 설정
     # =========================================================================
     # 허용할 Origin (쉼표로 구분)
@@ -521,6 +616,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",  # .env에 정의되지 않은 추가 필드 무시
+        env_ignore_empty=True,  # 빈 환경변수 무시
     )
 
     # =========================================================================
@@ -609,17 +705,17 @@ class Settings(BaseSettings):
             str: Backend 서비스 URL, 미설정 시 None
         """
         if self.BACKEND_BASE_URL:
-            return str(self.BACKEND_BASE_URL)
+            return str(self.BACKEND_BASE_URL).rstrip("/")
 
         if self.AI_ENV == "real":
             if not self.BACKEND_BASE_URL_REAL:
                 return None
-            return self.BACKEND_BASE_URL_REAL
+            return self.BACKEND_BASE_URL_REAL.rstrip("/")
 
         # mock 모드: 빈 문자열이면 None 반환 (테스트 환경 지원)
         if not self.BACKEND_BASE_URL_MOCK:
             return None
-        return self.BACKEND_BASE_URL_MOCK
+        return self.BACKEND_BASE_URL_MOCK.rstrip("/")
 
     @property
     def infra_base_url(self) -> Optional[str]:

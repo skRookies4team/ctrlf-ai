@@ -64,6 +64,7 @@ class AnswerGuardError(str, Enum):
     CITATION_HALLUCINATION = "CITATION_HALLUCINATION"  # 가짜 조항 인용
     LANGUAGE_ERROR = "LANGUAGE_ERROR"  # 언어 오류 (영어 혼입)
     REQUEST_ID_MISMATCH = "REQUEST_ID_MISMATCH"  # request_id 불일치
+    STATS_GAP = "STATS_GAP"  # Phase 56: 통계/집계 데이터 부족
 
 
 # [E] 불만/욕설 키워드 리스트
@@ -115,6 +116,74 @@ CITATION_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# =============================================================================
+# Phase 55: 환각 방지 강화
+# =============================================================================
+
+# [G] 통계/순위 관련 환각 패턴 (RAG sources 없이 이런 주장은 환각일 가능성 높음)
+STATISTICAL_CLAIM_PATTERNS = [
+    r"TOP\s*\d+",
+    r"가장\s*많이",
+    r"가장\s*빈번",
+    r"가장\s*흔한",
+    r"\d+\s*위",
+    r"순위",
+    r"통계에\s*따르면",
+    r"통계를\s*보면",
+    r"최근\s*\d+\s*년",
+    r"약?\s*\d+\s*%",  # Phase 55: "45%", "약 45%" 등 퍼센트 표현
+    r"대부분의\s*경우",
+    r"일반적으로\s*알려진",
+    r"평균적으로",
+    r"대다수",
+]
+
+STATISTICAL_CLAIM_REGEX = re.compile(
+    "|".join(STATISTICAL_CLAIM_PATTERNS),
+    re.IGNORECASE
+)
+
+# =============================================================================
+# Phase 56: 통계 질문 Out-of-Scope Fast Path
+# =============================================================================
+
+# [H] "순수 통계" 신호: 기간/랭킹/집계 표현 (문서 Q&A로 답 불가)
+STATS_SIGNAL_PATTERNS = [
+    r"최근\s*\d+\s*(년|개월|달|주|일)",
+    r"지난\s*\d+\s*(년|개월|달|주|일)",
+    r"\bTOP\s*\d+\b",
+    r"상위\s*\d+",
+    r"\d+\s*위",
+    r"(통계|건수|횟수|비율|분포|추이|랭킹|순위)",
+    r"(가장|최다|최고|최저)\s*(많|적|높|낮|자주|빈번)",
+]
+
+# Incident 도메인 통계 질문 키워드 (위반/사고 중심)
+INCIDENT_METRIC_PATTERNS = [
+    r"(위반|보안\s*사고|사고|유출|침해|피해|해킹)",
+]
+
+# 신고/제보/보고는 통계가 아니라 액션이므로 제외
+REPORT_BYPASS_PATTERNS = [
+    r"(신고|제보|보고|접수|발생\s*신고|사고\s*신고)",
+]
+
+_STATS_SIGNAL_RE = re.compile("|".join(STATS_SIGNAL_PATTERNS), re.IGNORECASE)
+_INCIDENT_METRIC_RE = re.compile("|".join(INCIDENT_METRIC_PATTERNS))
+_REPORT_BYPASS_RE = re.compile("|".join(REPORT_BYPASS_PATTERNS))
+
+# [I] 시간/통계 표현 치환 규칙 (Sanitizer용)
+STATS_REPLACEMENTS = [
+    (re.compile(r"(최근|지난)\s*\d+\s*(년|개월|달|주|일)\s*(동안|간)?"), "일반적으로"),
+    (re.compile(r"\bTOP\s*\d+\b", re.IGNORECASE), "주요"),
+    (re.compile(r"(상위)\s*\d+"), "주요"),
+    (re.compile(r"\d+\s*위"), "주요"),
+    (re.compile(r"(가장)\s*(많이|자주)"), "자주"),
+    (re.compile(r"(가장)\s*(많은|빈번한)"), "자주 언급되는"),
+]
+
+# 근거 없는 수치 주장 패턴 (문장 단위 제거)
+NUMERIC_CLAIM_SENTENCE_RE = re.compile(r"[^.\n]*\b\d+\s*(건|회|%|명)\b[^.\n]*[.\n]?")
 
 
 # =============================================================================
@@ -151,6 +220,30 @@ class AnswerTemplates:
         "정확한 정보가 필요하시면 해당 규정 문서를 업로드해 주세요."
     )
 
+    # Phase 55: RAG sources 없을 때 차단 템플릿
+    NO_SOURCE_BLOCK = (
+        "죄송합니다. 요청하신 내용과 관련된 사내 문서를 찾지 못했습니다.\n"
+        "정확한 정보는 담당 부서에 직접 문의해 주시기 바랍니다."
+    )
+
+    # Phase 55: 조항 인용 환각 차단 템플릿
+    CITATION_HALLUCINATION_BLOCK = (
+        "죄송합니다. 요청하신 내용에 대한 정확한 근거 문서를 확인하지 못했습니다.\n"
+        "정확한 조항 및 규정 정보는 담당 부서에 직접 문의해 주시기 바랍니다."
+    )
+
+    # Phase 55: 통계/순위 환각 차단 템플릿
+    STATISTICAL_HALLUCINATION_BLOCK = (
+        "죄송합니다. 요청하신 통계/순위 정보와 관련된 데이터를 찾지 못했습니다.\n"
+        "정확한 통계 정보는 담당 부서에 직접 문의해 주시기 바랍니다."
+    )
+
+    # Phase 55: 소프트 가드레일 prefix
+    SOFT_GUARDRAIL_PREFIX = (
+        "※ 관련 사내 문서를 찾지 못하여 정확한 안내가 어렵습니다.\n"
+        "아래 내용은 참고용이며, 정확한 정보는 "
+    )
+
     # [D] 언어 오류 템플릿
     LANGUAGE_ERROR = (
         "언어 오류가 감지되어 답변을 중단합니다.\n"
@@ -165,6 +258,20 @@ class AnswerTemplates:
     COMPLAINT_REASON_GENERAL = "관련 정보가 충분하지 않아 정확한 답변이 어려웠어요."
 
     COMPLAINT_NEXT_STEP = "문서를 인덱싱하면 그 기준으로만 답하게 만들게요. 다시 질문해 주세요."
+
+    # Phase 56: 통계 질문 Out-of-Scope 템플릿
+    STATS_OUT_OF_SCOPE = (
+        "요청하신 '최근 N기간/Top N' 위반 통계는 현재 시스템에 집계 데이터가 없어 "
+        "제공할 수 없습니다.\n\n"
+        "대신 '자주 언급되는 위반 유형(안내문서 기준)' 요약은 제공할 수 있어요.\n"
+        "필요하시면 다시 질문해 주세요."
+    )
+
+    # Phase 56: 통계 Sanitizer용 prefix (RAG 뚫린 경우 후처리)
+    STATS_SANITIZER_PREFIX = (
+        "⚠️ 아래 내용은 '통계 집계'가 아니라, 제공된 안내문서에 기반한 "
+        "일반 사례 요약입니다.\n\n"
+    )
 
     # Phase 45: 소프트 가드레일 안내 템플릿
     # sources=0일 때 "확정 답변" 대신 이 안내를 앞에 붙임
@@ -529,6 +636,127 @@ class AnswerGuardService:
         return f"{apology}\n\n{reason}\n\n{next_step}"
 
     # -------------------------------------------------------------------------
+    # [H] Stats Out-of-Scope Fast Path (Phase 56: 통계 질문 조기 차단)
+    # -------------------------------------------------------------------------
+
+    def check_stats_out_of_scope_fast_path(
+        self,
+        user_query: str,
+        domain: Optional[str] = None,
+    ) -> Optional[str]:
+        """통계/집계 질문을 감지하고 out-of-scope로 즉시 차단합니다.
+
+        Phase 56: "최근 N년/Top N/가장 많이" 같은 통계 질문은
+        문서 RAG로 답할 수 없으므로 조기 차단.
+
+        차단 조건:
+        1. 통계 신호 패턴 + Incident 도메인 키워드
+        2. 단, 신고/제보 액션은 제외 (bypass)
+
+        Args:
+            user_query: 사용자 입력
+            domain: 도메인 힌트 (INCIDENT 등)
+
+        Returns:
+            차단 응답 문자열, 또는 None (통과)
+        """
+        q = user_query.strip()
+
+        # 1. 신고/제보 액션은 bypass (통계 아님)
+        if _REPORT_BYPASS_RE.search(q):
+            return None
+
+        # 2. 통계 신호 + Incident 키워드 모두 있어야 차단
+        has_stats_signal = bool(_STATS_SIGNAL_RE.search(q))
+        has_incident_metric = bool(_INCIDENT_METRIC_RE.search(q))
+
+        # 도메인 힌트가 INCIDENT인 경우도 고려
+        is_incident_domain = domain and domain.upper() == "INCIDENT"
+
+        if has_stats_signal and (has_incident_metric or is_incident_domain):
+            logger.info(
+                f"Stats out-of-scope fast path triggered: "
+                f"query_len={len(user_query)}, domain={domain}"
+            )
+            return AnswerTemplates.STATS_OUT_OF_SCOPE
+
+        return None
+
+    # -------------------------------------------------------------------------
+    # [I] Stats Language Sanitizer (Phase 56: 통계 표현 후처리)
+    # -------------------------------------------------------------------------
+
+    def sanitize_stats_language(
+        self,
+        answer: str,
+        query: str,
+        sources: List[ChatSource],
+        add_prefix: bool = True,
+    ) -> Tuple[str, bool]:
+        """답변에서 시간/통계 표현을 정제합니다.
+
+        Phase 56: 라우팅에서 못 잡고 RAG로 들어온 통계 질문에 대해
+        "최근 1년/Top5" 같은 확정 뉘앙스를 제거.
+
+        Args:
+            answer: LLM 생성 답변
+            query: 원본 질문 (통계 신호 감지용)
+            sources: RAG 소스 (근거 검증용)
+            add_prefix: prefix 추가 여부
+
+        Returns:
+            (sanitized_answer, was_modified) 튜플
+        """
+        # 질문에 통계 신호가 없으면 패스
+        if not _STATS_SIGNAL_RE.search(query):
+            return (answer, False)
+
+        # 소스에 시간/수치 근거가 있는지 간단히 체크
+        # (소스 텍스트에 연도/기간/수치가 있으면 근거 있음으로 판단)
+        source_text = " ".join(s.snippet or "" for s in sources)
+        has_temporal_evidence = bool(
+            re.search(r"\d{4}년|\d+\s*(년|개월|건|회|%)", source_text)
+        )
+
+        if has_temporal_evidence:
+            # 소스에 근거가 있으면 sanitize 안 함
+            return (answer, False)
+
+        modified = False
+        result = answer
+
+        # 1. 수치 주장 문장 제거 (N건, N%, N명 등)
+        new_result = NUMERIC_CLAIM_SENTENCE_RE.sub("", result)
+        if new_result != result:
+            result = new_result
+            modified = True
+
+        # 2. 시간/통계 표현 치환
+        for pattern, replacement in STATS_REPLACEMENTS:
+            new_result = pattern.sub(replacement, result)
+            if new_result != result:
+                result = new_result
+                modified = True
+
+        # 3. prefix 추가 (수정된 경우에만)
+        if modified and add_prefix:
+            if not result.startswith("⚠️"):
+                result = AnswerTemplates.STATS_SANITIZER_PREFIX + result.strip()
+
+        return (result.strip(), modified)
+
+    def has_stats_signal(self, query: str) -> bool:
+        """질문에 통계 신호가 있는지 확인합니다.
+
+        Args:
+            query: 사용자 질문
+
+        Returns:
+            통계 신호 존재 여부
+        """
+        return bool(_STATS_SIGNAL_RE.search(query))
+
+    # -------------------------------------------------------------------------
     # [A] Answerability Gate (답변 가능 여부 게이트)
     # -------------------------------------------------------------------------
 
@@ -641,10 +869,10 @@ class AnswerGuardService:
 
         [B] 답변에 "제N조/조항/항" 패턴이 있으면 RAG sources에도 있는지 확인.
 
-        Phase 44: Citation 검증 완화
-        - RAG sources가 없어도 LLM의 일반 법률 지식 기반 답변 허용
-        - 차단 대신 경고 로그만 남김
-        - 명백한 hallucination만 차단 (예: 실존하지 않는 조항 직접 인용)
+        Phase 55: Citation 검증 강화 (Phase 44 롤백) - 환각 방지
+        - RAG sources가 없으면 조항 인용 차단
+        - sources에 없는 조항 인용 차단
+        - 통계/순위 주장도 검증
 
         Args:
             answer: LLM 생성 답변
@@ -656,25 +884,47 @@ class AnswerGuardService:
             - 유효: (True, 원본 answer)
             - 무효: (False, 차단 템플릿)
         """
+        settings = get_settings()
+        strict_mode = getattr(settings, 'CITATION_VALIDATION_STRICT', True)
+
         # 답변에서 조항 패턴 추출
         answer_citations = CITATION_PATTERN.findall(answer)
 
         if not answer_citations:
-            # 조항 패턴 없음 - 검증 불필요
+            # 조항 패턴 없음 - 통계/순위 환각 체크 (Phase 55)
+            if self._contains_statistical_claim(answer) and not sources:
+                logger.warning(
+                    f"[HallucinationGuard] Statistical claim without sources - BLOCKED | "
+                    f"answer_preview='{answer[:100]}...'"
+                )
+                if debug_info:
+                    debug_info.citation_valid = False
+                return (False, AnswerTemplates.STATISTICAL_HALLUCINATION_BLOCK)
+
             if debug_info:
                 debug_info.citation_valid = True
             return (True, answer)
 
-        # Phase 44: RAG sources가 없어도 답변 허용 (경고만 로그)
-        # LLM이 일반적인 법률 지식으로 조항을 언급하는 것은 허용
+        # Phase 55: RAG sources가 없으면 조항 인용 차단 (환각 방지)
         if not sources:
-            logger.info(
-                f"Citation INFO: found {len(answer_citations)} citations "
-                f"without RAG sources - allowing LLM general knowledge"
-            )
-            if debug_info:
-                debug_info.citation_valid = True  # 유효로 처리
-            return (True, answer)  # 차단하지 않고 허용
+            if strict_mode:
+                logger.warning(
+                    f"[HallucinationGuard] Citation without sources - BLOCKED | "
+                    f"citations={answer_citations}"
+                )
+                if debug_info:
+                    debug_info.citation_valid = False
+                    debug_info.citation_blocked_patterns = answer_citations
+                return (False, AnswerTemplates.CITATION_HALLUCINATION_BLOCK)
+            else:
+                # strict_mode=False면 기존 동작 (경고만)
+                logger.info(
+                    f"Citation INFO: found {len(answer_citations)} citations "
+                    f"without RAG sources - allowing (strict_mode=False)"
+                )
+                if debug_info:
+                    debug_info.citation_valid = True
+                return (True, answer)
 
         # RAG sources 텍스트 결합
         source_text = " ".join(
@@ -702,23 +952,61 @@ class AnswerGuardService:
                 if not found_in_source:
                     blocked_citations.append(citation)
 
-        # Phase 44: Citation 검증 완화
-        # RAG sources가 있어도 일치하지 않는 조항은 경고만 (차단하지 않음)
-        # LLM이 관련 지식으로 추가 조항을 언급하는 것은 허용
+        # Phase 55: sources에 없는 조항 인용 차단 (환각 방지)
         if blocked_citations:
-            logger.info(
-                f"Citation INFO: {len(blocked_citations)} patterns not in sources "
-                f"({blocked_citations}) - allowing as supplementary info"
-            )
-            # 차단하지 않고 허용 (경고만)
-            if debug_info:
-                debug_info.citation_valid = True
-                debug_info.citation_blocked_patterns = blocked_citations  # 로그용으로 기록
+            if strict_mode:
+                logger.warning(
+                    f"[HallucinationGuard] Citation not in sources - BLOCKED | "
+                    f"blocked={blocked_citations}"
+                )
+                if debug_info:
+                    debug_info.citation_valid = False
+                    debug_info.citation_blocked_patterns = blocked_citations
+                return (False, AnswerTemplates.CITATION_HALLUCINATION_BLOCK)
+            else:
+                # strict_mode=False면 기존 동작 (경고만)
+                logger.info(
+                    f"Citation INFO: {len(blocked_citations)} patterns not in sources "
+                    f"({blocked_citations}) - allowing (strict_mode=False)"
+                )
+                if debug_info:
+                    debug_info.citation_valid = True
+                    debug_info.citation_blocked_patterns = blocked_citations
 
         if debug_info:
             debug_info.citation_valid = True
 
         return (True, answer)
+
+    def _contains_statistical_claim(self, answer: str) -> bool:
+        """Phase 55: 답변에 통계/순위 관련 주장이 포함되어 있는지 확인합니다.
+
+        RAG sources 없이 이런 주장을 하면 환각일 가능성이 높습니다.
+
+        Args:
+            answer: LLM 생성 답변
+
+        Returns:
+            통계/순위 주장 포함 여부
+        """
+        return bool(STATISTICAL_CLAIM_REGEX.search(answer))
+
+    def get_no_source_template(self, domain: Optional[str] = None) -> str:
+        """Phase 55: RAG sources 없을 때 반환할 고정 템플릿을 생성합니다.
+
+        LLM 호출을 스킵하고 이 템플릿만 반환하여 환각을 원천 차단합니다.
+
+        Args:
+            domain: 도메인 (담당부서 안내용)
+
+        Returns:
+            고정 답변 템플릿
+        """
+        contact_info = self.get_contact_info(domain=domain)
+        return (
+            f"{AnswerTemplates.NO_SOURCE_BLOCK}\n\n"
+            f"📞 담당 부서: {contact_info}"
+        )
 
     # -------------------------------------------------------------------------
     # [F] Debug Logging (디버그 가시성)

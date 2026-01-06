@@ -83,7 +83,7 @@ Metric: COSINE
 |--------|------|------|------|
 | **AI Gateway** | 로컬 | 8000 | 채팅/RAG API, LLM 호출 |
 | **Backend** | 로컬 | 9002 | 콜백 수신, 사용자/세션 관리 |
-| **vLLM** | 외부 | .env 참조 | LLM 응답 생성 (Qwen2.5-7B) |
+| **vLLM** | 외부 | .env 참조 | LLM 응답 생성 |
 | **Embedding** | 외부 | .env 참조 | 임베딩 벡터 생성 (ko-sroberta) |
 | **Milvus** | 외부 | .env 참조 | 벡터 검색 |
 
@@ -137,7 +137,7 @@ curl http://localhost:8000/health
                             ▼
                     ┌─────────────────┐
                     │  LLM Server     │
-                    │  (Qwen2.5-7B)   │
+                    │                 │
                     └─────────────────┘
 ```
 

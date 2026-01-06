@@ -13,12 +13,13 @@ Phase 2 리팩토링:
 
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from app.models.chat import ChatSource, ChatRequest
+from app.models.chat import ChatSource, ChatRequest, ChatMessage
 from app.services.backend_context_formatter import BackendContextFormatter
 from app.services.guardrail_service import GuardrailService
 
 if TYPE_CHECKING:
     from app.models.intent import IntentType, UserRole
+    from app.models.conversation_state import ConversationState
 
 
 # =============================================================================
@@ -81,10 +82,23 @@ SYSTEM_PROMPT_WITH_RAG = """당신은 회사 내부 정보보호 및 사규를 �
 
 # System prompt template for LLM (RAG context가 없는 경우)
 # Phase 45: 한국어 강제 지침 추가
+# Phase 55: 환각 방지 강화 - 일반 지식 답변 금지
 SYSTEM_PROMPT_NO_RAG = """당신은 회사 내부 정보보호 및 사규를 안내하는 AI 어시스턴트입니다.
-현재 관련 문서를 찾지 못했습니다. 일반적인 지식을 바탕으로 답변하되,
-구체적인 사내 규정이나 정책에 대해서는 "관련 문서를 찾지 못했으므로, 담당 부서에 직접 문의해 주세요"라고 안내해 주세요.
-추측이나 거짓 정보를 제공하지 마세요.
+
+[중요] 현재 관련 문서를 찾지 못했습니다.
+
+[절대 금지 - 환각 방지]
+- 일반적인 지식이나 추측으로 답변하지 마세요.
+- 사내 규정, 정책, 절차, 통계, 순위 등을 만들어내지 마세요.
+- "보통", "일반적으로", "대부분의 회사에서는" 같은 표현으로 답변하지 마세요.
+- "제N조", "N항" 같은 조항을 임의로 인용하지 마세요.
+
+[필수 응답 형식]
+아래 문장을 그대로 출력하세요:
+"죄송합니다. 요청하신 내용과 관련된 사내 문서를 찾지 못했습니다.
+정확한 정보는 담당 부서에 직접 문의해 주시기 바랍니다."
+
+위 문장 외에 다른 내용을 추가하지 마세요.
 """ + KOREAN_ONLY_INSTRUCTION
 
 # RAG 검색 결과가 없을 때 사용자에게 안내할 메시지
@@ -162,6 +176,8 @@ class MessageBuilder:
         domain: Optional[str] = None,
         intent: Optional["IntentType"] = None,
         soft_guardrail_instruction: Optional[str] = None,
+        conversation_state: Optional["ConversationState"] = None,
+        history: Optional[List[ChatMessage]] = None,
     ) -> List[Dict[str, str]]:
         """
         RAG 기반 LLM 메시지를 구성합니다.
@@ -175,6 +191,8 @@ class MessageBuilder:
             domain: 도메인
             intent: 의도
             soft_guardrail_instruction: Phase 46: 소프트 가드레일용 시스템 지침
+            conversation_state: 대화 상태 (멀티턴 맥락 유지용)
+            history: truncated 히스토리 (최근 N턴)
 
         Returns:
             List[Dict[str, str]]: LLM 메시지 목록
@@ -208,6 +226,12 @@ class MessageBuilder:
             system_content = SYSTEM_PROMPT_WITH_RAG
             system_content += "\n\n참고 문서: (검색 대상 아님)"
 
+        # 멀티턴 맥락: 대화 상태 컨텍스트 추가
+        if conversation_state:
+            state_context = conversation_state.to_prompt_context()
+            if state_context:
+                system_content += f"\n\n[대화 맥락]\n{state_context}"
+
         # Combine guardrail prefix with system content
         if guardrail_prefix:
             system_content = guardrail_prefix + "\n\n" + system_content
@@ -223,6 +247,18 @@ class MessageBuilder:
             "role": "system",
             "content": system_content,
         })
+
+        # 멀티턴: 히스토리 추가
+        # 주의: history는 이미 "현재 질문이 제외된" 상태로 전달받아야 함
+        # (ChatService에서 truncate_history_safe 결과의 [:-1]을 전달)
+        # content 비교 방식은 동일 질문 반복 시 중간 턴까지 스킵될 수 있어 위험
+        if history:
+            for msg in history:
+                if msg.role in ("user", "assistant"):
+                    messages.append({
+                        "role": msg.role,
+                        "content": msg.content,
+                    })
 
         messages.append({
             "role": "user",

@@ -182,12 +182,17 @@ class AnswerGenerator:
         # 인텐트별 기본 폴백 메시지
         fallback_templates = {
             "Q1": self._format_q1_fallback,
+            "Q2": self._format_q2_fallback,
             "Q3": self._format_q3_fallback,
             "Q5": self._format_q5_fallback,
             "Q6": self._format_q6_fallback,
+            "Q7": self._format_q7_fallback,
+            "Q8": self._format_q8_fallback,
             "Q9": self._format_q9_fallback,
             "Q11": self._format_q11_fallback,
             "Q14": self._format_q14_fallback,
+            "Q18": self._format_q18_fallback,
+            "Q19": self._format_q19_fallback,
             "Q20": self._format_q20_fallback,
         }
 
@@ -218,6 +223,35 @@ class AnswerGenerator:
 
         return f"미이수 필수 교육이 {remaining}건 있어요."
 
+    def _format_q2_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q2 (특정 토픽 교육 이수 여부) 폴백."""
+        topic_label = facts.metrics.get("topic_label", "해당 토픽")
+        education_count = facts.metrics.get("education_count", 0)
+        completed_count = facts.metrics.get("completed_count", 0)
+        is_completed = facts.metrics.get("is_completed", False)
+
+        if education_count == 0:
+            return f"{topic_label} 관련 교육이 없어요."
+
+        if is_completed:
+            return f"{topic_label} 교육을 모두 이수했어요! ({completed_count}/{education_count}건 완료)"
+
+        items = facts.items
+        if items:
+            lines = [f"{topic_label} 교육 이수 현황: {completed_count}/{education_count}건 완료"]
+            for item in items[:5]:
+                title = item.get("title", "")
+                is_done = item.get("is_completed", False)
+                status = "완료" if is_done else "미완료"
+                progress = item.get("progress_percent", 0)
+                if not is_done:
+                    lines.append(f"- {title} ({status}, {progress}%)")
+                else:
+                    lines.append(f"- {title} ({status})")
+            return "\n".join(lines)
+
+        return f"{topic_label} 교육: {completed_count}/{education_count}건 이수"
+
     def _format_q3_fallback(self, facts: PersonalizationFacts) -> str:
         """Q3 (이번 달 데드라인 필수 교육) 폴백."""
         count = facts.metrics.get("deadline_count", 0)
@@ -239,39 +273,92 @@ class AnswerGenerator:
         return f"이번 달 마감되는 필수 교육이 {count}건 있어요."
 
     def _format_q5_fallback(self, facts: PersonalizationFacts) -> str:
-        """Q5 (평균 비교) 폴백."""
+        """Q5 (내 평균 vs 부서/전사 평균) 폴백."""
         my_avg = facts.metrics.get("my_average", 0)
         dept_avg = facts.metrics.get("dept_average", 0)
         company_avg = facts.metrics.get("company_average", 0)
 
-        dept_name = facts.extra.get("target_dept_name", "부서")
-
-        lines = []
-        if my_avg:
-            lines.append(f"- 내 평균: {my_avg:.1f}점")
+        lines = [f"내 평균 점수: {my_avg}점"]
         if dept_avg:
-            lines.append(f"- {dept_name} 평균: {dept_avg:.1f}점")
+            diff = my_avg - dept_avg
+            diff_text = f"+{diff:.1f}" if diff > 0 else f"{diff:.1f}"
+            lines.append(f"- 부서 평균: {dept_avg}점 (나와 {diff_text}점 차이)")
         if company_avg:
-            lines.append(f"- 전사 평균: {company_avg:.1f}점")
+            diff = my_avg - company_avg
+            diff_text = f"+{diff:.1f}" if diff > 0 else f"{diff:.1f}"
+            lines.append(f"- 전사 평균: {company_avg}점 (나와 {diff_text}점 차이)")
 
-        if lines:
-            return "교육 점수 평균 비교:\n" + "\n".join(lines)
-        return "평균 데이터를 조회할 수 없어요."
+        return "\n".join(lines)
 
     def _format_q6_fallback(self, facts: PersonalizationFacts) -> str:
-        """Q6 (많이 틀린 토픽 TOP3) 폴백."""
+        """Q6 (가장 낮은/높은 점수 교육 TOP3) 폴백."""
         items = facts.items
         if not items:
-            return "틀린 문제 데이터가 없어요. 훌륭합니다!"
+            return "퀴즈 응시 기록이 없어요."
 
-        lines = ["많이 틀린 보안 토픽 TOP3:"]
+        lines = ["취약 과목 TOP3:"]
         for item in items[:3]:
             rank = item.get("rank", "")
             topic = item.get("topic", "")
             wrong_rate = item.get("wrong_rate", 0)
-            lines.append(f"{rank}. {topic} (오답률: {wrong_rate:.1f}%)")
+            lines.append(f"{rank}. {topic} (오답률 {wrong_rate}%)")
 
         return "\n".join(lines)
+
+    def _format_q7_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q7 (특정 토픽 퀴즈 점수 조회) 폴백."""
+        topic_label = facts.metrics.get("topic_label", "해당 토픽")
+        has_attempt = facts.metrics.get("has_attempt", False)
+        average_score = facts.metrics.get("average_score", 0)
+        passed_count = facts.metrics.get("passed_count", 0)
+        education_count = facts.metrics.get("education_count", 0)
+
+        if not has_attempt:
+            return f"{topic_label} 퀴즈를 아직 응시하지 않았어요."
+
+        items = facts.items
+        if items:
+            lines = [f"{topic_label} 퀴즈 현황: 평균 {average_score}점 ({passed_count}/{education_count}건 통과)"]
+            for item in items[:5]:
+                title = item.get("title", "")
+                best_score = item.get("best_score", 0)
+                passed = item.get("passed", False)
+                status = "통과" if passed else "미통과"
+                if item.get("has_attempt", False):
+                    lines.append(f"- {title}: {best_score}점 ({status})")
+                else:
+                    lines.append(f"- {title}: 미응시")
+            return "\n".join(lines)
+
+        return f"{topic_label} 퀴즈 평균 점수: {average_score}점"
+
+    def _format_q8_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q8 (특정 토픽 교육 시청 완료 여부) 폴백."""
+        topic_label = facts.metrics.get("topic_label", "해당 토픽")
+        education_count = facts.metrics.get("education_count", 0)
+        completed_count = facts.metrics.get("completed_count", 0)
+        is_all_completed = facts.metrics.get("is_all_completed", False)
+
+        if education_count == 0:
+            return f"{topic_label} 관련 교육이 없어요."
+
+        if is_all_completed:
+            return f"{topic_label} 교육 영상을 모두 시청 완료했어요! ({completed_count}건)"
+
+        items = facts.items
+        if items:
+            lines = [f"{topic_label} 교육 시청 현황: {completed_count}/{education_count}건 완료"]
+            for item in items[:5]:
+                title = item.get("title", "")
+                is_done = item.get("is_completed", False)
+                progress = item.get("progress_percent", 0)
+                if is_done:
+                    lines.append(f"- {title}: 시청 완료")
+                else:
+                    lines.append(f"- {title}: {progress}% 시청")
+            return "\n".join(lines)
+
+        return f"{topic_label} 교육: {completed_count}/{education_count}건 시청 완료"
 
     def _format_q9_fallback(self, facts: PersonalizationFacts) -> str:
         """Q9 (이번 주 할 일) 폴백."""
@@ -319,6 +406,79 @@ class AnswerGenerator:
         if len(lines) > 1:
             return "\n".join(lines)
         return "포인트 잔액을 조회할 수 없어요."
+
+    def _format_q18_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q18 (보안교육/특정 토픽 완료 여부) 폴백."""
+        topic_label = facts.metrics.get("topic_label", "보안 교육")
+        education_count = facts.metrics.get("education_count", 0)
+        video_completed_count = facts.metrics.get("video_completed_count", 0)
+        quiz_passed_count = facts.metrics.get("quiz_passed_count", 0)
+        is_fully_completed = facts.metrics.get("is_fully_completed", False)
+
+        if education_count == 0:
+            return f"{topic_label} 관련 교육이 없어요."
+
+        if is_fully_completed:
+            return f"{topic_label}을 모두 완료했어요! (영상 {video_completed_count}건, 퀴즈 {quiz_passed_count}건 통과)"
+
+        items = facts.items
+        if items:
+            lines = [f"{topic_label} 이수 현황:"]
+            lines.append(f"- 영상 시청: {video_completed_count}/{education_count}건 완료")
+            lines.append(f"- 퀴즈 통과: {quiz_passed_count}/{education_count}건 통과")
+
+            incomplete_items = [item for item in items if not item.get("video_completed", False) or not item.get("quiz_passed", False)]
+            if incomplete_items:
+                lines.append("")
+                lines.append("미완료 항목:")
+                for item in incomplete_items[:3]:
+                    title = item.get("title", "")
+                    video_done = "완료" if item.get("video_completed", False) else "미완료"
+                    quiz_done = "통과" if item.get("quiz_passed", False) else "미통과"
+                    lines.append(f"- {title} (영상: {video_done}, 퀴즈: {quiz_done})")
+            return "\n".join(lines)
+
+        return f"{topic_label}: 영상 {video_completed_count}/{education_count}건, 퀴즈 {quiz_passed_count}/{education_count}건 완료"
+
+    def _format_q19_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q19 (특정 토픽 교육 마감일 조회) 폴백."""
+        topic_label = facts.metrics.get("topic_label", "해당 토픽")
+        has_deadline = facts.metrics.get("has_deadline", False)
+        nearest_deadline = facts.metrics.get("nearest_deadline", "")
+
+        if not has_deadline:
+            return f"{topic_label} 교육에는 설정된 마감일이 없어요."
+
+        items = facts.items
+        if items:
+            lines = [f"{topic_label} 교육 마감일:"]
+
+            # 미완료 항목만 먼저 표시
+            incomplete_items = [item for item in items if not item.get("is_completed", False)]
+            for item in incomplete_items[:5]:
+                title = item.get("title", "")
+                deadline = item.get("deadline", "")
+                if deadline:
+                    # ISO 형식 날짜를 읽기 쉽게 변환
+                    try:
+                        deadline_str = deadline[:10]  # YYYY-MM-DD 형식
+                    except Exception:
+                        deadline_str = deadline
+                    lines.append(f"- {title}: {deadline_str}까지")
+
+            if not incomplete_items:
+                lines.append("모든 교육을 이미 완료했어요!")
+
+            return "\n".join(lines)
+
+        if nearest_deadline:
+            try:
+                deadline_str = nearest_deadline[:10]
+            except Exception:
+                deadline_str = nearest_deadline
+            return f"{topic_label} 교육 마감일: {deadline_str}"
+
+        return f"{topic_label} 교육 마감일 정보를 확인해주세요."
 
     def _format_q20_fallback(self, facts: PersonalizationFacts) -> str:
         """Q20 (올해 HR 할 일) 폴백."""

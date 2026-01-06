@@ -43,7 +43,7 @@ def get_chat_service() -> ChatService:
     summary="Generate AI Chat Response",
     description=(
         "Receives user query with conversation history and generates AI response. "
-        "Currently returns dummy response. RAG and LLM integration coming soon."
+        "Uses RAG for context retrieval and LLM for response generation."
     ),
     responses={
         200: {

@@ -78,7 +78,10 @@ from app.core.metrics import (
     metrics,
 )
 from app.models.chat import (
+    ChatAction,
+    ChatActionType,
     ChatAnswerMeta,
+    ChatMessage,
     ChatRequest,
     ChatResponse,
     ChatSource,
@@ -93,6 +96,7 @@ from app.models.router_types import (
     Tier0Intent,
     TIER0_ROUTING_POLICY,
 )
+# from app.clients.ab_milvus_client import get_client_info_by_model  # 모듈이 존재하지 않음
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, LLMCompletionResult, get_llm_client
 from app.clients.personalization_client import PersonalizationClient
@@ -166,6 +170,12 @@ from app.services.forbidden_query_filter import (
     ForbiddenCheckResult,
     get_forbidden_query_filter,
 )
+from app.services.privacy_query_gate import (
+    PrivacyQueryGate,
+    PrivacyGateResult,
+    PrivacyGateDecision,
+    get_privacy_gate,
+)
 from app.core.retrieval_context import (
     set_retrieval_blocked,
     reset_retrieval_context,
@@ -174,6 +184,15 @@ from app.core.backend_context import (
     set_backend_blocked,
     reset_backend_context,
 )
+# 멀티턴 맥락 유지
+from app.models.conversation_state import ConversationState
+from app.services.chat.context_handler import (
+    ChatContextHandler,
+    get_context_handler,
+    ContextProcessResult,
+    SearchProcessResult,
+)
+from app.services.history_manager import truncate_history_safe
 
 logger = get_logger(__name__)
 
@@ -431,12 +450,17 @@ class ChatService:
         else:
             self._forbidden_filter = None
 
+        # 멀티턴 맥락 유지: ChatContextHandler 초기화
+        self._context_handler = get_context_handler()
+
+        # Privacy Query Gate: 개인정보성 명단 요청 차단 (조합 규칙 기반)
+        self._privacy_gate = get_privacy_gate()
+
     async def handle_chat(
         self,
         req: ChatRequest,
-        background_tasks: BackgroundTasks,
+        background_tasks: Optional[BackgroundTasks] = None,
     ) -> ChatResponse:
-
         """
         Handle a chat request and generate a response using full pipeline.
 
@@ -471,9 +495,17 @@ class ChatService:
         # Phase 41: RAG 디버그용 request_id 생성
         request_id = generate_request_id()
 
+        # Phase AB: A/B 테스트 모델 (방식 B - model 필드 직접 사용)
+        # ChatRequest.model 필드에서 직접 모델 선택 (별도 context API 불필요)
+        ab_model = req.model  # "openai" | "sroberta" | None (임베딩용)
+
+        # LLM 프로바이더 선택 (관리자 대시보드에서 설정)
+        llm_provider = req.llm_model  # "exaone" | "openai" | None
+
         logger.info(
             f"Processing chat request: session_id={req.session_id}, "
-            f"user_id={req.user_id}, user_role={req.user_role}, request_id={request_id}"
+            f"user_id={req.user_id}, user_role={req.user_role}, "
+            f"request_id={request_id}, ab_model={ab_model}, llm_provider={llm_provider}"
         )
 
         # Step 1: Extract the latest user message as query
@@ -486,6 +518,34 @@ class ChatService:
 
         user_query = req.messages[-1].content
         logger.debug(f"User query received: len={len(user_query)}")
+
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 0 - State 로드
+        # =====================================================================
+        # user_id가 없으면 상태 기능 비활성화 (anonymous 충돌 방지)
+        # 실제 운영에서는 인증 컨텍스트(서버 보장 user_id)를 사용해야 함
+        state_enabled = bool(req.user_id)
+        if state_enabled:
+            conv_state = await self._context_handler.load_state(
+                user_id=req.user_id,
+                session_id=req.session_id,
+            )
+        else:
+            # user_id 없으면 빈 상태로 진행 (로드/저장 스킵)
+            conv_state = ConversationState(
+                user_id="",
+                session_id=req.session_id,
+            )
+            logger.warning(
+                f"[MULTITURN] user_id missing, state disabled for session={req.session_id}"
+            )
+
+        # 멀티턴 로깅 키 고정
+        logger.info(
+            f"[MULTITURN] user_id={req.user_id}, session_id={req.session_id}, "
+            f"request_id={request_id}, state_enabled={state_enabled}, "
+            f"state_version={conv_state.state_version}, turn={conv_state.turn_count}"
+        )
 
         # =====================================================================
         # Phase 50 / Step 3: 금지질문 필터 (1차 가드) - PII 마스킹 전에 raw_query로 체크
@@ -614,6 +674,55 @@ class ChatService:
             )
 
         # =====================================================================
+        # Privacy Query Gate: 개인정보성 명단 요청 차단
+        # PII 마스킹 후, Intent 분류 전에 실행
+        # "직원 + 명단화 행위 + 민감 속성(교육/점수)" 조합 감지
+        # =====================================================================
+        privacy_result = self._privacy_gate.check(masked_query)
+        if privacy_result.blocked:
+            logger.warning(
+                f"[PrivacyGate] BLOCKED - score={privacy_result.score_total}, "
+                f"target={privacy_result.matched_target_terms}, "
+                f"action={privacy_result.matched_action_terms}, "
+                f"sensitive={privacy_result.matched_sensitive_terms}"
+            )
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            # CHAT_TURN 이벤트 발행 (개인정보 명단 요청 차단)
+            emit_chat_turn_once(
+                intent_main="PRIVACY_BLOCK",
+                route_type="BLOCKED",
+                domain="UNKNOWN",
+                rag_used=False,
+                latency_ms_total=latency_ms,
+                error_code=None,
+                pii_detected_input=pii_input.has_pii,
+                pii_detected_output=False,
+            )
+
+            # SECURITY 이벤트 발행 (개인정보 명단 요청 차단)
+            emit_security_event_once(
+                block_type="PRIVACY_GATE_BLOCK",
+                blocked=True,
+                rule_id=f"PRIVACY_GATE:{privacy_result.decision.value}",
+            )
+
+            return ChatResponse(
+                answer=privacy_result.block_response,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    rag_used=False,
+                    latency_ms=latency_ms,
+                    fallback_reason="PRIVACY_QUERY_BLOCKED",
+                    retrieval_skipped=True,
+                    retrieval_skip_reason=f"PRIVACY_GATE:{privacy_result.decision.value}",
+                    backend_skipped=True,
+                    backend_skip_reason=f"PRIVACY_GATE:{privacy_result.decision.value}",
+                    has_pii_input=pii_input.has_pii,
+                ),
+            )
+
+        # =====================================================================
         # Phase 39: [E] Complaint Fast Path (불만/욕설 빠른 경로)
         # =====================================================================
         # intent 분류 전에 먼저 실행 (전처리)
@@ -635,6 +744,32 @@ class ChatService:
                     masked=pii_input.has_pii,
                     has_pii_input=pii_input.has_pii,
                     latency_ms=latency_ms,
+                ),
+            )
+
+        # =====================================================================
+        # Phase 56: [H] Stats Out-of-Scope Fast Path (통계 질문 조기 차단)
+        # =====================================================================
+        # Incident 도메인의 순수 통계 질문(최근 N년/Top N/가장 많이)은
+        # 문서 RAG로 답할 수 없으므로 조기 차단
+        stats_oos_response = self._answer_guard.check_stats_out_of_scope_fast_path(
+            user_query=masked_query,
+            domain=req.domain,
+        )
+        if stats_oos_response:
+            logger.info("Stats out-of-scope fast path triggered - returning immediate response")
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return ChatResponse(
+                answer=stats_oos_response,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    route=RouteType.LLM_ONLY.value,
+                    intent=IntentType.GENERAL_CHAT.value,
+                    domain=req.domain or "INCIDENT",
+                    masked=pii_input.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    latency_ms=latency_ms,
+                    error_type="STATS_GAP",
                 ),
             )
 
@@ -739,6 +874,40 @@ class ChatService:
                 reason=f"rule-based: IntentService",
             )
 
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 1-4 - 컨텍스트 처리
+        # =====================================================================
+        # 라우터 결과를 단일 진실(C)로 사용하여 컨텍스트 처리
+        context_result = await self._context_handler.process_context(
+            state=conv_state,
+            messages=req.messages,
+            user_query=user_query,
+            current_domain=domain,
+            current_intent=intent.value if intent else None,
+        )
+
+        # Clarify 명시 선택 결과 반영 (orchestration_result에서 주입)
+        if orchestration_result is not None and orchestration_result.user_selected:
+            context_result.user_selected = True
+            context_result.resolved_doc_id = orchestration_result.selected_doc_id
+            context_result.anaphora_resolved = False  # 명시 선택은 지시어 해소가 아님
+            logger.debug(
+                f"[MULTITURN] User selected doc: {orchestration_result.selected_doc_id}"
+            )
+
+        # 지시어 해소 결과 반영
+        query_for_rag = context_result.resolved_query
+        if context_result.anaphora_resolved:
+            logger.info(
+                f"[MULTITURN] Anaphora resolved: {context_result.anaphora_type.value}, "
+                f"doc_id={context_result.resolved_doc_id}"
+            )
+            # RAG 검색에는 해소된 쿼리 사용
+            masked_query = query_for_rag
+
+        # 히스토리 (MessageBuilder에 전달용, 현재 질문 제외됨)
+        history_for_prompt = context_result.history_for_prompt
+
         # Step 4: RAG Search / Backend Data (based on route)
         # Phase 11: BACKEND_API, MIXED_BACKEND_RAG 실제 처리 로직 구현
         # Phase 12: latency 측정 및 fallback 처리 개선
@@ -790,8 +959,9 @@ class ChatService:
             # RAG_INTERNAL: RAG만 사용
             rag_search_attempted = True
             rag_start = time.perf_counter()
+            # Phase AB: model 필드 직접 사용 (방식 B)
             sources, rag_search_failed, retriever_used = await self._perform_rag_search_with_fallback(
-                masked_query, domain, req, request_id=request_id
+                masked_query, domain, req, model=ab_model
             )
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
 
@@ -813,9 +983,10 @@ class ChatService:
             logger.info(f"MIXED_BACKEND_RAG route: Fetching RAG + Backend data in parallel")
 
             # Phase 12: 병렬 호출에서 각각의 실패를 독립적으로 처리
+            # Phase AB: model 필드 직접 사용 (방식 B)
             rag_start = time.perf_counter()
             rag_task = self._perform_rag_search_with_fallback(
-                masked_query, domain, req, request_id=request_id
+                masked_query, domain, req, model=ab_model
             )
             backend_task = self._fetch_backend_data_for_mixed(
                 user_role=intent_result.user_role,
@@ -1090,6 +1261,7 @@ class ChatService:
             )
         else:
             # 기존 로직: RAG_INTERNAL, LLM_ONLY 등
+            # 멀티턴 맥락 유지: conversation_state, history 전달
             llm_messages = self._build_llm_messages(
                 user_query=masked_query,
                 sources=sources,
@@ -1099,6 +1271,8 @@ class ChatService:
                 domain=domain,
                 intent=intent,
                 soft_guardrail_instruction=soft_guardrail_instruction,
+                conversation_state=conv_state,
+                history=history_for_prompt,
             )
 
         # Step 6: Generate LLM response
@@ -1116,79 +1290,108 @@ class ChatService:
         
         llm_start = time.perf_counter()
 
-        try:
-            # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
-            llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
-                messages=llm_messages,
-                model=None,  # Use server default
-                temperature=0.2,
-                max_tokens=1024,
+        # Phase 55: 환각 방지 - RAG 0건 시 LLM 호출 스킵
+        settings = get_settings()
+        hallucination_guard_strict = getattr(settings, 'HALLUCINATION_GUARD_STRICT', True)
+        skip_llm_for_no_source = (
+            hallucination_guard_strict
+            and rag_search_attempted
+            and not sources
+            and not rag_search_failed
+            and tier0_intent in (Tier0Intent.POLICY_QA, Tier0Intent.EDUCATION_QA)
+        )
+
+        if skip_llm_for_no_source:
+            # Phase 55: LLM 호출 스킵, 고정 템플릿 직접 반환 (환각 원천 차단)
+            logger.info(
+                f"[HallucinationGuard] RAG 0건 + 정책/교육 질문 → LLM 스킵, 고정 템플릿 반환 | "
+                f"intent={tier0_intent.value}, query='{masked_query[:50]}...'"
             )
-            raw_answer = llm_result.content
-            llm_latency_ms = llm_result.latency_ms
-            llm_prompt_tokens = llm_result.prompt_tokens
-            llm_completion_tokens = llm_result.completion_tokens
-            llm_model_used = llm_result.model
+            raw_answer = self._answer_guard.get_no_source_template(domain=domain)
+            llm_latency_ms = 0
+            llm_prompt_tokens = 0
+            llm_completion_tokens = 0
+            llm_model_used = "template_only"
+            final_route = RouteType.RAG_INTERNAL  # 라우트 타입 유지
+            fallback_reason = "NO_SOURCE_TEMPLATE"
 
-            # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
-            if needs_soft_guardrail and soft_guardrail_prefix:
-                raw_answer = soft_guardrail_prefix + raw_answer
-                logger.info("Soft guardrail prefix added to response")
+        else:
+            # 기존 로직: LLM 호출
+            try:
+                # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
+                # llm_provider: 관리자 대시보드에서 선택한 LLM 프로바이더 ("exaone" | "openai")
+                llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
+                    messages=llm_messages,
+                    model=None,  # Use provider default model
+                    temperature=0.2,
+                    max_tokens=1024,
+                    llm_provider=llm_provider,
+                )
+                raw_answer = llm_result.content
+                llm_latency_ms = llm_result.latency_ms
+                llm_prompt_tokens = llm_result.prompt_tokens
+                llm_completion_tokens = llm_result.completion_tokens
+                llm_model_used = llm_result.model
 
-            # RAG 시도했지만 결과 없으면 안내 문구 추가 (소프트 가드레일 미적용 시)
-            elif rag_search_attempted and not sources and not rag_search_failed:
-                # LLM 응답에 안내 문구 추가 (RAG 결과 0건인 경우)
-                raw_answer = raw_answer.rstrip() + NO_RAG_RESULTS_NOTICE
+                # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
+                if needs_soft_guardrail and soft_guardrail_prefix:
+                    raw_answer = soft_guardrail_prefix + raw_answer
+                    logger.info("Soft guardrail prefix added to response")
 
-            # Phase 12: RAG 실패로 인한 fallback인 경우 안내 추가
-            if rag_search_failed:
-                raw_answer = raw_answer.rstrip() + RAG_FAIL_NOTICE
-                fallback_reason = "RAG_FAIL"
+                # RAG 시도했지만 결과 없으면 안내 문구 추가 (소프트 가드레일 미적용 시)
+                elif rag_search_attempted and not sources and not rag_search_failed:
+                    # LLM 응답에 안내 문구 추가 (RAG 결과 0건인 경우)
+                    raw_answer = raw_answer.rstrip() + NO_RAG_RESULTS_NOTICE
 
-            # Phase 12: BACKEND_API에서 Backend 실패 시 fallback 안내
-            if route in backend_api_routes and not backend_data_fetched:
-                raw_answer = raw_answer.rstrip() + MIXED_BACKEND_FAIL_NOTICE
-                fallback_reason = "BACKEND_FAIL"
-
-            # Phase 12: MIXED_BACKEND_RAG에서 부분 실패 시 안내
-            if route in mixed_routes:
-                if rag_search_failed and backend_data_fetched:
-                    # RAG만 실패
+                # Phase 12: RAG 실패로 인한 fallback인 경우 안내 추가
+                if rag_search_failed:
                     raw_answer = raw_answer.rstrip() + RAG_FAIL_NOTICE
                     fallback_reason = "RAG_FAIL"
-                elif not rag_search_failed and not backend_data_fetched:
-                    # Backend만 실패
+
+                # Phase 12: BACKEND_API에서 Backend 실패 시 fallback 안내
+                if route in backend_api_routes and not backend_data_fetched:
                     raw_answer = raw_answer.rstrip() + MIXED_BACKEND_FAIL_NOTICE
                     fallback_reason = "BACKEND_FAIL"
 
-        except UpstreamServiceError as e:
-            # Phase 12: LLM UpstreamServiceError 처리
-            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
-            logger.error(f"LLM generation failed: {e}")
-            raw_answer = LLM_FALLBACK_MESSAGE
-            final_route = RouteType.ERROR
-            error_type = e.error_type.value
-            error_message = e.message
+                # Phase 12: MIXED_BACKEND_RAG에서 부분 실패 시 안내
+                if route in mixed_routes:
+                    if rag_search_failed and backend_data_fetched:
+                        # RAG만 실패
+                        raw_answer = raw_answer.rstrip() + RAG_FAIL_NOTICE
+                        fallback_reason = "RAG_FAIL"
+                    elif not rag_search_failed and not backend_data_fetched:
+                        # Backend만 실패
+                        raw_answer = raw_answer.rstrip() + MIXED_BACKEND_FAIL_NOTICE
+                        fallback_reason = "BACKEND_FAIL"
 
-            # Phase 12: 메트릭 수집
-            if e.is_timeout:
-                metrics.increment_error(LOG_TAG_LLM_TIMEOUT)
-            else:
+            except UpstreamServiceError as e:
+                # Phase 12: LLM UpstreamServiceError 처리
+                llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
+                logger.error(f"LLM generation failed: {e}")
+                raw_answer = LLM_FALLBACK_MESSAGE
+                final_route = RouteType.ERROR
+                error_type = e.error_type.value
+                error_message = e.message
+
+                # Phase 12: 메트릭 수집
+                if e.is_timeout:
+                    metrics.increment_error(LOG_TAG_LLM_TIMEOUT)
+                else:
+                    metrics.increment_error(LOG_TAG_LLM_ERROR)
+                metrics.increment_error(LOG_TAG_LLM_FALLBACK)
+
+            except Exception as e:
+                # 기타 예외
+                llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
+                logger.exception("LLM generation failed with unexpected error")
+                raw_answer = LLM_FALLBACK_MESSAGE
+                final_route = RouteType.ERROR
+                error_type = ErrorType.INTERNAL_ERROR.value
+                error_message = f"Unexpected error: {type(e).__name__}"
+
+                # Phase 12: 메트릭 수집
                 metrics.increment_error(LOG_TAG_LLM_ERROR)
-            metrics.increment_error(LOG_TAG_LLM_FALLBACK)
-
-        except Exception as e:
-            # 기타 예외
-            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
-            logger.exception("LLM generation failed with unexpected error")
-            raw_answer = LLM_FALLBACK_MESSAGE
-            final_route = RouteType.ERROR
-            error_type = ErrorType.INTERNAL_ERROR.value
-            error_message = f"Unexpected error: {type(e).__name__}"
-
-            # Phase 12: 메트릭 수집
-            metrics.increment_error(LOG_TAG_LLM_ERROR)
-            metrics.increment_error(LOG_TAG_LLM_FALLBACK)
+                metrics.increment_error(LOG_TAG_LLM_FALLBACK)
 
         # =====================================================================
         # Phase 39: [B] Citation Hallucination Guard (가짜 조항 인용 차단)
@@ -1210,6 +1413,22 @@ class ChatService:
                 self._last_error_reason = "CITATION_HALLUCINATION"
             else:
                 raw_answer = validated_answer
+
+        # =====================================================================
+        # Phase 56: [I] Stats Language Sanitizer (통계 표현 후처리)
+        # =====================================================================
+        # 라우팅에서 못 잡고 RAG로 들어온 통계 질문에 대해
+        # "최근 1년/Top5" 같은 확정 뉘앙스를 제거
+        if final_route != RouteType.ERROR and error_type is None:
+            sanitized_answer, was_sanitized = self._answer_guard.sanitize_stats_language(
+                answer=raw_answer,
+                query=masked_query,
+                sources=sources,
+                add_prefix=True,
+            )
+            if was_sanitized:
+                logger.info("Stats language sanitized - temporal/statistical expressions removed")
+                raw_answer = sanitized_answer
 
         # =====================================================================
         # Phase 39: [D] Korean-only Output Enforcement (언어 가드레일)
@@ -1281,6 +1500,27 @@ class ChatService:
             intent=intent,
         )
 
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 7 - 상태 갱신 (B: 갱신 규칙)
+        # =====================================================================
+        # 응답 생성 완료 후 상태 갱신 (state_enabled=True인 경우만)
+        # - 도메인/인텐트는 라우터 결과 기반 (Single Source of Truth)
+        # - 문서 갱신은 score/gap 기반 조건 체크
+        if state_enabled:
+            state_update_result = self._context_handler.update_state_from_response(
+                state=conv_state,
+                current_domain=domain,
+                current_intent=intent.value if intent else "",
+                sources=sources,
+                resolved_doc_id=context_result.resolved_doc_id,
+                resolved_by_anaphora=context_result.anaphora_resolved,
+                selected_by_user=context_result.user_selected,
+            )
+            logger.debug(
+                f"[MULTITURN] State updated: version={state_update_result.version}, "
+                f"doc_added={state_update_result.doc_added}"
+            )
+
         # Determine if any PII was detected (input or output)
         has_pii = pii_input.has_pii or pii_output.has_pii
 
@@ -1318,6 +1558,7 @@ class ChatService:
         meta = ChatAnswerMeta(
             user_role=intent_result.user_role.value,  # Phase 10: 역할 정보 포함
             used_model=llm_model_used or "internal-llm",  # LLM 응답에서 가져온 실제 모델명
+            llm_provider=llm_provider or "exaone",  # 사용된 LLM 프로바이더
             route=final_route.value,
             intent=intent.value,
             domain=domain,
@@ -1398,8 +1639,14 @@ class ChatService:
         )
 
         # Step 8: Generate and send AI log (fire-and-forget, FIXED)
-        background_tasks.add_task(
-            self._send_ai_log,
+        ab_info = {
+            "model": ab_model,
+            "embedding_model": None,
+            "collection_name": None,
+        }
+    
+        # AI 로그 전송 (fire-and-forget)
+        log_coro = self._send_ai_log(
             req,
             final_answer,
             user_query,
@@ -1415,7 +1662,28 @@ class ChatService:
             error_type,
             error_message,
             rag_gap_candidate_flag,
+            ab_model=ab_info.get("model"),
+            ab_embedding_model=ab_info.get("embedding_model"),
+            ab_collection_name=ab_info.get("collection_name"),
         )
+        if background_tasks:
+            background_tasks.add_task(lambda: asyncio.ensure_future(log_coro))
+        else:
+            self._fire_and_forget(log_coro)
+
+        # =====================================================================
+        # 멀티턴 맥락 유지: Step 8 - 상태 저장 (TTL sliding 포함)
+        # =====================================================================
+        if state_enabled:
+            try:
+                await self._context_handler.save_state(conv_state)
+                logger.debug(
+                    f"[MULTITURN] State saved: user_id={req.user_id}, "
+                    f"session_id={req.session_id}, version={conv_state.state_version}"
+                )
+            except Exception as e:
+                # 상태 저장 실패는 응답에 영향 주지 않음
+                logger.warning(f"[MULTITURN] State save failed: {e}")
 
         # Step 9: Emit v1 Telemetry CHAT_TURN event (exactly once per turn)
         emit_chat_turn_once(
@@ -1463,6 +1731,10 @@ class ChatService:
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
         rag_gap_candidate: bool = False,
+        # Phase AB: A/B 테스트 정보
+        ab_model: Optional[str] = None,
+        ab_embedding_model: Optional[str] = None,
+        ab_collection_name: Optional[str] = None,
     ) -> None:
         logger.warning("[FAQ_LOG] _send_ai_log CALLED")
         """
@@ -1512,6 +1784,10 @@ class ChatService:
                 question_masked=question_masked,
                 answer_masked=answer_masked,
                 rag_gap_candidate=rag_gap_candidate,
+                # Phase AB: A/B 테스트 정보
+                ab_model=ab_model,
+                ab_embedding_model=ab_embedding_model,
+                ab_collection_name=ab_collection_name,
             )
 
             # 비동기 전송 (fire-and-forget)
@@ -1531,12 +1807,15 @@ class ChatService:
         domain: Optional[str] = None,
         intent: Optional["IntentType"] = None,
         soft_guardrail_instruction: Optional[str] = None,
+        conversation_state: Optional["ConversationState"] = None,
+        history: Optional[List["ChatMessage"]] = None,
     ) -> List[Dict[str, str]]:
         """
         Build message list for LLM chat completion (위임).
 
         Phase 2 리팩토링: MessageBuilder로 로직 위임.
         Phase 46: 소프트 가드레일 시스템 지침 파라미터 추가.
+        멀티턴 맥락 유지: conversation_state, history 파라미터 추가.
         """
         return self._message_builder.build_rag_messages(
             user_query=user_query,
@@ -1547,6 +1826,8 @@ class ChatService:
             domain=domain,
             intent=intent,
             soft_guardrail_instruction=soft_guardrail_instruction,
+            conversation_state=conversation_state,
+            history=history,
         )
 
     def _format_sources_for_prompt(self, sources: List[ChatSource]) -> str:
@@ -1584,9 +1865,17 @@ class ChatService:
         query: str,
         domain: str,
         req: ChatRequest,
-        request_id: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Tuple[List[ChatSource], bool, str]:
         """RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다 (위임).
+
+        Phase AB: model 파라미터로 A/B 테스트 모델 직접 전달
+
+        Args:
+            query: 검색 쿼리
+            domain: 도메인
+            req: ChatRequest
+            model: A/B 테스트 모델 ("openai" | "sroberta")
 
         Returns:
             Tuple[List[ChatSource], bool, str]:
@@ -1595,7 +1884,10 @@ class ChatService:
                 - 사용된 retriever (MILVUS, RAGFLOW, RAGFLOW_FALLBACK)
         """
         return await self._rag_handler.perform_search_with_fallback(
-            query, domain, req, request_id
+            query=query,
+            domain=domain,
+            req=req,
+            model=model,
         )
 
     # =========================================================================
@@ -1929,7 +2221,7 @@ class ChatService:
                 sub_intent_id=q,
                 user_id=req.user_id,
                 period=period,
-                target_dept_id=None,  # TODO: 부서 비교(Q5) 시 dept 파싱 필요
+                target_dept_id=None,  # 향후 부서 비교 기능 사용 예정
             )
 
             logger.info(
@@ -1953,7 +2245,30 @@ class ChatService:
             )
             final_answer = pii_output.masked_text
 
-            # 4) ChatResponse 생성
+            # 4) Q4 (EDU_RESUME_CHECK) 처리: 영상 재생 action 생성
+            action: Optional[ChatAction] = None
+            if q == "Q4" and facts.items:
+                # 마지막 시청 영상 정보에서 action 생성
+                last_video = facts.items[0] if isinstance(facts.items, list) else None
+                if last_video and isinstance(last_video, dict):
+                    education_id = last_video.get("education_id") or last_video.get("educationId")
+                    video_id = last_video.get("video_id") or last_video.get("videoId")
+                    if education_id and video_id:
+                        action = ChatAction(
+                            type=ChatActionType.PLAY_VIDEO,
+                            education_id=str(education_id),
+                            video_id=str(video_id),
+                            resume_position_seconds=last_video.get("resume_position_seconds") or last_video.get("resumePositionSeconds") or last_video.get("resumePosition"),
+                            education_title=last_video.get("education_title") or last_video.get("educationTitle"),
+                            video_title=last_video.get("video_title") or last_video.get("videoTitle"),
+                            progress_percent=last_video.get("progress_percent") or last_video.get("progressPercent"),
+                        )
+                        logger.info(
+                            f"Q4 action created: education_id={education_id}, video_id={video_id}, "
+                            f"resume_position={action.resume_position_seconds}"
+                        )
+
+            # 5) ChatResponse 생성
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
             return ChatResponse(
@@ -1971,6 +2286,8 @@ class ChatService:
                     rag_source_count=0,
                     # 개인화 관련 메타 정보 추가
                     personalization_q=q,
+                    # 프론트엔드 액션 (영상 재생 등)
+                    action=action,
                 ),
             )
 

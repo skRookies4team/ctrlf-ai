@@ -67,7 +67,7 @@ class TestAILogEntry:
             route="ROUTE_INCIDENT",
             has_pii_input=True,
             has_pii_output=False,
-            model_name="qwen2.5-7b",
+            model_name="test-model",
             rag_used=True,
             rag_source_count=5,
             latency_ms=2500,
@@ -82,7 +82,7 @@ class TestAILogEntry:
         assert log.department == "보안팀"
         assert log.has_pii_input is True
         assert log.has_pii_output is False
-        assert log.model_name == "qwen2.5-7b"
+        assert log.model_name == "test-model"
         assert log.rag_used is True
         assert log.rag_source_count == 5
         assert log.question_masked is not None
@@ -255,9 +255,10 @@ class TestAILogService:
                 latency_ms=1200,
             )
 
-            # 백엔드 미설정 시에도 에러 없이 동작해야 함
+            # ES 직접 적재 방식으로 변경됨 - 에러 없이 동작해야 함
             result = await service.send_log(log_entry)
-            assert result is True  # 로컬 로그 기록 성공
+            # send_log는 void 함수 (None 반환)
+            assert result is None
 
     @pytest.mark.anyio
     async def test_mask_for_log(self):
@@ -280,7 +281,7 @@ class TestChatAnswerMetaExtended:
     def test_extended_meta_fields(self):
         """확장된 메타데이터 필드 확인."""
         meta = ChatAnswerMeta(
-            used_model="qwen2.5-7b",
+            used_model="test-model",
             route="ROUTE_RAG_INTERNAL",
             intent="POLICY_QA",
             domain="POLICY",
@@ -338,7 +339,7 @@ class TestCamelCaseSerialization:
             user_role="EMPLOYEE",
             has_pii_input=True,
             has_pii_output=False,
-            model_name="qwen2.5-7b",
+            model_name="test-model",
             rag_used=True,
             rag_source_count=5,
             latency_ms=1500,
@@ -374,7 +375,7 @@ class TestCamelCaseSerialization:
         assert data["hasPiiOutput"] is False
 
         assert "modelName" in data
-        assert data["modelName"] == "qwen2.5-7b"
+        assert data["modelName"] == "test-model"
 
         assert "ragUsed" in data
         assert data["ragUsed"] is True
