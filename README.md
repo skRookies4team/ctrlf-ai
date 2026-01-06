@@ -228,7 +228,233 @@ ctrlf-ai/
 Private - CTRL+F Team
 
 
+---
+
+## 기능별 테스트 가이드
+
+### 1. Elasticsearch 로그 적재 테스트
+
+AI 채팅 요청 시 운영 로그와 FAQ 후보 로그가 자동으로 Elasticsearch에 적재됩니다.
+
+#### 1-1. ES + Kibana 실행
+
+```bash
+# ES + Kibana 실행
+docker compose up elasticsearch kibana -d
+
+# ES 상태 확인 (약 30초 대기 후)
+curl http://localhost:9200
+```
+
+#### 1-2. 테스트 스크립트 실행
+
+```bash
+# ES 상태만 확인
+python scripts/test_es_log.py --es-only
+
+# 채팅 API + ES 로그 확인 (서버가 실행 중이어야 함)
+python scripts/test_es_log.py --full
+
+# ES URL 지정
+python scripts/test_es_log.py --es-url http://localhost:9200
+```
+
+#### 1-3. ES에서 로그 직접 조회
+
+```bash
+# 인덱스 목록 확인
+curl http://localhost:9200/_cat/indices?v
+
+# AI 운영 로그 조회
+curl -X GET "http://localhost:9200/ctrlf-logs-*/_search?pretty" \
+  -H "Content-Type: application/json" \
+  -d '{"query": {"match_all": {}}, "size": 10, "sort": [{"@timestamp": "desc"}]}'
+
+# FAQ 후보 로그 조회
+curl -X GET "http://localhost:9200/ctrlf-faq-log-*/_search?pretty" \
+  -H "Content-Type: application/json" \
+  -d '{"query": {"match_all": {}}, "size": 10, "sort": [{"@timestamp": "desc"}]}'
+```
+
+#### 1-4. Kibana에서 확인
+
+1. **접속**: http://localhost:5601
+2. **메뉴**: Stack Management → Index Patterns
+3. **인덱스 패턴 생성**: `ctrlf-logs-*` 또는 `ctrlf-faq-log-*`
+4. **메뉴**: Discover → 로그 확인
+
+#### 로그 인덱스 구조
+
+| 인덱스 패턴 | 용도 | 주요 필드 |
+|-------------|------|-----------|
+| `ctrlf-logs-YYYY.MM.DD` | AI 운영 로그 | domain, intent, question_masked, answer_masked, rag_used |
+| `ctrlf-faq-log-YYYY.MM.DD` | FAQ 후보 로그 | domain, intent, question_masked, source |
+
+---
+
+### 2. FAQ API 테스트
+
+#### 2-1. 테스트 스크립트 실행
+
+```bash
+# Mock 기반 단위 테스트
+python scripts/test_faq_api_http.py
+```
+
+#### 2-2. 실제 서버 HTTP 호출
+
+```bash
+# 서버 실행
+uvicorn app.main:app --port 8000
+
+# FAQ 단건 생성
+curl -X POST http://localhost:8000/ai/faq/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "domain": "SEC_POLICY",
+    "cluster_id": "cluster-001",
+    "canonical_question": "USB 반출 절차는?",
+    "sample_questions": ["USB 어떻게 반출해요?"],
+    "top_docs": [{
+      "doc_id": "SEC-001",
+      "title": "정보보안 정책",
+      "snippet": "USB 반출 시 정보보호팀 승인 필요"
+    }]
+  }'
+
+# FAQ 배치 생성
+curl -X POST http://localhost:8000/ai/faq/generate/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "items": [
+      {"domain": "SEC_POLICY", "cluster_id": "c1", "canonical_question": "USB 반출 절차?"},
+      {"domain": "HR_POLICY", "cluster_id": "c2", "canonical_question": "연차 신청 방법?"}
+    ],
+    "concurrency": 2
+  }'
+
+# FAQ 자동 생성 (로그 분석 기반)
+curl -X POST http://localhost:8000/ai/faq/generate/auto \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "SEC_POLICY", "min_frequency": 3, "days_back": 30}'
+```
+
+---
+
+### 3. 채팅 API 테스트
+
+#### 3-1. 기본 채팅
+
+```bash
+curl -X POST http://localhost:8000/ai/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "test-001",
+    "user_id": "user1",
+    "message": "연차 규정 알려줘",
+    "channel": "WEB",
+    "user_role": "EMPLOYEE",
+    "department": "개발팀"
+  }'
+```
+
+#### 3-2. 스트리밍 채팅
+
+```bash
+curl -X POST http://localhost:8000/ai/chat/stream \
+  -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
+  -d '{
+    "session_id": "test-002",
+    "user_id": "user1",
+    "message": "정보보안 교육 내용 요약해줘",
+    "channel": "WEB",
+    "stream": true
+  }'
+```
+
+#### 3-3. 채팅 CLI 도구
+
+```bash
+python chat_cli.py
+```
+
+---
+
+### 4. RAGFlow Callback API 테스트
+
+```bash
+# 테스트 스크립트 실행
+python scripts/test_callback_api.py
+
+# 원격 서버 테스트
+python scripts/test_callback_api.py http://your-server:8000
+```
+
+---
+
+### 5. 단위/통합 테스트
+
+#### 5-1. 전체 테스트
+
+```bash
+# 전체 테스트 실행
+pytest
+
+# 상세 출력
+pytest -v
+
+# 병렬 실행 (빠름)
+pytest -n auto
+```
+
+#### 5-2. 기능별 테스트
+
+```bash
+# FAQ 관련 테스트
+pytest tests/ -k "faq" -v
+
+# 채팅 관련 테스트
+pytest tests/ -k "chat" -v
+
+# RAG 관련 테스트
+pytest tests/ -k "rag" -v
+
+# PII 마스킹 테스트
+pytest tests/ -k "pii" -v
+
+# 의도 분류 테스트
+pytest tests/ -k "intent" -v
+```
+
+#### 5-3. 특정 파일 테스트
+
+```bash
+pytest tests/unit/test_phase50_low_relevance_gate.py -v
+pytest tests/unit/test_ai_log.py -v
+pytest tests/unit/test_faq_api_phase19.py -v
+```
+
+---
+
+### 6. QA 배치 테스트 및 품질 평가
+
+```bash
 # 배치 테스트
 python scripts/test/qa_batch_test.py
-# 품질평가
+
+# 품질평가 (GPT-4o-mini 기반)
 python scripts/test/qa_quality_evaluator.py -n 30 --model gpt-4o-mini
+```
+
+---
+
+### 7. 헬스체크
+
+```bash
+# 서버 상태 확인
+curl http://localhost:8000/health
+
+# 예상 응답
+# {"status":"ok","app":"ctrlf-ai-gateway","version":"0.1.0","env":"local"}
+```
