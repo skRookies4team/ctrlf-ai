@@ -169,6 +169,12 @@ from app.services.forbidden_query_filter import (
     ForbiddenCheckResult,
     get_forbidden_query_filter,
 )
+from app.services.privacy_query_gate import (
+    PrivacyQueryGate,
+    PrivacyGateResult,
+    PrivacyGateDecision,
+    get_privacy_gate,
+)
 from app.core.retrieval_context import (
     set_retrieval_blocked,
     reset_retrieval_context,
@@ -433,6 +439,9 @@ class ChatService:
         # 멀티턴 맥락 유지: ChatContextHandler 초기화
         self._context_handler = get_context_handler()
 
+        # Privacy Query Gate: 개인정보성 명단 요청 차단 (조합 규칙 기반)
+        self._privacy_gate = get_privacy_gate()
+
     async def handle_chat(self, req: ChatRequest) -> ChatResponse:
         """
         Handle a chat request and generate a response using full pipeline.
@@ -647,6 +656,55 @@ class ChatService:
             )
 
         # =====================================================================
+        # Privacy Query Gate: 개인정보성 명단 요청 차단
+        # PII 마스킹 후, Intent 분류 전에 실행
+        # "직원 + 명단화 행위 + 민감 속성(교육/점수)" 조합 감지
+        # =====================================================================
+        privacy_result = self._privacy_gate.check(masked_query)
+        if privacy_result.blocked:
+            logger.warning(
+                f"[PrivacyGate] BLOCKED - score={privacy_result.score_total}, "
+                f"target={privacy_result.matched_target_terms}, "
+                f"action={privacy_result.matched_action_terms}, "
+                f"sensitive={privacy_result.matched_sensitive_terms}"
+            )
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            # CHAT_TURN 이벤트 발행 (개인정보 명단 요청 차단)
+            emit_chat_turn_once(
+                intent_main="PRIVACY_BLOCK",
+                route_type="BLOCKED",
+                domain="UNKNOWN",
+                rag_used=False,
+                latency_ms_total=latency_ms,
+                error_code=None,
+                pii_detected_input=pii_input.has_pii,
+                pii_detected_output=False,
+            )
+
+            # SECURITY 이벤트 발행 (개인정보 명단 요청 차단)
+            emit_security_event_once(
+                block_type="PRIVACY_GATE_BLOCK",
+                blocked=True,
+                rule_id=f"PRIVACY_GATE:{privacy_result.decision.value}",
+            )
+
+            return ChatResponse(
+                answer=privacy_result.block_response,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    rag_used=False,
+                    latency_ms=latency_ms,
+                    fallback_reason="PRIVACY_QUERY_BLOCKED",
+                    retrieval_skipped=True,
+                    retrieval_skip_reason=f"PRIVACY_GATE:{privacy_result.decision.value}",
+                    backend_skipped=True,
+                    backend_skip_reason=f"PRIVACY_GATE:{privacy_result.decision.value}",
+                    has_pii_input=pii_input.has_pii,
+                ),
+            )
+
+        # =====================================================================
         # Phase 39: [E] Complaint Fast Path (불만/욕설 빠른 경로)
         # =====================================================================
         # intent 분류 전에 먼저 실행 (전처리)
@@ -668,6 +726,32 @@ class ChatService:
                     masked=pii_input.has_pii,
                     has_pii_input=pii_input.has_pii,
                     latency_ms=latency_ms,
+                ),
+            )
+
+        # =====================================================================
+        # Phase 56: [H] Stats Out-of-Scope Fast Path (통계 질문 조기 차단)
+        # =====================================================================
+        # Incident 도메인의 순수 통계 질문(최근 N년/Top N/가장 많이)은
+        # 문서 RAG로 답할 수 없으므로 조기 차단
+        stats_oos_response = self._answer_guard.check_stats_out_of_scope_fast_path(
+            user_query=masked_query,
+            domain=req.domain,
+        )
+        if stats_oos_response:
+            logger.info("Stats out-of-scope fast path triggered - returning immediate response")
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return ChatResponse(
+                answer=stats_oos_response,
+                sources=[],
+                meta=ChatAnswerMeta(
+                    route=RouteType.LLM_ONLY.value,
+                    intent=IntentType.GENERAL_CHAT.value,
+                    domain=req.domain or "INCIDENT",
+                    masked=pii_input.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    latency_ms=latency_ms,
+                    error_type="STATS_GAP",
                 ),
             )
 
@@ -1186,81 +1270,108 @@ class ChatService:
         llm_completion_tokens: Optional[int] = None
         llm_model_used: Optional[str] = None
 
-        try:
-            # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
-            # llm_provider: 관리자 대시보드에서 선택한 LLM 프로바이더 ("exaone" | "openai")
-            llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
-                messages=llm_messages,
-                model=None,  # Use provider default model
-                temperature=0.2,
-                max_tokens=1024,
-                llm_provider=llm_provider,
+        # Phase 55: 환각 방지 - RAG 0건 시 LLM 호출 스킵
+        settings = get_settings()
+        hallucination_guard_strict = getattr(settings, 'HALLUCINATION_GUARD_STRICT', True)
+        skip_llm_for_no_source = (
+            hallucination_guard_strict
+            and rag_search_attempted
+            and not sources
+            and not rag_search_failed
+            and tier0_intent in (Tier0Intent.POLICY_QA, Tier0Intent.EDUCATION_QA)
+        )
+
+        if skip_llm_for_no_source:
+            # Phase 55: LLM 호출 스킵, 고정 템플릿 직접 반환 (환각 원천 차단)
+            logger.info(
+                f"[HallucinationGuard] RAG 0건 + 정책/교육 질문 → LLM 스킵, 고정 템플릿 반환 | "
+                f"intent={tier0_intent.value}, query='{masked_query[:50]}...'"
             )
-            raw_answer = llm_result.content
-            llm_latency_ms = llm_result.latency_ms
-            llm_prompt_tokens = llm_result.prompt_tokens
-            llm_completion_tokens = llm_result.completion_tokens
-            llm_model_used = llm_result.model
+            raw_answer = self._answer_guard.get_no_source_template(domain=domain)
+            llm_latency_ms = 0
+            llm_prompt_tokens = 0
+            llm_completion_tokens = 0
+            llm_model_used = "template_only"
+            final_route = RouteType.RAG_INTERNAL  # 라우트 타입 유지
+            fallback_reason = "NO_SOURCE_TEMPLATE"
 
-            # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
-            if needs_soft_guardrail and soft_guardrail_prefix:
-                raw_answer = soft_guardrail_prefix + raw_answer
-                logger.info("Soft guardrail prefix added to response")
+        else:
+            # 기존 로직: LLM 호출
+            try:
+                # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
+                # llm_provider: 관리자 대시보드에서 선택한 LLM 프로바이더 ("exaone" | "openai")
+                llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
+                    messages=llm_messages,
+                    model=None,  # Use provider default model
+                    temperature=0.2,
+                    max_tokens=1024,
+                    llm_provider=llm_provider,
+                )
+                raw_answer = llm_result.content
+                llm_latency_ms = llm_result.latency_ms
+                llm_prompt_tokens = llm_result.prompt_tokens
+                llm_completion_tokens = llm_result.completion_tokens
+                llm_model_used = llm_result.model
 
-            # RAG 시도했지만 결과 없으면 안내 문구 추가 (소프트 가드레일 미적용 시)
-            elif rag_search_attempted and not sources and not rag_search_failed:
-                # LLM 응답에 안내 문구 추가 (RAG 결과 0건인 경우)
-                raw_answer = raw_answer.rstrip() + NO_RAG_RESULTS_NOTICE
+                # Phase 45: 소프트 가드레일 prefix 추가 (sources=0일 때)
+                if needs_soft_guardrail and soft_guardrail_prefix:
+                    raw_answer = soft_guardrail_prefix + raw_answer
+                    logger.info("Soft guardrail prefix added to response")
 
-            # Phase 12: RAG 실패로 인한 fallback인 경우 안내 추가
-            if rag_search_failed:
-                raw_answer = raw_answer.rstrip() + RAG_FAIL_NOTICE
-                fallback_reason = "RAG_FAIL"
+                # RAG 시도했지만 결과 없으면 안내 문구 추가 (소프트 가드레일 미적용 시)
+                elif rag_search_attempted and not sources and not rag_search_failed:
+                    # LLM 응답에 안내 문구 추가 (RAG 결과 0건인 경우)
+                    raw_answer = raw_answer.rstrip() + NO_RAG_RESULTS_NOTICE
 
-            # Phase 12: BACKEND_API에서 Backend 실패 시 fallback 안내
-            if route in backend_api_routes and not backend_data_fetched:
-                raw_answer = raw_answer.rstrip() + MIXED_BACKEND_FAIL_NOTICE
-                fallback_reason = "BACKEND_FAIL"
-
-            # Phase 12: MIXED_BACKEND_RAG에서 부분 실패 시 안내
-            if route in mixed_routes:
-                if rag_search_failed and backend_data_fetched:
-                    # RAG만 실패
+                # Phase 12: RAG 실패로 인한 fallback인 경우 안내 추가
+                if rag_search_failed:
                     raw_answer = raw_answer.rstrip() + RAG_FAIL_NOTICE
                     fallback_reason = "RAG_FAIL"
-                elif not rag_search_failed and not backend_data_fetched:
-                    # Backend만 실패
+
+                # Phase 12: BACKEND_API에서 Backend 실패 시 fallback 안내
+                if route in backend_api_routes and not backend_data_fetched:
                     raw_answer = raw_answer.rstrip() + MIXED_BACKEND_FAIL_NOTICE
                     fallback_reason = "BACKEND_FAIL"
 
-        except UpstreamServiceError as e:
-            # Phase 12: LLM UpstreamServiceError 처리
-            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
-            logger.error(f"LLM generation failed: {e}")
-            raw_answer = LLM_FALLBACK_MESSAGE
-            final_route = RouteType.ERROR
-            error_type = e.error_type.value
-            error_message = e.message
+                # Phase 12: MIXED_BACKEND_RAG에서 부분 실패 시 안내
+                if route in mixed_routes:
+                    if rag_search_failed and backend_data_fetched:
+                        # RAG만 실패
+                        raw_answer = raw_answer.rstrip() + RAG_FAIL_NOTICE
+                        fallback_reason = "RAG_FAIL"
+                    elif not rag_search_failed and not backend_data_fetched:
+                        # Backend만 실패
+                        raw_answer = raw_answer.rstrip() + MIXED_BACKEND_FAIL_NOTICE
+                        fallback_reason = "BACKEND_FAIL"
 
-            # Phase 12: 메트릭 수집
-            if e.is_timeout:
-                metrics.increment_error(LOG_TAG_LLM_TIMEOUT)
-            else:
+            except UpstreamServiceError as e:
+                # Phase 12: LLM UpstreamServiceError 처리
+                llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
+                logger.error(f"LLM generation failed: {e}")
+                raw_answer = LLM_FALLBACK_MESSAGE
+                final_route = RouteType.ERROR
+                error_type = e.error_type.value
+                error_message = e.message
+
+                # Phase 12: 메트릭 수집
+                if e.is_timeout:
+                    metrics.increment_error(LOG_TAG_LLM_TIMEOUT)
+                else:
+                    metrics.increment_error(LOG_TAG_LLM_ERROR)
+                metrics.increment_error(LOG_TAG_LLM_FALLBACK)
+
+            except Exception as e:
+                # 기타 예외
+                llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
+                logger.exception("LLM generation failed with unexpected error")
+                raw_answer = LLM_FALLBACK_MESSAGE
+                final_route = RouteType.ERROR
+                error_type = ErrorType.INTERNAL_ERROR.value
+                error_message = f"Unexpected error: {type(e).__name__}"
+
+                # Phase 12: 메트릭 수집
                 metrics.increment_error(LOG_TAG_LLM_ERROR)
-            metrics.increment_error(LOG_TAG_LLM_FALLBACK)
-
-        except Exception as e:
-            # 기타 예외
-            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000) if 'llm_start' in dir() else None
-            logger.exception("LLM generation failed with unexpected error")
-            raw_answer = LLM_FALLBACK_MESSAGE
-            final_route = RouteType.ERROR
-            error_type = ErrorType.INTERNAL_ERROR.value
-            error_message = f"Unexpected error: {type(e).__name__}"
-
-            # Phase 12: 메트릭 수집
-            metrics.increment_error(LOG_TAG_LLM_ERROR)
-            metrics.increment_error(LOG_TAG_LLM_FALLBACK)
+                metrics.increment_error(LOG_TAG_LLM_FALLBACK)
 
         # =====================================================================
         # Phase 39: [B] Citation Hallucination Guard (가짜 조항 인용 차단)
@@ -1282,6 +1393,22 @@ class ChatService:
                 self._last_error_reason = "CITATION_HALLUCINATION"
             else:
                 raw_answer = validated_answer
+
+        # =====================================================================
+        # Phase 56: [I] Stats Language Sanitizer (통계 표현 후처리)
+        # =====================================================================
+        # 라우팅에서 못 잡고 RAG로 들어온 통계 질문에 대해
+        # "최근 1년/Top5" 같은 확정 뉘앙스를 제거
+        if final_route != RouteType.ERROR and error_type is None:
+            sanitized_answer, was_sanitized = self._answer_guard.sanitize_stats_language(
+                answer=raw_answer,
+                query=masked_query,
+                sources=sources,
+                add_prefix=True,
+            )
+            if was_sanitized:
+                logger.info("Stats language sanitized - temporal/statistical expressions removed")
+                raw_answer = sanitized_answer
 
         # =====================================================================
         # Phase 39: [D] Korean-only Output Enforcement (언어 가드레일)

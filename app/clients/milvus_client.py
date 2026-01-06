@@ -650,7 +650,7 @@ class MilvusSearchClient:
             param=search_params,
             limit=top_k,
             expr=expr,
-            output_fields=["text", "doc_id", "dataset_id", "chunk_id"],
+            output_fields=["text", "doc_id", "dataset_id", "chunk_id", "department"],
         )
 
         output = []
@@ -662,6 +662,7 @@ class MilvusSearchClient:
                 content = getattr(entity, "text", "")
                 doc_id = getattr(entity, "doc_id", "")
                 chunk_id = getattr(entity, "chunk_id", None)
+                department = getattr(entity, "department", "")
 
                 domain_guess = self._extract_domain_from_dataset_id(dataset_id)
 
@@ -672,9 +673,11 @@ class MilvusSearchClient:
                     "domain": domain_guess,
                     "doc_id": doc_id,
                     "score": hit.score,
+                    "department": department,
                     "metadata": {
                         "dataset_id": dataset_id,
                         "chunk_id": chunk_id,
+                        "department": department,
                     },
                 })
 
@@ -916,7 +919,7 @@ class MilvusSearchClient:
                 safe_dataset_id = escape_milvus_string(dataset_id)
                 expr = f'{expr} && dataset_id in ["{safe_dataset_id}"]'
 
-            output_fields = ["chunk_id", "text", "doc_id", "dataset_id"]
+            output_fields = ["chunk_id", "text", "doc_id", "dataset_id", "department"]
             all_chunks: List[Dict[str, Any]] = []
             offset = 0
 
