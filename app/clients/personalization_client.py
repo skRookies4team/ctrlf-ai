@@ -97,6 +97,7 @@ class PersonalizationClient:
         user_id: str,
         period: Optional[str] = None,
         target_dept_id: Optional[str] = None,
+        topic: Optional[str] = None,
     ) -> PersonalizationFacts:
         """
         개인화 facts를 조회합니다.
@@ -108,6 +109,7 @@ class PersonalizationClient:
             user_id: 사용자 ID (X-User-Id 헤더로 전달)
             period: 기간 유형 (this-week|this-month|3m|this-year)
             target_dept_id: 부서 비교 대상 ID (향후 사용 예정)
+            topic: 교육 토픽 (Q2, Q7, Q8, Q18, Q19에서 사용)
 
         Returns:
             PersonalizationFacts: 조회된 facts 데이터 (에러 시 error 필드 포함)
@@ -174,6 +176,7 @@ class PersonalizationClient:
                 sub_intent_id=sub_intent_id,
                 period=period,
                 target_dept_id=target_dept_id,
+                topic=topic,
             )
 
             # 헤더에 X-User-Id 추가
