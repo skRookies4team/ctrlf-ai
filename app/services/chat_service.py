@@ -450,20 +450,17 @@ class ChatService:
         else:
             self._forbidden_filter = None
 
-
-    async def handle_chat(
-        self,
-        req: ChatRequest,
-        background_tasks: BackgroundTasks,
-    ) -> ChatResponse:
-
         # 멀티턴 맥락 유지: ChatContextHandler 초기화
         self._context_handler = get_context_handler()
 
         # Privacy Query Gate: 개인정보성 명단 요청 차단 (조합 규칙 기반)
         self._privacy_gate = get_privacy_gate()
 
-    async def handle_chat(self, req: ChatRequest) -> ChatResponse:
+    async def handle_chat(
+        self,
+        req: ChatRequest,
+        background_tasks: Optional[BackgroundTasks] = None,
+    ) -> ChatResponse:
         """
         Handle a chat request and generate a response using full pipeline.
 
@@ -1648,8 +1645,8 @@ class ChatService:
             "collection_name": None,
         }
     
-        background_tasks.add_task(
-            self._send_ai_log,
+        # AI 로그 전송 (fire-and-forget)
+        log_coro = self._send_ai_log(
             req,
             final_answer,
             user_query,
@@ -1668,6 +1665,11 @@ class ChatService:
             ab_model=ab_info.get("model"),
             ab_embedding_model=ab_info.get("embedding_model"),
             ab_collection_name=ab_info.get("collection_name"),
+        )
+        if background_tasks:
+            background_tasks.add_task(lambda: asyncio.ensure_future(log_coro))
+        else:
+            self._fire_and_forget(log_coro)
 
         # =====================================================================
         # 멀티턴 맥락 유지: Step 8 - 상태 저장 (TTL sliding 포함)

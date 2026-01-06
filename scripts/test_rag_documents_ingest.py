@@ -89,7 +89,7 @@ def mock_settings_no_token():
     """토큰 미설정 mock settings."""
     mock = MagicMock()
     mock.BACKEND_INTERNAL_TOKEN = None
-    mock.RAGFLOW_CALLBACK_TOKEN = None
+    mock.AI_CALLBACK_TOKEN = None
     mock.ragflow_base_url = "http://ragflow:8080"
     mock.backend_base_url = "http://backend:8080"
     return mock
@@ -100,7 +100,7 @@ def mock_settings_with_token():
     """토큰 설정된 mock settings."""
     mock = MagicMock()
     mock.BACKEND_INTERNAL_TOKEN = "valid-backend-token"
-    mock.RAGFLOW_CALLBACK_TOKEN = "valid-ragflow-token"
+    mock.AI_CALLBACK_TOKEN = "valid-ragflow-token"
     mock.ragflow_base_url = "http://ragflow:8080"
     mock.backend_base_url = "http://backend:8080"
     return mock
@@ -505,7 +505,7 @@ class TestCallbackEndpoint:
         """정상 콜백 - 200 반환."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_client:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = None
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = None
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
@@ -524,7 +524,7 @@ class TestCallbackEndpoint:
 
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_client:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = None
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = None
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
@@ -546,7 +546,7 @@ class TestCallbackEndpoint:
 
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_client:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = None
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = None
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
@@ -564,7 +564,7 @@ class TestCallbackEndpoint:
         """콜백 수신 시 Backend 클라이언트 호출 확인."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_get_client:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = None
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = None
             mock_client = MagicMock()
             mock_client.update_rag_document_status = AsyncMock(return_value=True)
             mock_get_client.return_value = mock_client
@@ -589,7 +589,7 @@ class TestCallbackEndpoint:
         """Backend 호출 실패해도 200 반환."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_get_client:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = None
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = None
             mock_client = MagicMock()
             mock_client.update_rag_document_status = AsyncMock(
                 side_effect=RAGDocumentStatusUpdateError(
@@ -622,7 +622,7 @@ class TestCallbackEndpointWithToken:
     def test_callback_missing_token_401(self, client, sample_callback_request):
         """토큰 누락 - 401 UNAUTHORIZED."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = "valid-ragflow-token"
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = "valid-ragflow-token"
 
             response = client.post(
                 "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
@@ -636,7 +636,7 @@ class TestCallbackEndpointWithToken:
     def test_callback_invalid_token_401(self, client, sample_callback_request):
         """잘못된 토큰 - 401 UNAUTHORIZED."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = "valid-ragflow-token"
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = "valid-ragflow-token"
 
             response = client.post(
                 "/v1/internal_ragflow//v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest",
@@ -652,7 +652,7 @@ class TestCallbackEndpointWithToken:
         """Backend 토큰으로 콜백 시도 - 401 (토큰 분리 확인)."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = "valid-backend-token"
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = "valid-ragflow-token"
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = "valid-ragflow-token"
 
             # Backend 토큰으로 콜백 시도 → 실패해야 함
             response = client.post(
@@ -669,7 +669,7 @@ class TestCallbackEndpointWithToken:
         """유효한 RAGFlow 토큰 - 200 반환."""
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_client:
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = "valid-ragflow-token"
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = "valid-ragflow-token"
             mock_client.return_value.update_rag_document_status = AsyncMock(return_value=True)
 
             response = client.post(
@@ -1082,9 +1082,9 @@ class TestFullFlow:
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_ragflow_ingest_client") as mock_ragflow, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_backend:
-            # ingest는 BACKEND_INTERNAL_TOKEN, callback은 RAGFLOW_CALLBACK_TOKEN 사용
+            # ingest는 BACKEND_INTERNAL_TOKEN, callback은 AI_CALLBACK_TOKEN 사용
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = None
-            mock_get_settings.return_value.RAGFLOW_CALLBACK_TOKEN = None
+            mock_get_settings.return_value.AI_CALLBACK_TOKEN = None
             mock_ragflow.return_value.ingest = AsyncMock()
             mock_backend.return_value.update_rag_document_status = AsyncMock(return_value=True)
 

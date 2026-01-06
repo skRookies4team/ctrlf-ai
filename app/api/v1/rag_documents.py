@@ -617,7 +617,7 @@ async def ingest_callback(
     # 인증 검증 (RAGFlow 전용 토큰 사용)
     # 보안: Backend 토큰과 분리하여 토큰 유출 시 피해 범위 제한
     settings = get_settings()
-    expected_token = settings.RAGFLOW_CALLBACK_TOKEN
+    expected_token = settings.AI_CALLBACK_TOKEN
 
     if expected_token:  # 토큰이 설정된 경우만 검증
         if not x_internal_token:
@@ -635,7 +635,7 @@ async def ingest_callback(
                 trace_id=request.meta.traceId,
             )
     else:
-        logger.warning("RAGFLOW_CALLBACK_TOKEN not configured, skipping auth")
+        logger.warning("AI_CALLBACK_TOKEN not configured, skipping auth")
 
     logger.info(
         f"Received RAGFlow ingest callback: doc_id={request.docId}, "

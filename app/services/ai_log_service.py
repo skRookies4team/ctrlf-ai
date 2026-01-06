@@ -221,9 +221,6 @@ class AILogService:
             f"latency_ms={log_entry.latency_ms}"
             f"{ab_info}"
         )
-        
-        Returns:
-            bool: 전송 성공 여부
 
         try:
             client = get_async_http_client()

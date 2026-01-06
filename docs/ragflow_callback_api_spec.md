@@ -24,7 +24,7 @@ RAGFlow에서 문서 처리(전처리 + Milvus 적재) 완료/실패 시 AI 서�
 | `X-Internal-Token` | RAGFlow-AI 간 공유 토큰 | O |
 
 ```
-X-Internal-Token: {RAGFLOW_CALLBACK_TOKEN}
+X-Internal-Token: {AI_CALLBACK_TOKEN}
 ```
 
 > 토큰 값은 배포 시 환경변수로 설정됩니다.

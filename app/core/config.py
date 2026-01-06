@@ -533,7 +533,7 @@ class Settings(BaseSettings):
     # RAGFlow 콜백 전용 인증 토큰 (X-Internal-Token 헤더)
     # RAGFlow → AI 콜백 요청 시 사용 (예: /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest)
     # 보안: Backend 토큰과 분리하여 토큰 유출 시 피해 범위 제한
-    RAGFLOW_CALLBACK_TOKEN: Optional[str] = None
+    AI_CALLBACK_TOKEN: Optional[str] = None
 
     # 백엔드 API 타임아웃 (초)
     BACKEND_TIMEOUT_SEC: float = 30.0
@@ -705,17 +705,17 @@ class Settings(BaseSettings):
             str: Backend 서비스 URL, 미설정 시 None
         """
         if self.BACKEND_BASE_URL:
-            return str(self.BACKEND_BASE_URL)
+            return str(self.BACKEND_BASE_URL).rstrip("/")
 
         if self.AI_ENV == "real":
             if not self.BACKEND_BASE_URL_REAL:
                 return None
-            return self.BACKEND_BASE_URL_REAL
+            return self.BACKEND_BASE_URL_REAL.rstrip("/")
 
         # mock 모드: 빈 문자열이면 None 반환 (테스트 환경 지원)
         if not self.BACKEND_BASE_URL_MOCK:
             return None
-        return self.BACKEND_BASE_URL_MOCK
+        return self.BACKEND_BASE_URL_MOCK.rstrip("/")
 
     @property
     def infra_base_url(self) -> Optional[str]:
