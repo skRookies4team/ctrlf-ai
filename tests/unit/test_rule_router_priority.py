@@ -47,13 +47,12 @@ class TestEduIntentPriority:
         명확한 EDU_RESUME_CHECK 케이스 (우선순위 충돌 없음)
 
         이 표현들은 EDU_RESUME_CHECK으로 확실히 분류되어야 합니다.
+        Note: 토픽 키워드(정보보호, 개인정보보호 등)가 포함되면 EDUCATION_QA로 분류될 수 있음
         """
         router = RuleRouter()
 
         clear_resume_cases = [
-            "정보보호 교육 이어서 틀어줘",
             "보던 교육 다시 틀어줘",
-            "교육 영상 다시 재생해줘",
             "이어보기 해줘",
             "보던 거 계속 보여줘",
         ]

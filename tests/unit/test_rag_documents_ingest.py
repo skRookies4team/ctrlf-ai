@@ -342,6 +342,7 @@ class TestConstants:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="RAG ingest API 엔드포인트 비활성화됨")
 class TestIngestEndpointNoToken:
     """토큰 미설정 환경에서의 ingest 엔드포인트 테스트."""
 
@@ -445,6 +446,7 @@ class TestIngestEndpointNoToken:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="RAG ingest API 엔드포인트 비활성화됨")
 class TestIngestEndpointWithToken:
     """토큰 설정된 환경에서의 ingest 엔드포인트 테스트."""
 
@@ -1074,6 +1076,7 @@ class TestBackendClientUpdateStatus:
 # =============================================================================
 
 
+@pytest.mark.skip(reason="RAG ingest API 엔드포인트 비활성화됨")
 class TestFullFlow:
     """전체 흐름 테스트."""
 

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Privacy Query Gate - 개인정보성 명단 요청 차단 게이트
 

@@ -33,8 +33,18 @@ from app.models.chat_stream import (
     StreamMetrics,
     StreamTokenEvent,
 )
-from app.telemetry.emitters import emit_chat_turn_once
+from app.telemetry.emitters import emit_chat_turn_once, emit_security_event_once
 from app.telemetry.metrics import set_latency_metrics
+from app.services.privacy_query_gate import (
+    PrivacyQueryGate,
+    PrivacyGateDecision,
+    get_privacy_gate,
+)
+from app.services.forbidden_query_filter import (
+    ForbiddenQueryFilter,
+    ForbiddenCheckResult,
+    get_forbidden_query_filter,
+)
 
 logger = get_logger(__name__)
 
@@ -166,6 +176,17 @@ class ChatStreamService:
         self._client = client or get_async_http_client()
         self._settings = get_settings()
 
+        # 보안 게이트 초기화
+        self._privacy_gate = get_privacy_gate()
+
+        # 금지질문 필터 초기화 (설정에 따라)
+        if self._settings.FORBIDDEN_QUERY_FILTER_ENABLED:
+            self._forbidden_filter = get_forbidden_query_filter(
+                profile=self._settings.FORBIDDEN_QUERY_PROFILE
+            )
+        else:
+            self._forbidden_filter = None
+
     async def stream_chat(
         self,
         request: ChatStreamRequest,
@@ -218,7 +239,103 @@ class ChatStreamService:
                 yield error_event.to_ndjson()
                 return
 
-            # 2. META 이벤트 전송 (연결 확정)
+            # =================================================================
+            # 2. 보안 게이트: 금지질문 필터 + Privacy Query Gate
+            # LLM 호출 전에 차단하여 비용/로그/누출 리스크 최소화
+            # =================================================================
+
+            # 사용자 쿼리 추출 (마지막 메시지)
+            user_query = ""
+            if request.messages:
+                last_msg = request.messages[-1]
+                if hasattr(last_msg, "content"):
+                    user_query = last_msg.content
+                elif isinstance(last_msg, dict):
+                    user_query = last_msg.get("content", "")
+
+            # 2-1. 금지질문 필터 체크
+            if self._forbidden_filter is not None and user_query:
+                forbidden_result = self._forbidden_filter.check(user_query)
+                if forbidden_result.is_forbidden and forbidden_result.skip_rag and forbidden_result.skip_backend_api:
+                    logger.warning(
+                        f"[Stream] Forbidden query detected: rule_id={forbidden_result.matched_rule_id}, "
+                        f"request_id={request_id}"
+                    )
+
+                    # 텔레메트리 이벤트 발행
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    emit_chat_turn_once(
+                        intent_main="FORBIDDEN_QUERY",
+                        route_type="BLOCKED",
+                        domain="UNKNOWN",
+                        rag_used=False,
+                        latency_ms_total=latency_ms,
+                        error_code=None,
+                    )
+
+                    # 차단 응답 전송 (토큰 형태로)
+                    block_response = forbidden_result.example_response or "죄송합니다. 해당 질문에는 답변드리기 어렵습니다."
+                    for char in block_response:
+                        token_event = StreamTokenEvent(text=char)
+                        yield token_event.to_ndjson()
+                        await asyncio.sleep(0.005)
+
+                    # DONE 이벤트 전송
+                    done_event = StreamDoneEvent(
+                        finish_reason="blocked",
+                        elapsed_ms=int((time.perf_counter() - start_time) * 1000),
+                    )
+                    yield done_event.to_ndjson()
+                    self._tracker.complete_request(request_id, block_response)
+                    telemetry_emitted = True
+                    return
+
+            # 2-2. Privacy Query Gate 체크 (개인정보성 명단 요청)
+            if user_query:
+                privacy_result = self._privacy_gate.check(user_query)
+                if privacy_result.blocked:
+                    logger.warning(
+                        f"[Stream] Privacy gate blocked: score={privacy_result.score_total}, "
+                        f"request_id={request_id}"
+                    )
+
+                    # 텔레메트리 이벤트 발행
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    emit_chat_turn_once(
+                        intent_main="PRIVACY_BLOCK",
+                        route_type="BLOCKED",
+                        domain="UNKNOWN",
+                        rag_used=False,
+                        latency_ms_total=latency_ms,
+                        error_code=None,
+                    )
+
+                    emit_security_event_once(
+                        block_type="PRIVACY_GATE_BLOCK",
+                        blocked=True,
+                        rule_id=f"PRIVACY_GATE:{privacy_result.decision.value}",
+                    )
+
+                    # 차단 응답 전송 (토큰 형태로)
+                    block_response = privacy_result.block_response or "해당 질문에는 답변드리기 어렵습니다."
+                    for char in block_response:
+                        token_event = StreamTokenEvent(text=char)
+                        yield token_event.to_ndjson()
+                        await asyncio.sleep(0.005)
+
+                    # DONE 이벤트 전송
+                    done_event = StreamDoneEvent(
+                        finish_reason="blocked",
+                        elapsed_ms=int((time.perf_counter() - start_time) * 1000),
+                    )
+                    yield done_event.to_ndjson()
+                    self._tracker.complete_request(request_id, block_response)
+                    telemetry_emitted = True
+                    return
+
+            # =================================================================
+            # 3. META 이벤트 전송 (연결 확정, 보안 게이트 통과 후)
+            # =================================================================
             meta_event = StreamMetaEvent(
                 request_id=request_id,
                 model=model,

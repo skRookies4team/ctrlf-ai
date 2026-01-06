@@ -176,11 +176,11 @@ class Settings(BaseSettings):
     # Phase 24: Milvus Vector Database 설정
     # =========================================================================
     # Milvus 서버 연결 정보 (환경변수로 설정 필요)
-    MILVUS_HOST: str = "localhost"
-    MILVUS_PORT: int = 19530
+    MILVUS_HOST: str = "58.127.241.84"
+    MILVUS_PORT: int = 19540
 
     # Milvus 컬렉션 설정
-    MILVUS_COLLECTION_NAME: str = "ragflow_chunks"
+    MILVUS_COLLECTION_NAME: str = "ragflow_chunks_openai"
 
     # 벡터 검색 설정
     MILVUS_TOP_K: int = 5  # 기본 검색 결과 수
@@ -262,6 +262,24 @@ class Settings(BaseSettings):
     RAG_DATASET_FILTER_ENABLED: bool = True
 
     # =========================================================================
+    # Phase 55: 환각(Hallucination) 방지 강화 설정
+    # =========================================================================
+    # RAG 0건 시 LLM 호출 스킵 (고정 템플릿만 반환)
+    # True: RAG 0건 + POLICY_QA/EDUCATION_QA면 LLM 호출 없이 고정 템플릿 반환
+    # False: 기존 동작 (LLM 호출 후 소프트 가드레일 적용)
+    HALLUCINATION_GUARD_STRICT: bool = True
+
+    # Citation validation 엄격 적용 (Phase 44 완화 롤백)
+    # True: RAG sources 없거나 sources에 없는 조항 인용 시 차단
+    # False: 기존 동작 (경고 로그만)
+    CITATION_VALIDATION_STRICT: bool = True
+
+    # 통계/순위 주장에 대한 추가 검증 활성화
+    # True: "TOP 5", "가장 많이", "N%" 등 통계 주장 시 sources 필수
+    # False: 통계 주장 검증 비활성화
+    STATISTICAL_CLAIM_VALIDATION: bool = True
+
+    # =========================================================================
     # Phase 49: EDUCATION dataset_id allowlist 설정
     # =========================================================================
     # EDUCATION 도메인 검색 시 허용할 dataset_id 목록 (쉼표 구분)
@@ -277,7 +295,7 @@ class Settings(BaseSettings):
     # True: department 컬럼으로 부서별 교육영상 필터링 (본인 부서 + 전체 부서)
     # False: 부서 필터 비활성화 (모든 교육영상 조회)
     # 부서 범위: 전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀
-    RAG_DEPARTMENT_FILTER_ENABLED: bool = False  # 기본값 False (Milvus 스키마 추가 후 활성화)
+    RAG_DEPARTMENT_FILTER_ENABLED: bool = True
 
     # =========================================================================
     # Phase 49: Summary Intent 분리 (요약 인텐트)

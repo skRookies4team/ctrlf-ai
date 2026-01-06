@@ -114,7 +114,7 @@
   ],
   "meta": {
     "user_role": "EMPLOYEE",
-    "used_model": "qwen2.5-7b",
+    "used_model": "llm-model",
     "route": "RAG_INTERNAL",
     "intent": "POLICY_QA",
     "domain": "POLICY",
@@ -148,7 +148,7 @@
 **Response**: `application/x-ndjson`
 
 ```
-{"type":"meta","request_id":"req-001","model":"qwen2.5-7b","timestamp":"..."}
+{"type":"meta","request_id":"req-001","model":"llm-model","timestamp":"..."}
 {"type":"token","text":"연차"}
 {"type":"token","text":"휴가는"}
 {"type":"done","finish_reason":"stop","total_tokens":123,"elapsed_ms":4567}
@@ -385,7 +385,7 @@ RAG Gap 보완 제안
 | ------------------------ | ----------------- | ------------ |
 | `AI_ENV`                 | 환경 (mock/real)  | `mock`       |
 | `LLM_BASE_URL`           | LLM 서비스 URL    | -            |
-| `LLM_MODEL_NAME`         | LLM 모델명        | `qwen2.5-7b` |
+| `LLM_MODEL_NAME`         | LLM 모델명        | -            |
 | `RAGFLOW_BASE_URL`       | RAGFlow URL       | -            |
 | `MILVUS_HOST`            | Milvus 호스트     | `localhost`  |
 | `MILVUS_PORT`            | Milvus 포트       | `19530`      |

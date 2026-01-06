@@ -50,34 +50,40 @@ class TestPersonalizationModels:
         assert PersonalizationSubIntentId.Q20.value == "Q20"
 
     def test_priority_sub_intents(self):
-        """우선순위 인텐트 5개 확인.
+        """우선순위 인텐트 13개 확인.
 
-        Note: Q5(평균비교), Q6(보안토픽TOP3)는 프로젝트 범위에서 제외됨.
+        Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q11, Q14, Q18, Q19가 우선순위.
         """
-        assert len(PRIORITY_SUB_INTENTS) == 5
+        assert len(PRIORITY_SUB_INTENTS) == 13
         assert "Q1" in PRIORITY_SUB_INTENTS
+        assert "Q2" in PRIORITY_SUB_INTENTS
         assert "Q3" in PRIORITY_SUB_INTENTS
+        assert "Q4" in PRIORITY_SUB_INTENTS
+        assert "Q5" in PRIORITY_SUB_INTENTS
+        assert "Q6" in PRIORITY_SUB_INTENTS
+        assert "Q7" in PRIORITY_SUB_INTENTS
+        assert "Q8" in PRIORITY_SUB_INTENTS
         assert "Q9" in PRIORITY_SUB_INTENTS
         assert "Q11" in PRIORITY_SUB_INTENTS
         assert "Q14" in PRIORITY_SUB_INTENTS
-        # Q5, Q6는 프로젝트 범위에서 제외됨
-        assert "Q5" not in PRIORITY_SUB_INTENTS
-        assert "Q6" not in PRIORITY_SUB_INTENTS
+        assert "Q18" in PRIORITY_SUB_INTENTS
+        assert "Q19" in PRIORITY_SUB_INTENTS
         # Q20은 우선순위 목록에 미포함 (선택 구현)
         assert "Q20" not in PRIORITY_SUB_INTENTS
 
     def test_default_period_for_intent(self):
-        """인텐트별 기본 period 확인.
-
-        Note: Q5, Q6는 프로젝트 범위에서 제외됨.
-        """
+        """인텐트별 기본 period 확인."""
+        assert DEFAULT_PERIOD_FOR_INTENT["Q2"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q3"] == PeriodType.THIS_MONTH
+        assert DEFAULT_PERIOD_FOR_INTENT["Q5"] == PeriodType.THIS_YEAR
+        assert DEFAULT_PERIOD_FOR_INTENT["Q6"] == PeriodType.THIS_YEAR
+        assert DEFAULT_PERIOD_FOR_INTENT["Q7"] == PeriodType.THIS_YEAR
+        assert DEFAULT_PERIOD_FOR_INTENT["Q8"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q9"] == PeriodType.THIS_WEEK
         assert DEFAULT_PERIOD_FOR_INTENT["Q11"] == PeriodType.THIS_YEAR
+        assert DEFAULT_PERIOD_FOR_INTENT["Q18"] == PeriodType.THIS_YEAR
+        assert DEFAULT_PERIOD_FOR_INTENT["Q19"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q20"] == PeriodType.THIS_YEAR
-        # Q5, Q6는 프로젝트 범위에서 제외됨
-        assert "Q5" not in DEFAULT_PERIOD_FOR_INTENT
-        assert "Q6" not in DEFAULT_PERIOD_FOR_INTENT
 
     def test_error_response_templates(self):
         """에러 응답 템플릿 확인."""
@@ -133,14 +139,12 @@ class TestPersonalizationModels:
         assert SUB_INTENT_METADATA["Q11"].description == "남은 연차 일수"
 
     def test_quiz_domain_metadata(self):
-        """QUIZ 도메인 메타데이터 확인.
-
-        Note: Q5, Q6는 프로젝트 범위에서 제외되어 메타데이터도 삭제됨.
-        """
-        # Q5, Q6 메타데이터는 삭제됨
-        assert "Q5" not in SUB_INTENT_METADATA
-        assert "Q6" not in SUB_INTENT_METADATA
-        # Q7은 QUIZ 도메인
+        """QUIZ 도메인 메타데이터 확인."""
+        # Q5, Q6, Q7은 QUIZ 도메인
+        assert "Q5" in SUB_INTENT_METADATA
+        assert "Q6" in SUB_INTENT_METADATA
+        assert SUB_INTENT_METADATA["Q5"].domain == "QUIZ"
+        assert SUB_INTENT_METADATA["Q6"].domain == "QUIZ"
         assert SUB_INTENT_METADATA["Q7"].domain == "QUIZ"
 
 
@@ -201,10 +205,11 @@ class TestPersonalizationClient:
         """Mock facts 반환 테스트."""
         from app.clients.personalization_client import PersonalizationClient
 
-        # 백엔드 URL 없이 mock 모드
+        # mock 모드 강제
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.backend_base_url = None
             mock_settings.BACKEND_API_TOKEN = None
+            mock_settings.PERSONALIZATION_MODE = "mock"
 
             client = PersonalizationClient(base_url=None)
             facts = await client.resolve_facts("Q11", user_id="test_user")
@@ -220,10 +225,11 @@ class TestPersonalizationClient:
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.backend_base_url = None
             mock_settings.BACKEND_API_TOKEN = None
+            mock_settings.PERSONALIZATION_MODE = "mock"
 
             client = PersonalizationClient(base_url=None)
-            # Q2는 우선순위가 아님
-            facts = await client.resolve_facts("Q2", user_id="test_user")
+            # Q10은 우선순위가 아님 (근태 현황)
+            facts = await client.resolve_facts("Q10", user_id="test_user")
 
             assert facts.error is not None
             assert facts.error.type == "NOT_IMPLEMENTED"

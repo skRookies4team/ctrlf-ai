@@ -644,14 +644,30 @@ class MilvusSearchClient:
         collection = self._get_collection_sync()
         search_params = self._search_params.copy()
 
-        results = collection.search(
-            data=[query_embedding],
-            anns_field="embedding",
-            param=search_params,
-            limit=top_k,
-            expr=expr,
-            output_fields=["text", "doc_id", "dataset_id", "chunk_id", "department"],
-        )
+        # department 필드가 스키마에 없을 수 있으므로 기본 필드만 요청
+        base_output_fields = ["text", "doc_id", "dataset_id", "chunk_id"]
+        try:
+            results = collection.search(
+                data=[query_embedding],
+                anns_field="embedding",
+                param=search_params,
+                limit=top_k,
+                expr=expr,
+                output_fields=base_output_fields + ["department"],
+            )
+        except Exception as e:
+            if "department" in str(e):
+                # department 필드가 없으면 기본 필드만으로 재시도
+                results = collection.search(
+                    data=[query_embedding],
+                    anns_field="embedding",
+                    param=search_params,
+                    limit=top_k,
+                    expr=expr,
+                    output_fields=base_output_fields,
+                )
+            else:
+                raise
 
         output = []
         for hits in results:
@@ -919,17 +935,33 @@ class MilvusSearchClient:
                 safe_dataset_id = escape_milvus_string(dataset_id)
                 expr = f'{expr} && dataset_id in ["{safe_dataset_id}"]'
 
-            output_fields = ["chunk_id", "text", "doc_id", "dataset_id", "department"]
+            # department 필드가 스키마에 없을 수 있으므로 기본 필드만 요청
+            base_output_fields = ["chunk_id", "text", "doc_id", "dataset_id"]
+            output_fields = base_output_fields + ["department"]
             all_chunks: List[Dict[str, Any]] = []
             offset = 0
+            use_department = True
 
             # Pagination으로 전체 청크 조회
             while len(all_chunks) < max_chunks:
-                batch = await anyio.to_thread.run_sync(
-                    lambda: self._query_chunks_sync(
-                        expr, output_fields, offset, self.QUERY_BATCH_SIZE
+                current_fields = output_fields if use_department else base_output_fields
+                try:
+                    batch = await anyio.to_thread.run_sync(
+                        lambda fields=current_fields: self._query_chunks_sync(
+                            expr, fields, offset, self.QUERY_BATCH_SIZE
+                        )
                     )
-                )
+                except Exception as e:
+                    if use_department and "department" in str(e):
+                        # department 필드가 없으면 기본 필드만으로 재시도
+                        use_department = False
+                        batch = await anyio.to_thread.run_sync(
+                            lambda: self._query_chunks_sync(
+                                expr, base_output_fields, offset, self.QUERY_BATCH_SIZE
+                            )
+                        )
+                    else:
+                        raise
 
                 if not batch:
                     break

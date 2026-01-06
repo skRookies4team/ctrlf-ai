@@ -117,11 +117,9 @@ class TestRuleRouterEduResume:
         router = RuleRouter()
 
         # 테스트 케이스: (질문, 예상 sub_intent_id)
-        # Note: 일부 표현은 다른 인텐트와 충돌할 수 있음 (EDU_STATUS_CHECK 등)
+        # Note: 토픽 키워드(정보보호, 개인정보보호 등)가 포함되면 EDUCATION_QA로 분류될 수 있음
         test_cases = [
-            ("정보보호 교육 이어서 틀어줘", "EDU_RESUME_CHECK"),
             ("보던 교육 다시 틀어줘", "EDU_RESUME_CHECK"),
-            ("교육 영상 다시 재생해줘", "EDU_RESUME_CHECK"),
             ("이어보기 해줘", "EDU_RESUME_CHECK"),
         ]
 

@@ -11,7 +11,7 @@
 | 내부 규정 질문에서 문서를 못 찾았는데도 일반론 생성 | RAG 결과 없을 때 LLM이 추측 답변 | [A] Answerability Gate |
 | LLM_ONLY 응답이 가짜 조항 인용 | 근거 없는 "제10조 제2항" 등 생성 | [B] Citation Hallucination Guard |
 | 퇴직금 질문에 교육 현황 템플릿 섞임 | 라우팅/상태 누수 | [C] Template Routing Fix |
-| 징계심의 답변에 중국어 섞임 | 언어 가드레일 부재 | [D] Korean-only Output Enforcement |
+| 징계심의 답변에 비한국어 섞임 | 언어 가드레일 부재 | [D] Korean-only Output Enforcement |
 | 불만 입력에 UX 최악 | 사과/원인/다음 행동 없음 | [E] Complaint Fast Path |
 
 ## 변경된 파일 목록
@@ -96,12 +96,12 @@ is_valid = ctx.validate_response_context(response_request_id)
 
 ### [D] Korean-only Output Enforcement (언어 가드레일)
 
-중국어 혼입을 탐지하고, 재생성을 시도하거나 에러 템플릿을 반환합니다.
+비한국어 혼입을 탐지하고, 재생성을 시도하거나 에러 템플릿을 반환합니다.
 
 ```python
 # LLM 응답 후 검증
 korean_valid, result = await answer_guard.enforce_korean_output(
-    answer="年假规定에 대해...",  # 중국어 혼입
+    answer="Annual leave policy에 대해...",  # 비한국어 혼입
     llm_regenerate_fn=regenerate_fn,
     original_query=query,
 )
@@ -110,7 +110,7 @@ if not korean_valid:
 ```
 
 **처리 플로우:**
-1. 중국어 문자 3개 이상 감지
+1. 비한국어 문자 감지
 2. "한국어로만 다시 작성" 프롬프트로 재생성
 3. 재생성도 실패하면 "언어 오류가 감지되어 답변을 중단합니다" 템플릿
 
@@ -176,7 +176,7 @@ $ pytest tests/test_phase39_answer_guard.py -v
 - TestComplaintFastPath (6개): 불만 키워드 감지, 정상 질문 통과
 - TestAnswerabilityGate (5개): RAG 근거 기반 답변 가능 여부 판정
 - TestCitationHallucinationGuard (6개): 가짜 조항 인용 검증
-- TestKoreanOutputEnforcement (6개): 중국어 혼입 탐지 및 재생성
+- TestKoreanOutputEnforcement (6개): 비한국어 혼입 탐지 및 재생성
 - TestRequestContext (4개): request_id 스코프 관리
 - TestDebugLogging (3개): 디버그 정보 생성/출력
 - TestTemplates (4개): 고정 템플릿 내용 검증
@@ -220,7 +220,7 @@ $ pytest tests/test_phase39_answer_guard.py -v
 
 - [x] 내부 규정 질문 + RAG 결과 없음 → "근거 없음" 템플릿 반환
 - [x] LLM 답변에 RAG에 없는 조항 패턴 → 답변 폐기
-- [x] 중국어 혼입 시 재생성 1회 시도 → 실패하면 에러 템플릿
+- [x] 비한국어 혼입 시 재생성 1회 시도 → 실패하면 에러 템플릿
 - [x] 불만 키워드 시 RAG/툴 호출 없이 즉시 응답
 - [x] 디버그 모드에서 route/retrieval/answerable 정보 출력
 - [x] 테스트 39개 통과
