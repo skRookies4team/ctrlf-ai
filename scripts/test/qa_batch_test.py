@@ -22,7 +22,9 @@ from pathlib import Path
 # Configuration
 AI_API_URL = "http://localhost:8000/ai/chat/messages"
 CONCURRENT_REQUESTS = 1  # 동시 요청 수 (LLM 타임아웃 방지)
-TIMEOUT_SECONDS = 120  # 요청 타임아웃
+# 타임아웃: 서버 스트리밍 타임아웃(180초)보다 여유있게 설정
+# 장문 생성 질문(체크리스트, 가이드 등)은 120초 이상 소요 가능
+TIMEOUT_SECONDS = 200  # 요청 타임아웃 (기존 120 → 200)
 OUTPUT_DIR = Path(__file__).parent / "docs"
 
 

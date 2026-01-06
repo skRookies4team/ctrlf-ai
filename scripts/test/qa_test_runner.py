@@ -20,7 +20,9 @@ API_URL = "http://localhost:8000/ai/chat/messages"
 INPUT_FILE = "질문리스트.xlsx"
 OUTPUT_FILE = "질답리스트.xlsx"
 MAX_CONCURRENT = 5  # 동시 요청 수 (서버 부하 고려)
-TIMEOUT = 120  # 요청 타임아웃 (초)
+# 타임아웃: 서버 스트리밍 타임아웃(180초)보다 여유있게 설정
+# 장문 생성 질문(체크리스트, 가이드 등)은 120초 이상 소요 가능
+TIMEOUT = 200  # 요청 타임아웃 (초) - 기존 120 → 200
 
 
 async def send_question(session: aiohttp.ClientSession, row: dict, semaphore: asyncio.Semaphore) -> dict:

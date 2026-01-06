@@ -499,6 +499,11 @@ class ChatStreamService:
         # 설정에서 타임아웃 가져오기 (기본값: 180초, 백엔드 SSE 타임아웃보다 길게)
         stream_timeout = getattr(self._settings, "CHAT_STREAM_LLM_TIMEOUT_SEC", 180.0)
 
+        # 첫 토큰 지연 안내 설정 (N초 동안 첫 토큰이 안 오면 안내 메시지 전송)
+        FIRST_TOKEN_DELAY_THRESHOLD_SEC = 3.0
+        first_token_received = False
+        delay_notice_sent = False
+
         try:
             async with self._client.stream(
                 "POST",
@@ -519,8 +524,19 @@ class ChatStreamService:
                     return
 
                 token_count = 0
+                stream_start = time.perf_counter()
 
                 async for line in response.aiter_lines():
+                    # 첫 토큰 지연 안내: 3초 이상 첫 토큰이 안 오면 안내 메시지 전송
+                    if not first_token_received and not delay_notice_sent:
+                        elapsed = time.perf_counter() - stream_start
+                        if elapsed > FIRST_TOKEN_DELAY_THRESHOLD_SEC:
+                            delay_notice_event = StreamTokenEvent(
+                                text="※ 답변을 생성 중입니다. 복잡한 질문의 경우 시간이 더 걸릴 수 있습니다.\n\n"
+                            )
+                            yield delay_notice_event.to_ndjson()
+                            delay_notice_sent = True
+                            logger.info(f"Delay notice sent after {elapsed:.1f}s: request_id={request.request_id}")
                     if not line:
                         continue
 
@@ -539,6 +555,8 @@ class ChatStreamService:
                                 delta = choices[0].get("delta", {})
                                 content = delta.get("content", "")
                                 if content:
+                                    # 첫 토큰 수신 표시
+                                    first_token_received = True
                                     token_event = StreamTokenEvent(text=content)
                                     yield token_event.to_ndjson()
                                     token_count += 1

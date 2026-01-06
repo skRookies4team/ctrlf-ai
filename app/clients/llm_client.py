@@ -441,6 +441,7 @@ class LLMClient:
         temperature: float = 0.2,
         max_tokens: int = 1024,
         llm_provider: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> LLMCompletionResult:
         """
         ChatCompletion 요청하고 토큰 사용량을 포함한 결과를 반환합니다.
@@ -453,6 +454,7 @@ class LLMClient:
             temperature: 응답 다양성 조절
             max_tokens: 최대 토큰 수
             llm_provider: LLM 프로바이더 ("exaone", "openai" 등). None이면 기본값 사용.
+            timeout: 요청별 타임아웃 (초). None이면 기본값 사용.
 
         Returns:
             LLMCompletionResult: 응답 텍스트 및 토큰 사용량
@@ -460,6 +462,8 @@ class LLMClient:
         Raises:
             UpstreamServiceError: LLM 호출 실패 시
         """
+        # 요청별 타임아웃 (지정되지 않으면 기본값 사용)
+        effective_timeout = timeout if timeout is not None else self._timeout
         # LLM 프로바이더 설정 조회
         provider_config = get_llm_provider_config(llm_provider)
         effective_base_url = provider_config.base_url or self._base_url
@@ -503,7 +507,7 @@ class LLMClient:
                 url,
                 json=payload,
                 headers=headers,
-                timeout=self._timeout,
+                timeout=effective_timeout,  # 요청별 타임아웃 적용
                 config=LLM_RETRY_CONFIG,
                 operation_name="llm_chat_completion_with_usage",
             )
@@ -554,11 +558,11 @@ class LLMClient:
             raise
 
         except httpx.TimeoutException as e:
-            logger.error(f"LLM chat completion timeout after {self._timeout}s")
+            logger.error(f"LLM chat completion timeout after {effective_timeout}s")
             raise UpstreamServiceError(
                 service=ServiceType.LLM,
                 error_type=get_timeout_error_type(ServiceType.LLM),  # TIMEOUT_LLM
-                message=f"LLM timeout after {self._timeout}s",
+                message=f"LLM timeout after {effective_timeout}s",
                 is_timeout=True,
                 original_error=e,
             )
