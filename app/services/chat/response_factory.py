@@ -10,7 +10,7 @@ Phase 2 리팩토링:
 """
 
 import time
-from typing import Optional
+from typing import List, Optional
 
 from app.models.chat import ChatAnswerMeta, ChatResponse
 from app.models.intent import RouteType
@@ -45,6 +45,58 @@ MIXED_BACKEND_FAIL_NOTICE = (
     "\n\n※ 참고: 실제 현황 데이터를 조회하지 못했습니다. "
     "통계/현황 정보는 관리자 시스템에서 직접 확인해 주세요."
 )
+
+# =============================================================================
+# Upstream별 타임아웃 에러 메시지 (UX 친화적)
+# =============================================================================
+
+# LLM 타임아웃 시
+LLM_TIMEOUT_MESSAGE = (
+    "죄송합니다. AI 응답 생성에 예상보다 시간이 걸리고 있습니다. "
+    "질문을 더 간단히 요약해서 다시 시도해 주시거나, 잠시 후 다시 질문해 주세요."
+)
+
+# RAGFlow 타임아웃 시 (문서 검색)
+RAGFLOW_TIMEOUT_MESSAGE = (
+    "죄송합니다. 관련 문서 검색에 시간이 걸리고 있습니다. "
+    "잠시 후 다시 시도해 주세요. 질문이 복잡한 경우, 핵심 키워드만 포함해서 질문해 보세요."
+)
+
+# Backend 타임아웃 시 (데이터 조회)
+BACKEND_TIMEOUT_MESSAGE = (
+    "죄송합니다. 시스템에서 데이터를 조회하는 데 시간이 걸리고 있습니다. "
+    "관리자 시스템에서 직접 확인하시거나, 잠시 후 다시 시도해 주세요."
+)
+
+# 응답 지연 안내 (처리 중 알림용)
+RESPONSE_DELAY_NOTICE = (
+    "※ 답변을 생성 중입니다. 복잡한 질문의 경우 시간이 더 걸릴 수 있습니다."
+)
+
+# 부분 실패 시 최소 정보 안내
+PARTIAL_FAILURE_NOTICE = (
+    "\n\n※ 일부 정보 조회에 문제가 있어 제한된 내용만 안내드립니다. "
+    "더 정확한 정보가 필요하시면 잠시 후 다시 질문해 주세요."
+)
+
+
+def get_timeout_message_for_service(service_type: str) -> str:
+    """
+    서비스 타입에 따른 타임아웃 메시지를 반환합니다.
+
+    Args:
+        service_type: 서비스 타입 (LLM, RAGFLOW, BACKEND, PII)
+
+    Returns:
+        str: UX 친화적 타임아웃 메시지
+    """
+    timeout_messages = {
+        "LLM": LLM_TIMEOUT_MESSAGE,
+        "RAGFLOW": RAGFLOW_TIMEOUT_MESSAGE,
+        "BACKEND": BACKEND_TIMEOUT_MESSAGE,
+        "PII": LLM_FALLBACK_MESSAGE,  # PII는 일반 폴백 사용
+    }
+    return timeout_messages.get(service_type, LLM_FALLBACK_MESSAGE)
 
 
 # =============================================================================
@@ -94,6 +146,79 @@ def create_fallback_response(
 
     return ChatResponse(
         answer=message,
+        sources=[],
+        meta=ChatAnswerMeta(
+            used_model=None,
+            route=RouteType.FALLBACK.value,
+            masked=has_pii,
+            latency_ms=latency_ms,
+            rag_used=False,
+            rag_source_count=0,
+        ),
+    )
+
+
+def create_timeout_response(
+    service_type: str,
+    start_time: float,
+    has_pii: bool = False,
+    error_code: Optional[str] = None,
+) -> ChatResponse:
+    """
+    타임아웃 에러 시 UX 친화적 폴백 응답을 생성합니다.
+
+    Args:
+        service_type: 타임아웃이 발생한 서비스 (LLM, RAGFLOW, BACKEND, PII)
+        start_time: 요청 시작 시간
+        has_pii: PII 검출 여부
+        error_code: 에러 코드 (메타에 포함)
+
+    Returns:
+        ChatResponse: 타임아웃 폴백 응답
+    """
+    latency_ms = int((time.perf_counter() - start_time) * 1000)
+    message = get_timeout_message_for_service(service_type)
+
+    return ChatResponse(
+        answer=message,
+        sources=[],
+        meta=ChatAnswerMeta(
+            used_model=None,
+            route=RouteType.FALLBACK.value,
+            masked=has_pii,
+            latency_ms=latency_ms,
+            rag_used=False,
+            rag_source_count=0,
+            error_code=error_code,
+        ),
+    )
+
+
+def create_partial_failure_response(
+    partial_answer: str,
+    start_time: float,
+    has_pii: bool = False,
+    failed_services: Optional[list] = None,
+) -> ChatResponse:
+    """
+    부분 실패 시 최소 정보와 함께 응답을 생성합니다.
+
+    Args:
+        partial_answer: 성공한 부분의 답변
+        start_time: 요청 시작 시간
+        has_pii: PII 검출 여부
+        failed_services: 실패한 서비스 목록
+
+    Returns:
+        ChatResponse: 부분 성공 응답 (안내 메시지 포함)
+    """
+    latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+    # 부분 실패 안내 추가
+    answer_with_notice = partial_answer + PARTIAL_FAILURE_NOTICE
+
+    return ChatResponse(
+        answer=answer_with_notice,
         sources=[],
         meta=ChatAnswerMeta(
             used_model=None,

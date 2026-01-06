@@ -54,7 +54,12 @@ class LLMCompletionResult:
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
-from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
+from app.core.exceptions import (
+    ErrorType,
+    ServiceType,
+    UpstreamServiceError,
+    get_timeout_error_type,
+)
 from app.core.llm_providers import get_llm_provider_config
 from app.core.logging import get_logger
 from app.core.retry import (
@@ -352,7 +357,7 @@ class LLMClient:
             logger.error(f"LLM chat completion timeout after {self._timeout}s")
             raise UpstreamServiceError(
                 service=ServiceType.LLM,
-                error_type=ErrorType.UPSTREAM_TIMEOUT,
+                error_type=get_timeout_error_type(ServiceType.LLM),  # TIMEOUT_LLM
                 message=f"LLM timeout after {self._timeout}s",
                 is_timeout=True,
                 original_error=e,
@@ -552,7 +557,7 @@ class LLMClient:
             logger.error(f"LLM chat completion timeout after {self._timeout}s")
             raise UpstreamServiceError(
                 service=ServiceType.LLM,
-                error_type=ErrorType.UPSTREAM_TIMEOUT,
+                error_type=get_timeout_error_type(ServiceType.LLM),  # TIMEOUT_LLM
                 message=f"LLM timeout after {self._timeout}s",
                 is_timeout=True,
                 original_error=e,

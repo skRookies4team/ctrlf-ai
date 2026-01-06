@@ -104,8 +104,28 @@ class Settings(BaseSettings):
     # =========================================================================
     # RAGFlow 검색 서비스 설정 (Phase 18)
     # =========================================================================
-    # RAGFlow 검색 타임아웃 (초)
+    # RAGFlow 기본 검색 타임아웃 (초) - 단순 정책 조회용
     RAGFLOW_TIMEOUT_SEC: float = 10.0
+
+    # =========================================================================
+    # 라우트별 차등 타임아웃 설정 (질문 난이도/복잡도에 따른 분리)
+    # =========================================================================
+    # RAG_INTERNAL: 간단한 정책/규정 조회 (기본값)
+    TIMEOUT_RAG_SIMPLE_SEC: float = 10.0
+    # 복잡한 RAG 쿼리 (여러 문서 검색, 통계 분석 등)
+    TIMEOUT_RAG_COMPLEX_SEC: float = 20.0
+    # 장문 생성 (체크리스트, 가이드, 요약 등)
+    TIMEOUT_RAG_LONGFORM_SEC: float = 30.0
+
+    # LLM 호출 타임아웃 (라우트별)
+    TIMEOUT_LLM_SIMPLE_SEC: float = 30.0      # 간단한 답변 생성
+    TIMEOUT_LLM_COMPLEX_SEC: float = 60.0     # 복잡한 답변 (기본값)
+    TIMEOUT_LLM_LONGFORM_SEC: float = 120.0   # 장문 생성 (스크립트, 체크리스트 등)
+
+    # Backend API 타임아웃 (데이터 유형별)
+    TIMEOUT_BACKEND_FAST_SEC: float = 5.0     # 단순 조회 (유저 정보 등)
+    TIMEOUT_BACKEND_NORMAL_SEC: float = 15.0  # 일반 조회 (교육 현황 등)
+    TIMEOUT_BACKEND_SLOW_SEC: float = 30.0    # 복잡한 조회 (통계, 집계 등)
 
     # RAGFlow API Key (인증 필요 시)
     RAGFLOW_API_KEY: Optional[str] = None
