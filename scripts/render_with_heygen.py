@@ -42,7 +42,6 @@ def parse_args():
         description="HeyGen 챕터 영상 생성 → mp4 → S3 저장"
     )
     parser.add_argument("--chapter", type=int, help="실행할 챕터 번호 (ex: 1)")
-    parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
 # ============================================================
@@ -74,6 +73,33 @@ def upload_to_s3(file_path: Path, s3_key: str) -> str:
     return f"s3://{bucket}/{s3_key}"
 
 # ============================================================
+# 🔥 HeyGen 전용 Scene 정제 (가장 중요)
+# ============================================================
+def sanitize_scenes_for_heygen(scenes: list[dict]) -> list[dict]:
+    clean = []
+
+    for sc in scenes:
+        narration = (
+            sc.get("narration")
+            or sc.get("on_screen_text")
+            or "설명입니다."
+        )
+
+        # 문자열 정규화 (400 방지)
+        narration = narration.strip()
+        narration = narration.replace("\n", " ").replace("\r", " ")
+        narration = narration.replace("“", '"').replace("”", '"')
+
+        clean.append(
+            {
+                # ❗ HeyGen v2는 narration ONLY
+                "narration": narration
+            }
+        )
+
+    return clean
+
+# ============================================================
 # 단일 챕터 렌더링
 # ============================================================
 async def render_single_chapter_to_s3(
@@ -86,29 +112,30 @@ async def render_single_chapter_to_s3(
 
     print(f"\n🎬 [CHAPTER {chapter_no}] {chapter_title}")
 
-    # 1️⃣ 기존에 성공하던 방식 그대로
+    # 1️⃣ 기존 방식 유지
     enhanced = enhance_video_script_for_video({"chapters": [chapter]})
 
-    # narration 필수 보정 (400 방지)
-    for sc in enhanced["chapters"][0]["scenes"]:
-        if not sc.get("narration"):
-            sc["narration"] = sc.get("on_screen_text") or "설명입니다."
+    # 2️⃣ ❗ HeyGen 전용 scene 정제
+    raw_scenes = enhanced["chapters"][0]["scenes"]
+    enhanced["chapters"][0]["scenes"] = sanitize_scenes_for_heygen(raw_scenes)
 
+    for i, sc in enumerate(enhanced["chapters"][0]["scenes"], 1):
+        print(f"  - scene {i}: narration_len={len(sc['narration'])}")
+
+    # 3️⃣ HeyGen payload 생성
     video_inputs = build_heygen_video_inputs(
         enhanced,
         avatar_id=os.getenv("HEYGEN_AVATAR_ID"),
-        voice_id=os.getenv("HEYGEN_VOICE_ID"),
-        bg_type=os.getenv("HEYGEN_BG_TYPE", "color"),
-        bg_value=os.getenv("HEYGEN_BG_VALUE", "#FFFFFF"),
     )
 
     payload = build_heygen_generate_payload(
         video_inputs,
-        width=int(os.getenv("HEYGEN_DIM_W", "1280")),
-        height=int(os.getenv("HEYGEN_DIM_H", "720")),
+        width=1280,
+        height=720,
     )
 
-    # DEBUG payload
+
+    # DEBUG payload 저장
     debug_path = OUTPUT_DIR / f"chapter_{chapter_no}.DEBUG.payload.json"
     debug_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -116,11 +143,11 @@ async def render_single_chapter_to_s3(
     )
     print(f"🧪 DEBUG payload saved → {debug_path}")
 
-    # 2️⃣ HeyGen 요청
+    # 4️⃣ HeyGen 요청
     video_id = await client.generate_video(payload)
     print(f"✅ HeyGen video_id = {video_id}")
 
-    # 3️⃣ 상태 폴링
+    # 5️⃣ 상태 폴링
     for _ in range(MAX_POLLS):
         status = await client.get_video_status(video_id)
         data = status.get("data", {})
