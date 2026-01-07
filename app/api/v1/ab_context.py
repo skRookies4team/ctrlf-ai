@@ -14,7 +14,7 @@ Backend → AI 모델 선택 API입니다.
 2. AI는 requestId별로 모델 컨텍스트를 저장
 3. 이후 해당 requestId로 요청 시 저장된 모델 설정 사용
 4. 모델에 따라 임베딩/컬렉션 분기:
-   - openai: OpenAI text-embedding-3-large, ragflow_chunks
+   - openai: OpenAI text-embedding-3-large, ragflow_chunks_openai
    - sroberta: SRoberta 임베딩, ragflow_chunks_sroberta
 
 인증:
@@ -135,7 +135,7 @@ Backend에서 호출하여 A/B 테스트 모델을 설정합니다.
 **인증**: X-Internal-Token 헤더 필수
 
 **모델 옵션**:
-- `openai`: OpenAI text-embedding-3-large (3072 dim), ragflow_chunks 컬렉션
+- `openai`: OpenAI text-embedding-3-large (3072 dim), ragflow_chunks_openai 컬렉션
 - `sroberta`: SRoberta 임베딩 (384 dim), ragflow_chunks_sroberta 컬렉션
 
 **처리 흐름**:

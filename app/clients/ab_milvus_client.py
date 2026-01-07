@@ -7,7 +7,7 @@ A/B 테스트 모델 선택에 따라 임베딩/컬렉션을 동적으로 전환
 1. Backend → AI: POST /chat {session_id, query, model: "sroberta"}
 2. AI: get_milvus_client_by_model(model)로 직접 클라이언트 선택
 3. 모델에 따라 적절한 Milvus 클라이언트 인스턴스 반환:
-   - openai: OpenAI text-embedding-3-large, ragflow_chunks
+   - openai: OpenAI text-embedding-3-large, ragflow_chunks_openai
    - sroberta: SRoberta 임베딩, ragflow_chunks_sroberta
 
 Phase AB: A/B 테스트 지원

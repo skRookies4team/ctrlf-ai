@@ -189,8 +189,11 @@ class AnswerGenerator:
             "Q7": self._format_q7_fallback,
             "Q8": self._format_q8_fallback,
             "Q9": self._format_q9_fallback,
+            "Q10": self._format_q10_fallback,
             "Q11": self._format_q11_fallback,
+            "Q12": self._format_q12_fallback,
             "Q14": self._format_q14_fallback,
+            "Q15": self._format_q15_fallback,
             "Q18": self._format_q18_fallback,
             "Q19": self._format_q19_fallback,
             "Q20": self._format_q20_fallback,
@@ -382,6 +385,68 @@ class AnswerGenerator:
 
         return f"이번 주 할 일이 {count}건 있어요."
 
+    def _format_q10_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q10 (내 근태 현황) 폴백."""
+        work_days = facts.metrics.get("work_days", 0)
+        actual_work_days = facts.metrics.get("actual_work_days", 0)
+        late_count = facts.metrics.get("late_count", 0)
+        early_leave_count = facts.metrics.get("early_leave_count", 0)
+        absent_count = facts.metrics.get("absent_count", 0)
+        remote_days = facts.metrics.get("remote_days", 0)
+        overtime_hours = facts.metrics.get("overtime_hours", 0)
+
+        lines = [f"이번 달 근태 현황 (총 근무일 {work_days}일 중 {actual_work_days}일 출근):"]
+
+        # 요약 정보
+        summary_parts = []
+        if late_count > 0:
+            summary_parts.append(f"지각 {late_count}회")
+        if early_leave_count > 0:
+            summary_parts.append(f"조퇴 {early_leave_count}회")
+        if absent_count > 0:
+            summary_parts.append(f"결근 {absent_count}회")
+        if remote_days > 0:
+            summary_parts.append(f"재택 {remote_days}일")
+        if overtime_hours > 0:
+            summary_parts.append(f"초과근무 {overtime_hours}시간")
+
+        if summary_parts:
+            lines.append("- " + ", ".join(summary_parts))
+        else:
+            lines.append("- 지각/조퇴/결근 없음")
+
+        # 최근 출퇴근 기록
+        items = facts.items
+        if items:
+            lines.append("")
+            lines.append("[최근 출퇴근 기록]")
+            for item in items[:7]:  # 최대 7일 (일주일)
+                date = item.get("date", "")
+                day_of_week = item.get("day_of_week", "")
+                check_in = item.get("check_in", "-")
+                check_out = item.get("check_out", "-")
+                status = item.get("status", "")
+                work_type = item.get("work_type", "")
+
+                # 날짜 포맷팅 (YYYY-MM-DD -> MM/DD)
+                try:
+                    date_str = date[5:10].replace("-", "/") if date else ""
+                except Exception:
+                    date_str = date
+
+                # 상태 표시
+                status_str = ""
+                if status == "지각":
+                    status_str = " [지각]"
+                elif status == "조퇴":
+                    status_str = " [조퇴]"
+                elif work_type == "재택":
+                    status_str = " [재택]"
+
+                lines.append(f"- {date_str}({day_of_week}) {check_in}~{check_out}{status_str}")
+
+        return "\n".join(lines)
+
     def _format_q11_fallback(self, facts: PersonalizationFacts) -> str:
         """Q11 (남은 연차) 폴백."""
         remaining = facts.metrics.get("remaining_days", 0)
@@ -391,6 +456,60 @@ class AnswerGenerator:
         if total:
             return f"남은 연차: {remaining}일 (총 {total}일 중 {used}일 사용)"
         return f"남은 연차: {remaining}일"
+
+    def _format_q12_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q12 (연차 사용 이력) 폴백."""
+        total = facts.metrics.get("total_days", 0)
+        used = facts.metrics.get("used_days", 0)
+        remaining = facts.metrics.get("remaining_days", 0)
+        usage_count = facts.metrics.get("usage_count", 0)
+
+        items = facts.items
+        if not items:
+            if used == 0:
+                return "올해 사용한 연차가 없어요."
+            return f"올해 연차 {used}일을 사용했어요. (잔여: {remaining}일)"
+
+        # 사용 이력이 있는 경우
+        lines = [f"올해 연차 사용 이력 ({usage_count}건, 총 {used}일 사용):"]
+
+        for item in items[:10]:  # 최대 10개 표시
+            leave_type = item.get("leave_type", "연차")
+            start_date = item.get("start_date", "")
+            end_date = item.get("end_date", "")
+            days = item.get("days", 0)
+            reason = item.get("reason", "")
+
+            # 날짜 포맷팅 (YYYY-MM-DD -> MM/DD)
+            try:
+                start_str = start_date[5:10].replace("-", "/") if start_date else ""
+                end_str = end_date[5:10].replace("-", "/") if end_date else ""
+            except Exception:
+                start_str = start_date
+                end_str = end_date
+
+            # 기간 표시
+            if start_str == end_str or not end_str:
+                date_str = start_str
+            else:
+                date_str = f"{start_str}~{end_str}"
+
+            # 일수 표시
+            if days == 0.5:
+                days_str = "반차"
+            elif days == int(days):
+                days_str = f"{int(days)}일"
+            else:
+                days_str = f"{days}일"
+
+            # 사유가 있으면 표시
+            if reason:
+                lines.append(f"- [{leave_type}] {date_str} ({days_str}) - {reason}")
+            else:
+                lines.append(f"- [{leave_type}] {date_str} ({days_str})")
+
+        lines.append(f"\n잔여 연차: {remaining}일")
+        return "\n".join(lines)
 
     def _format_q14_fallback(self, facts: PersonalizationFacts) -> str:
         """Q14 (복지/식대 포인트) 폴백."""
@@ -406,6 +525,59 @@ class AnswerGenerator:
         if len(lines) > 1:
             return "\n".join(lines)
         return "포인트 잔액을 조회할 수 없어요."
+
+    def _format_q15_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q15 (복지 포인트 사용 내역) 폴백."""
+        total_granted = facts.metrics.get("total_granted", 0)
+        total_used = facts.metrics.get("total_used", 0)
+        remaining = facts.metrics.get("remaining", 0)
+        usage_count = facts.metrics.get("usage_count", 0)
+
+        items = facts.items
+        if not items:
+            if total_used == 0:
+                return f"올해 사용한 복지 포인트가 없어요. (잔액: {remaining:,}원)"
+            return f"올해 복지 포인트 {total_used:,}원을 사용했어요. (잔액: {remaining:,}원)"
+
+        # 사용 내역이 있는 경우
+        lines = [f"복지 포인트 사용 내역 ({usage_count}건, 총 {total_used:,}원 사용):"]
+
+        # 카테고리별 합계 계산
+        category_totals: dict = {}
+        for item in items:
+            cat = item.get("category", "기타")
+            amt = item.get("amount", 0)
+            category_totals[cat] = category_totals.get(cat, 0) + amt
+
+        # 카테고리별 요약
+        if category_totals:
+            lines.append("")
+            lines.append("[카테고리별 사용 현황]")
+            for cat, amt in sorted(category_totals.items(), key=lambda x: -x[1]):
+                lines.append(f"- {cat}: {amt:,}원")
+
+        # 최근 사용 내역 (최대 10개)
+        lines.append("")
+        lines.append("[최근 사용 내역]")
+        for item in items[:10]:
+            date = item.get("date", "")
+            merchant = item.get("merchant", "")
+            amount = item.get("amount", 0)
+            description = item.get("description", "")
+
+            # 날짜 포맷팅 (YYYY-MM-DD -> MM/DD)
+            try:
+                date_str = date[5:10].replace("-", "/") if date else ""
+            except Exception:
+                date_str = date
+
+            if description:
+                lines.append(f"- {date_str} {merchant}: {amount:,}원 ({description})")
+            else:
+                lines.append(f"- {date_str} {merchant}: {amount:,}원")
+
+        lines.append(f"\n잔여 포인트: {remaining:,}원")
+        return "\n".join(lines)
 
     def _format_q18_fallback(self, facts: PersonalizationFacts) -> str:
         """Q18 (보안교육/특정 토픽 완료 여부) 폴백."""

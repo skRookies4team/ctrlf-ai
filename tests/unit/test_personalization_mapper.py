@@ -60,6 +60,13 @@ class TestToPersonalizationQ:
         assert to_personalization_q("HR_LEAVE_CHECK", "내 연차 며칠?") == "Q11"
         assert to_personalization_q("HR_LEAVE_CHECK", "연차 잔여일") == "Q11"
 
+    def test_hr_leave_check_welfare_history(self):
+        """HR_LEAVE_CHECK + 복지 내역 키워드 -> Q15."""
+        assert to_personalization_q("HR_LEAVE_CHECK", "복지 포인트 사용 내역") == "Q15"
+        assert to_personalization_q("HR_LEAVE_CHECK", "포인트 내역 보여줘") == "Q15"
+        assert to_personalization_q("HR_LEAVE_CHECK", "복지 어디서 썼어") == "Q15"
+        assert to_personalization_q("HR_LEAVE_CHECK", "포인트 사용 기록") == "Q15"
+
     def test_hr_leave_check_welfare(self):
         """HR_LEAVE_CHECK + 복지 키워드 -> Q14."""
         assert to_personalization_q("HR_LEAVE_CHECK", "복지포인트 잔액") == "Q14"
@@ -71,6 +78,13 @@ class TestToPersonalizationQ:
         assert to_personalization_q("HR_LEAVE_CHECK", "근태 현황 조회") == "Q10"
         assert to_personalization_q("HR_LEAVE_CHECK", "출근 기록") == "Q10"
         assert to_personalization_q("HR_LEAVE_CHECK", "퇴근 시간") == "Q10"
+
+    def test_hr_leave_check_history(self):
+        """HR_LEAVE_CHECK + 이력/내역 키워드 -> Q12."""
+        assert to_personalization_q("HR_LEAVE_CHECK", "연차 사용 이력 보여줘") == "Q12"
+        assert to_personalization_q("HR_LEAVE_CHECK", "내 연차 내역 조회") == "Q12"
+        assert to_personalization_q("HR_LEAVE_CHECK", "휴가 언제 썼어") == "Q12"
+        assert to_personalization_q("HR_LEAVE_CHECK", "사용한 연차 목록") == "Q12"
 
     def test_hr_welfare_check(self):
         """HR_WELFARE_CHECK -> Q14 변환."""
@@ -157,13 +171,22 @@ class TestClassifyEduStatus:
 class TestClassifyHrLeave:
     """_classify_hr_leave 함수 테스트."""
 
+    def test_q15_welfare_history_keywords(self):
+        """복지 포인트 사용 내역 관련 키워드 -> Q15."""
+        assert _classify_hr_leave("복지 포인트 사용 내역") == "Q15"
+        assert _classify_hr_leave("포인트 내역 조회") == "Q15"
+        assert _classify_hr_leave("복지 이력 보여줘") == "Q15"
+        assert _classify_hr_leave("포인트 어디서 썼어") == "Q15"
+        assert _classify_hr_leave("복지 사용 기록") == "Q15"
+        assert _classify_hr_leave("포인트 사용 내역") == "Q15"
+
     def test_q14_welfare_keywords(self):
         """복지/식대 관련 키워드 -> Q14."""
         assert _classify_hr_leave("복지포인트 잔액") == "Q14"
         assert _classify_hr_leave("복지 포인트 얼마야") == "Q14"
         assert _classify_hr_leave("식대 조회") == "Q14"
         assert _classify_hr_leave("선택복지 현황") == "Q14"
-        assert _classify_hr_leave("포인트 잔액") == "Q14"
+        assert _classify_hr_leave("남은 포인트 얼마") == "Q14"
 
     def test_q10_attendance_keywords(self):
         """근태 관련 키워드 -> Q10."""
@@ -172,11 +195,21 @@ class TestClassifyHrLeave:
         assert _classify_hr_leave("퇴근 시간") == "Q10"
         assert _classify_hr_leave("근태현황 조회") == "Q10"
 
+    def test_q12_leave_history_keywords(self):
+        """연차 사용 이력 관련 키워드 -> Q12."""
+        assert _classify_hr_leave("연차 사용 이력") == "Q12"
+        assert _classify_hr_leave("연차 내역 조회") == "Q12"
+        assert _classify_hr_leave("휴가 이력 보여줘") == "Q12"
+        assert _classify_hr_leave("언제 연차 썼어") == "Q12"
+        assert _classify_hr_leave("사용한 연차 내역") == "Q12"
+        assert _classify_hr_leave("연차 사용 내역") == "Q12"
+        assert _classify_hr_leave("휴가 사용 기록") == "Q12"
+
     def test_q11_default(self):
         """그 외 (연차) -> Q11 (기본)."""
         assert _classify_hr_leave("연차 며칠?") == "Q11"
         assert _classify_hr_leave("내 연차 잔여일") == "Q11"
-        assert _classify_hr_leave("휴가 현황") == "Q11"
+        assert _classify_hr_leave("남은 휴가 일수") == "Q11"
 
 
 # =============================================================================

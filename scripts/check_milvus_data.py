@@ -27,7 +27,7 @@ async def main():
     # Milvus 연결
     milvus_host = os.getenv("MILVUS_HOST", "58.127.241.84")
     milvus_port = int(os.getenv("MILVUS_PORT", "19540"))
-    collection_name = os.getenv("MILVUS_COLLECTION_NAME", "ragflow_chunks")
+    collection_name = os.getenv("MILVUS_COLLECTION_NAME", "ragflow_chunks_openai")
 
     print(f"Milvus 연결: {milvus_host}:{milvus_port}")
 

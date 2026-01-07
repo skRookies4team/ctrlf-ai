@@ -41,11 +41,29 @@ SUBINTENT_TO_Q: dict[str, str] = {
 }
 
 # HR_LEAVE_CHECK 세분화용 키워드 (RuleRouter가 모든 HR을 HR_LEAVE_CHECK으로 분류하므로)
+# Q15: 복지 포인트 사용 내역 조회용 키워드 (Q14보다 우선 체크)
+# 주의: "복지" 또는 "포인트"가 명시적으로 포함된 키워드만 사용
+HR_WELFARE_HISTORY_KEYWORDS = frozenset([
+    "포인트 사용", "포인트사용", "포인트 내역", "포인트내역", "복지 내역", "복지내역",
+    "복지 사용", "복지사용", "복지 이력", "복지이력",
+    "포인트 이력", "포인트이력", "포인트 썼", "복지 썼", "복지포인트 썼",
+    "포인트 어디", "복지 어디", "포인트 뭐에", "복지 뭐에",
+])
+# Q14: 복지/식대 포인트 잔액 조회용 키워드
 HR_WELFARE_KEYWORDS = frozenset([
     "복지", "복지포인트", "복지 포인트", "포인트 잔액", "식대", "선택복지",
+    "잔액", "얼마 남", "얼마남", "남은 포인트",
 ])
 HR_ATTENDANCE_KEYWORDS = frozenset([
     "근태", "출근", "퇴근", "근태현황", "근태 현황",
+])
+# Q12: 연차 사용 이력 조회용 키워드
+HR_LEAVE_HISTORY_KEYWORDS = frozenset([
+    "연차 사용", "연차사용", "연차 이력", "연차이력", "연차 내역", "연차내역",
+    "휴가 이력", "휴가이력", "휴가 내역", "휴가내역", "휴가 사용", "휴가사용",
+    "언제 썼", "언제썼", "언제 사용", "언제사용", "사용 내역", "사용내역",
+    "쓴 연차", "썼던", "사용한 연차", "사용한 휴가",
+    "연차 썼", "연차썼", "휴가 썼", "휴가썼",  # 추가: "언제 연차 썼어" 등 패턴
 ])
 
 # EDU_STATUS_CHECK 세분화용 키워드 매핑
@@ -199,16 +217,38 @@ def _classify_quiz_score(query: str) -> str:
 
 
 def _classify_hr_leave(query: str) -> str:
+    """HR_LEAVE_CHECK를 Q10, Q11, Q12, Q14, Q15로 세분화합니다.
+
+    우선순위:
+    1. Q15: 복지 포인트 사용 내역 (내역/이력/사용 키워드)
+    2. Q14: 복지/식대 포인트 잔액
+    3. Q10: 근태 현황
+    4. Q12: 연차 사용 이력 (이력/내역/사용 키워드)
+    5. Q11: 남은 연차 일수 (기본값)
+    """
     q_lower = query.lower()
 
+    # Q15: 복지 포인트 사용 내역 (Q14보다 우선 체크)
+    for keyword in HR_WELFARE_HISTORY_KEYWORDS:
+        if keyword in q_lower:
+            return "Q15"
+
+    # Q14: 복지/식대 포인트 잔액
     for keyword in HR_WELFARE_KEYWORDS:
         if keyword in q_lower:
             return "Q14"
 
+    # Q10: 근태 현황
     for keyword in HR_ATTENDANCE_KEYWORDS:
         if keyword in q_lower:
             return "Q10"
 
+    # Q12: 연차 사용 이력 (이력/내역/사용 관련 키워드 우선 체크)
+    for keyword in HR_LEAVE_HISTORY_KEYWORDS:
+        if keyword in q_lower:
+            return "Q12"
+
+    # Q11: 남은 연차 일수 (기본값)
     return "Q11"
 
 

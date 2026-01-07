@@ -58,7 +58,7 @@ stderr에 JSON 형식으로 4가지 이벤트가 출력됩니다:
 {
   "event": "retrieval_target",
   "request_id": "abc-123",
-  "collection": "ragflow_chunks",
+  "collection": "ragflow_chunks_openai",
   "partition": null,
   "filter_expr": null,
   "top_k": 5,
@@ -86,8 +86,8 @@ stderr에 JSON 형식으로 4가지 이벤트가 출력됩니다:
   "request_id": "abc-123",
   "count": 5,
   "results": [
-    {"doc_title": "연차휴가 관리 규정", "chunk_id": "doc-001", "score": 0.85},
-    {"doc_title": "인사관리 규정", "chunk_id": "doc-002", "score": 0.72}
+    { "doc_title": "연차휴가 관리 규정", "chunk_id": "doc-001", "score": 0.85 },
+    { "doc_title": "인사관리 규정", "chunk_id": "doc-002", "score": 0.72 }
   ]
 }
 ```
@@ -96,10 +96,10 @@ stderr에 JSON 형식으로 4가지 이벤트가 출력됩니다:
 
 ### 케이스 비교 예시
 
-| 질문 | collection | domain | keywords | top5 점수 |
-|------|------------|--------|----------|-----------|
-| 연차 관련해서 알려줘 | ragflow_chunks | POLICY | null | 0.65 |
-| 연차휴가 알려줘 | ragflow_chunks | POLICY | null | 0.85 |
+| 질문                 | collection            | domain | keywords | top5 점수 |
+| -------------------- | --------------------- | ------ | -------- | --------- |
+| 연차 관련해서 알려줘 | ragflow_chunks_openai | POLICY | null     | 0.65      |
+| 연차휴가 알려줘      | ragflow_chunks_openai | POLICY | null     | 0.85      |
 
 ### 원인 판별 기준
 

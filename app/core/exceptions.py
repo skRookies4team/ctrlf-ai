@@ -38,8 +38,17 @@ class ErrorType(str, Enum):
     Phase 12: ChatMeta.error_type 필드에 사용됩니다.
     """
 
-    # 외부 서비스 타임아웃
+    # 외부 서비스 타임아웃 (기존 - 하위 호환성)
     UPSTREAM_TIMEOUT = "UPSTREAM_TIMEOUT"
+
+    # =========================================================================
+    # Upstream별 세분화된 타임아웃 에러코드
+    # 원인 추적을 위해 서비스별로 분리
+    # =========================================================================
+    TIMEOUT_LLM = "TIMEOUT_LLM"           # LLM 서비스 타임아웃
+    TIMEOUT_RAGFLOW = "TIMEOUT_RAGFLOW"   # RAGFlow 검색 타임아웃
+    TIMEOUT_BACKEND = "TIMEOUT_BACKEND"   # Backend API 타임아웃
+    TIMEOUT_PII = "TIMEOUT_PII"           # PII 마스킹 서비스 타임아웃
 
     # 외부 서비스 HTTP 에러 (4xx/5xx)
     UPSTREAM_ERROR = "UPSTREAM_ERROR"
@@ -52,6 +61,25 @@ class ErrorType(str, Enum):
 
     # 알 수 없는 에러
     UNKNOWN = "UNKNOWN"
+
+
+def get_timeout_error_type(service: "ServiceType") -> ErrorType:
+    """
+    서비스 타입에 따른 세분화된 타임아웃 에러코드 반환.
+
+    Args:
+        service: 서비스 타입
+
+    Returns:
+        ErrorType: 서비스별 타임아웃 에러코드
+    """
+    timeout_map = {
+        ServiceType.LLM: ErrorType.TIMEOUT_LLM,
+        ServiceType.RAGFLOW: ErrorType.TIMEOUT_RAGFLOW,
+        ServiceType.BACKEND: ErrorType.TIMEOUT_BACKEND,
+        ServiceType.PII: ErrorType.TIMEOUT_PII,
+    }
+    return timeout_map.get(service, ErrorType.UPSTREAM_TIMEOUT)
 
 
 class ServiceType(str, Enum):

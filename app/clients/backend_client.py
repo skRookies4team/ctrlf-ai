@@ -46,7 +46,12 @@ from pydantic import BaseModel
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
-from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
+from app.core.exceptions import (
+    ErrorType,
+    ServiceType,
+    UpstreamServiceError,
+    get_timeout_error_type,
+)
 from app.core.logging import get_logger
 from app.core.retry import BACKEND_RETRY_CONFIG, DEFAULT_BACKEND_TIMEOUT, retry_async_operation
 from app.models.ai_log import AILogEntry, AILogResponse, to_backend_log_payload
@@ -632,7 +637,7 @@ class BackendClient:
             if raise_on_error:
                 raise UpstreamServiceError(
                     service=ServiceType.BACKEND,
-                    error_type=ErrorType.UPSTREAM_TIMEOUT,
+                    error_type=get_timeout_error_type(ServiceType.BACKEND),  # TIMEOUT_BACKEND
                     message=f"Backend timeout after {self._timeout}s",
                     is_timeout=True,
                     original_error=e,

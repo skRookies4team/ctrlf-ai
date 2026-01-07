@@ -50,11 +50,11 @@ class TestPersonalizationModels:
         assert PersonalizationSubIntentId.Q20.value == "Q20"
 
     def test_priority_sub_intents(self):
-        """우선순위 인텐트 13개 확인.
+        """우선순위 인텐트 16개 확인.
 
-        Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q11, Q14, Q18, Q19가 우선순위.
+        Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q14, Q15, Q18, Q19가 우선순위.
         """
-        assert len(PRIORITY_SUB_INTENTS) == 13
+        assert len(PRIORITY_SUB_INTENTS) == 16
         assert "Q1" in PRIORITY_SUB_INTENTS
         assert "Q2" in PRIORITY_SUB_INTENTS
         assert "Q3" in PRIORITY_SUB_INTENTS
@@ -64,8 +64,11 @@ class TestPersonalizationModels:
         assert "Q7" in PRIORITY_SUB_INTENTS
         assert "Q8" in PRIORITY_SUB_INTENTS
         assert "Q9" in PRIORITY_SUB_INTENTS
+        assert "Q10" in PRIORITY_SUB_INTENTS
         assert "Q11" in PRIORITY_SUB_INTENTS
+        assert "Q12" in PRIORITY_SUB_INTENTS
         assert "Q14" in PRIORITY_SUB_INTENTS
+        assert "Q15" in PRIORITY_SUB_INTENTS
         assert "Q18" in PRIORITY_SUB_INTENTS
         assert "Q19" in PRIORITY_SUB_INTENTS
         # Q20은 우선순위 목록에 미포함 (선택 구현)
@@ -80,6 +83,7 @@ class TestPersonalizationModels:
         assert DEFAULT_PERIOD_FOR_INTENT["Q7"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q8"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q9"] == PeriodType.THIS_WEEK
+        assert DEFAULT_PERIOD_FOR_INTENT["Q10"] == PeriodType.THIS_MONTH
         assert DEFAULT_PERIOD_FOR_INTENT["Q11"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q18"] == PeriodType.THIS_YEAR
         assert DEFAULT_PERIOD_FOR_INTENT["Q19"] == PeriodType.THIS_YEAR
@@ -228,8 +232,8 @@ class TestPersonalizationClient:
             mock_settings.PERSONALIZATION_MODE = "mock"
 
             client = PersonalizationClient(base_url=None)
-            # Q10은 우선순위가 아님 (근태 현황)
-            facts = await client.resolve_facts("Q10", user_id="test_user")
+            # Q13은 우선순위가 아님 (급여 명세서 요약)
+            facts = await client.resolve_facts("Q13", user_id="test_user")
 
             assert facts.error is not None
             assert facts.error.type == "NOT_IMPLEMENTED"

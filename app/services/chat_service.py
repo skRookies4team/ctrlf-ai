@@ -142,6 +142,10 @@ from app.services.chat.message_builder import (
     SYSTEM_PROMPT_BACKEND_API,
     NO_RAG_RESULTS_NOTICE,
 )
+from app.services.chat.timeout_policy import (
+    TimeoutContext,
+    pick_llm_timeout,
+)
 from app.services.router_orchestrator import (
     OrchestrationResult,
     RouterOrchestrator,
@@ -1318,6 +1322,16 @@ class ChatService:
         else:
             # 기존 로직: LLM 호출
             try:
+                # 라우트/난이도에 따른 차등 타임아웃 계산
+                _sub_intent = locals().get('sub_intent_id', '')
+                timeout_ctx = TimeoutContext.from_intent(
+                    intent_main=tier0_intent.value if tier0_intent else None,
+                    sub_intent=_sub_intent if _sub_intent else None,
+                    query=masked_query,
+                )
+                llm_timeout = pick_llm_timeout(self._settings, timeout_ctx)
+                logger.debug(f"LLM timeout: {llm_timeout}s (longform={timeout_ctx.is_longform}, complex={timeout_ctx.is_complex})")
+
                 # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
                 # llm_provider: 관리자 대시보드에서 선택한 LLM 프로바이더 ("exaone" | "openai")
                 llm_result: LLMCompletionResult = await self._llm.generate_chat_completion_with_usage(
@@ -1326,6 +1340,7 @@ class ChatService:
                     temperature=0.2,
                     max_tokens=1024,
                     llm_provider=llm_provider,
+                    timeout=llm_timeout,  # 라우트별 차등 타임아웃 적용
                 )
                 raw_answer = llm_result.content
                 llm_latency_ms = llm_result.latency_ms

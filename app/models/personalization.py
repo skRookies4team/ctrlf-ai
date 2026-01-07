@@ -96,7 +96,7 @@ class PersonalizationSubIntentId(str, Enum):
     Q20 = "Q20"  # 올해 HR 할 일 (미완료)
 
 
-# 데모 완전 구현 대상 (13개) - Q2, Q7, Q8, Q18, Q19 추가 (4대교육 + 직무교육 지원)
+# 데모 완전 구현 대상 (16개) - Q2, Q7, Q8, Q10, Q12, Q15, Q18, Q19 추가 (4대교육 + 직무교육 + HR이력 지원)
 PRIORITY_SUB_INTENTS = frozenset([
     PersonalizationSubIntentId.Q1.value,
     PersonalizationSubIntentId.Q2.value,   # 특정 토픽 교육 이수 여부 (백엔드 DB 연동)
@@ -107,8 +107,11 @@ PRIORITY_SUB_INTENTS = frozenset([
     PersonalizationSubIntentId.Q7.value,   # 특정 토픽 퀴즈 점수 조회 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q8.value,   # 특정 토픽 교육 시청 완료 여부 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q9.value,
+    PersonalizationSubIntentId.Q10.value,  # 내 근태 현황 조회 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q11.value,
+    PersonalizationSubIntentId.Q12.value,  # 연차 사용 이력 조회 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q14.value,
+    PersonalizationSubIntentId.Q15.value,  # 복지 포인트 사용 내역 조회 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q18.value,  # 보안교육(특정 토픽) 완료 여부 (백엔드 DB 연동)
     PersonalizationSubIntentId.Q19.value,  # 특정 토픽 교육 마감일 조회 (백엔드 DB 연동)
 ])
@@ -123,8 +126,11 @@ DEFAULT_PERIOD_FOR_INTENT: Dict[str, PeriodType] = {
     "Q7": PeriodType.THIS_YEAR,   # 특정 토픽 퀴즈 점수 조회
     "Q8": PeriodType.THIS_YEAR,   # 특정 토픽 교육 시청 완료 여부
     "Q9": PeriodType.THIS_WEEK,
+    "Q10": PeriodType.THIS_MONTH,  # 내 근태 현황 조회
     "Q11": PeriodType.THIS_YEAR,
+    "Q12": PeriodType.THIS_YEAR,  # 연차 사용 이력 조회
     "Q14": PeriodType.THIS_YEAR,  # 기간 없음이지만 기본값
+    "Q15": PeriodType.THIS_YEAR,  # 복지 포인트 사용 내역 조회
     "Q18": PeriodType.THIS_YEAR,  # 보안교육(특정 토픽) 완료 여부
     "Q19": PeriodType.THIS_YEAR,  # 특정 토픽 교육 마감일 조회
     "Q20": PeriodType.THIS_YEAR,

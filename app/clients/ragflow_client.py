@@ -21,7 +21,17 @@ import httpx
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
+from app.core.exceptions import (
+    ErrorType,
+    ServiceType,
+    UpstreamServiceError,
+    get_timeout_error_type,
+)
 from app.core.logging import get_logger
+from app.core.retry import (
+    RAGFLOW_RETRY_CONFIG,
+    retry_async_operation,
+)
 
 logger = get_logger(__name__)
 
@@ -68,6 +78,68 @@ class RagflowDocumentError(RagflowError):
 
     def __init__(self, message: str):
         super().__init__(message, "RAGFLOW_DOCUMENT_ERROR")
+
+
+def ragflow_error_to_upstream_error(
+    error: Exception,
+    timeout_seconds: Optional[float] = None,
+) -> UpstreamServiceError:
+    """
+    RAGFlow 관련 예외를 UpstreamServiceError로 변환합니다.
+
+    Args:
+        error: 원본 예외
+        timeout_seconds: 타임아웃 값 (타임아웃 에러인 경우)
+
+    Returns:
+        UpstreamServiceError: 표준화된 에러
+    """
+    if isinstance(error, httpx.TimeoutException):
+        return UpstreamServiceError(
+            service=ServiceType.RAGFLOW,
+            error_type=get_timeout_error_type(ServiceType.RAGFLOW),
+            message=f"RAGFlow timeout after {timeout_seconds}s" if timeout_seconds else "RAGFlow timeout",
+            is_timeout=True,
+            original_error=error,
+        )
+    elif isinstance(error, RagflowConnectionError):
+        # 연결 에러도 타임아웃인 경우가 많음
+        if "timeout" in str(error).lower():
+            return UpstreamServiceError(
+                service=ServiceType.RAGFLOW,
+                error_type=get_timeout_error_type(ServiceType.RAGFLOW),
+                message=str(error),
+                is_timeout=True,
+                original_error=error,
+            )
+        return UpstreamServiceError(
+            service=ServiceType.RAGFLOW,
+            error_type=ErrorType.UPSTREAM_ERROR,
+            message=str(error),
+            original_error=error,
+        )
+    elif isinstance(error, RagflowDocumentError):
+        return UpstreamServiceError(
+            service=ServiceType.RAGFLOW,
+            error_type=ErrorType.UPSTREAM_ERROR,
+            message=str(error),
+            original_error=error,
+        )
+    elif isinstance(error, httpx.HTTPStatusError):
+        return UpstreamServiceError(
+            service=ServiceType.RAGFLOW,
+            error_type=ErrorType.UPSTREAM_ERROR,
+            message=f"RAGFlow HTTP {error.response.status_code}",
+            status_code=error.response.status_code,
+            original_error=error,
+        )
+    else:
+        return UpstreamServiceError(
+            service=ServiceType.RAGFLOW,
+            error_type=ErrorType.INTERNAL_ERROR,
+            message=f"RAGFlow unexpected error: {type(error).__name__}",
+            original_error=error,
+        )
 
 
 # =============================================================================
@@ -263,14 +335,23 @@ class RagflowClient:
                 logger.error(f"Ingest failed: status={response.status_code}, error={error_msg}")
                 raise RagflowDocumentError(f"Ingest failed: {error_msg}")
 
-        except RagflowError:
+        except RagflowError as e:
+            # RagflowError를 UpstreamServiceError로도 변환하여 raise
+            # 기존 코드 호환성을 위해 원래 예외도 유지
+            logger.warning(f"Ingest failed (RagflowError): {e}")
             raise
-        except httpx.TimeoutException:
-            raise RagflowConnectionError(f"Ingest timeout after {self._timeout}s")
+        except httpx.TimeoutException as e:
+            upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
+            logger.error(f"Ingest timeout: {upstream_error.message}")
+            raise RagflowConnectionError(f"Ingest timeout after {self._timeout}s") from upstream_error
         except httpx.RequestError as e:
-            raise RagflowConnectionError(f"Network error: {str(e)[:200]}")
+            upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
+            logger.error(f"Ingest network error: {upstream_error.message}")
+            raise RagflowConnectionError(f"Network error: {str(e)[:200]}") from upstream_error
         except Exception as e:
-            raise RagflowDocumentError(f"Unexpected error: {str(e)[:200]}")
+            upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
+            logger.error(f"Ingest unexpected error: {upstream_error.message}")
+            raise RagflowDocumentError(f"Unexpected error: {str(e)[:200]}") from upstream_error
 
     async def upload_document(
         self,
@@ -400,12 +481,18 @@ class RagflowClient:
 
         except RagflowError:
             raise
-        except httpx.TimeoutException:
-            raise RagflowConnectionError(f"Upload timeout after {self._timeout}s")
+        except httpx.TimeoutException as e:
+            upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
+            logger.error(f"Upload timeout: {upstream_error.message}")
+            raise RagflowConnectionError(f"Upload timeout after {self._timeout}s") from upstream_error
         except httpx.RequestError as e:
-            raise RagflowConnectionError(f"Network error: {str(e)[:200]}")
+            upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
+            logger.error(f"Upload network error: {upstream_error.message}")
+            raise RagflowConnectionError(f"Network error: {str(e)[:200]}") from upstream_error
         except Exception as e:
-            raise RagflowDocumentError(f"Unexpected error: {str(e)[:200]}")
+            upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
+            logger.error(f"Upload unexpected error: {upstream_error.message}")
+            raise RagflowDocumentError(f"Unexpected error: {str(e)[:200]}") from upstream_error
 
     async def trigger_parsing(
         self,
@@ -679,6 +766,82 @@ class RagflowClient:
         except Exception as e:
             logger.error(f"Error finding document by doc_id: {e}")
             return None
+
+    async def ingest_document_with_retry(
+        self,
+        dataset_id: str,
+        doc_id: str,
+        file_url: str,
+        version: Optional[int] = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        재시도 로직이 적용된 문서 ingest.
+
+        RAGFLOW_RETRY_CONFIG에 따라 최대 1회 재시도합니다.
+
+        Args:
+            dataset_id: RAGFlow dataset ID
+            doc_id: 문서 ID
+            file_url: 문서 파일 URL
+            version: 문서 버전 (선택)
+            meta: 추가 메타데이터 (선택)
+
+        Returns:
+            dict: ingest 결과
+
+        Raises:
+            UpstreamServiceError: 모든 재시도 실패 시
+        """
+        try:
+            return await retry_async_operation(
+                self.ingest_document,
+                dataset_id,
+                doc_id,
+                file_url,
+                version,
+                meta,
+                config=RAGFLOW_RETRY_CONFIG,
+                operation_name="ragflow_ingest_document",
+            )
+        except RagflowError as e:
+            raise ragflow_error_to_upstream_error(e, self._timeout)
+        except Exception as e:
+            raise ragflow_error_to_upstream_error(e, self._timeout)
+
+    async def upload_document_with_retry(
+        self,
+        dataset_id: str,
+        file_url: str,
+        file_name: str,
+    ) -> Dict[str, Any]:
+        """
+        재시도 로직이 적용된 문서 업로드.
+
+        Args:
+            dataset_id: RAGFlow dataset ID
+            file_url: 문서 파일 URL
+            file_name: 파일명
+
+        Returns:
+            dict: 업로드 결과
+
+        Raises:
+            UpstreamServiceError: 모든 재시도 실패 시
+        """
+        try:
+            return await retry_async_operation(
+                self.upload_document,
+                dataset_id,
+                file_url,
+                file_name,
+                config=RAGFLOW_RETRY_CONFIG,
+                operation_name="ragflow_upload_document",
+            )
+        except RagflowError as e:
+            raise ragflow_error_to_upstream_error(e, self._timeout)
+        except Exception as e:
+            raise ragflow_error_to_upstream_error(e, self._timeout)
 
     async def get_document_status(
         self,

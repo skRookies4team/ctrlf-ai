@@ -224,6 +224,10 @@ HR_PERSONAL_KEYWORDS = frozenset([
     "휴가 잔여", "휴가 남은", "내 휴가", "남은 휴가", "잔여 휴가",
     "휴가 며칠", "휴가 얼마", "휴가 몇", "휴가 확인", "휴가 조회",
     "휴가가 며칠", "휴가가 얼마", "휴가가 몇",
+    # 연차/휴가 사용 이력 패턴 (Q12 지원)
+    "연차 사용", "연차 이력", "연차 내역", "연차 썼", "사용한 연차",
+    "휴가 사용", "휴가 이력", "휴가 내역", "휴가 썼", "사용한 휴가",
+    "언제 썼", "썼던 연차", "썼던 휴가",
     # 급여 패턴
     "급여", "월급", "봉급", "내 급여", "급여명세",
     # 근태 패턴
@@ -232,6 +236,10 @@ HR_PERSONAL_KEYWORDS = frozenset([
     "복지", "복지포인트", "포인트 잔액", "내 포인트",
     "포인트 얼마", "포인트 조회", "포인트 확인",
     "식대", "식대 잔액", "식대 얼마", "식대 조회",
+    # 복지/포인트 사용 내역 패턴 (Q15 지원)
+    "포인트 사용", "포인트 이력", "포인트 내역", "포인트 썼",
+    "복지 사용", "복지 이력", "복지 내역", "복지 썼",
+    "어디서 썼", "뭐에 썼",
     # 일반 개인정보 조회 패턴
     "내 정보", "나의 정보", "내 현황", "나의 현황",
     "내가 얼마", "내 잔여", "나 몇 개",
@@ -707,10 +715,15 @@ class RuleRouter:
             )
 
         # 절차 + 교육 힌트 → EDUCATION_QA
+        # 단, 개인화 키워드(이번 주, 할 일, 미이수 등)가 있으면 개인화로 분류하도록 스킵
         has_edu_hint = self._contains_any_normalized(
             query_normalized, EDU_PROCEDURE_HINTS_NORM
         )
         if has_edu_hint:
+            # 개인화 키워드가 있으면 스킵 (EDU_STATUS_CHECK로 분류되도록)
+            if self._contains_any_normalized(query_normalized, EDU_STATUS_KEYWORDS_NORM):
+                debug_info.rule_hits.append("PROCEDURE_AND_EDU_SKIPPED_PERSONALIZATION")
+                return None  # 개인화 흐름으로 진행
             debug_info.rule_hits.append("PROCEDURE_AND_EDU")
             debug_info.keywords.extend([
                 kw for kw in PROCEDURE_WORDS_NORM if kw in query_normalized
@@ -992,8 +1005,21 @@ class RuleRouter:
 
         # Phase 49: 복합 조건 - "교육"이 포함되면 EDU 우선 체크
         # "정보보호교육", "성희롱예방교육" 등은 EDU로 분류해야 함
+        # 단, 퀴즈 점수/현황 또는 교육 현황 개인화 키워드가 있으면 개인화로 분류
         if "교육" in query_normalized:
-            if self._contains_any_normalized(query_normalized, EDU_CONTENT_KEYWORDS_NORM):
+            # 퀴즈 점수/현황 키워드가 있으면 개인화로 분류 (EDU_CONTENT_PRIORITY 스킵)
+            has_quiz_personalization = (
+                self._contains_any_normalized(query_normalized, QUIZ_SCORE_KEYWORDS_NORM) or
+                self._contains_any_normalized(query_normalized, QUIZ_PENDING_KEYWORDS_NORM)
+            )
+            # 교육 현황 개인화 키워드가 있으면 개인화로 분류 (EDU_CONTENT_PRIORITY 스킵)
+            has_edu_personalization = self._contains_any_normalized(
+                query_normalized, EDU_STATUS_KEYWORDS_NORM
+            )
+            if has_quiz_personalization or has_edu_personalization:
+                debug_info.rule_hits.append("EDU_CONTENT_PRIORITY_SKIPPED_PERSONALIZATION")
+                # 개인화 흐름으로 진행 (아래 분기에서 처리됨)
+            elif self._contains_any_normalized(query_normalized, EDU_CONTENT_KEYWORDS_NORM):
                 debug_info.rule_hits.append("EDU_CONTENT_PRIORITY")
                 debug_info.keywords.extend(
                     [kw for kw in EDU_CONTENT_KEYWORDS_NORM if kw in query_normalized]

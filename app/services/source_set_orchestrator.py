@@ -487,7 +487,8 @@ class SourceSetOrchestrator:
 
                 logger.info(f"Ingesting document to RAGFlow: doc_id={doc.document_id}")
 
-                ingest_result = await self._ragflow_client.ingest_document(
+                # 재시도 로직이 내장된 래퍼 사용 (네트워크 타임아웃/오류에도 1회 재시도)
+                ingest_result = await self._ragflow_client.ingest_document_with_retry(
                     dataset_id=dataset_id,
                     doc_id=doc.document_id,
                     file_url=doc.source_url,
