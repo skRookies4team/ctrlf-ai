@@ -40,7 +40,7 @@ ALL_DATASET_IDS = [
     "사내규정",
 ]
 
-DEFAULT_DATASET_ID = "직장내괴롭힘교육"
+DEFAULT_DATASET_ID = "장애인인식개선교육"
 
 
 def pick_dataset_id_from_argv(default: str = DEFAULT_DATASET_ID) -> str:
