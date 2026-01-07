@@ -95,6 +95,10 @@ from app.core.retrieval_context import (
 )
 from app.services.search_merger import rrf_fuse_with_sources
 from app.services.chat.query_rewriter import expand_query_sync, RewriteResult
+from app.services.chat.rag_quality_log import (
+    build_rag_quality_log,
+    log_rag_quality,
+)
 
 logger = get_logger(__name__)
 
@@ -788,6 +792,7 @@ class RagHandler:
                     )
 
             # Step 3: RRF Fusion (조건부)
+            rrf_result = None  # Phase 57: 품질 로그용 초기화
             if settings.RAG_FUSION_ENABLED and expanded_sources:
                 # RRF로 융합
                 rrf_result = rrf_fuse_with_sources(
@@ -816,6 +821,22 @@ class RagHandler:
             logger.info(
                 f"Milvus search returned {len(sources)} sources (retriever_used=MILVUS)"
             )
+
+            # Phase 57: RAG 품질 로그 (구조화)
+            rag_quality_log = build_rag_quality_log(
+                request_id=request_id or "",
+                domain=domain,
+                query=query,
+                normalized_query=query,  # 이미 정규화된 쿼리
+                original_sources=original_sources,
+                expanded_sources=expanded_sources if expanded_sources else None,
+                rewrite_result=rewrite_result,
+                rrf_result=rrf_result,
+                final_sources=sources,
+                retriever_used="MILVUS",
+                settings=settings,
+            )
+            log_rag_quality(rag_quality_log)
 
             # 디버그 로그: retrieval_top5
             if request_id:

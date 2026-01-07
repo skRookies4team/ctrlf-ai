@@ -173,3 +173,4 @@ placeholder_docs_final.json
 
 # Accidentally created files
 dy
+tests/regression/reports/

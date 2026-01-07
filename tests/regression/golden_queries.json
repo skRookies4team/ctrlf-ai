@@ -1,0 +1,411 @@
+{
+  "version": "1.0.0",
+  "phase": 57,
+  "description": "RAG 품질 회귀 테스트용 Golden Query 세트",
+  "created_at": "2026-01-08",
+  "domains": {
+    "HR": "인사규정, 복무, 휴가, 급여",
+    "SECURITY": "보안, 비밀번호, 권한, 반출",
+    "EDU": "교육, 이수, 필수교육",
+    "HARASSMENT": "성희롱, 괴롭힘, 신고",
+    "DISABILITY": "장애인인식개선",
+    "DISCIPLINE": "징계, 처분"
+  },
+  "queries": [
+    {
+      "id": "HR001",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "연차",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true,
+      "note": "Phase 57 핵심 테스트 - 이전 Sources=0 문제"
+    },
+    {
+      "id": "HR002",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "휴가",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "HR003",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "연차휴가 신청 방법",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HR004",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "연차 몇 개 남았어?",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false,
+      "note": "개인화 질문이지만 RAG 검색도 가능"
+    },
+    {
+      "id": "HR005",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "휴가 신청",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "HR006",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "출장",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HR007",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "출장비 정산 방법",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HR008",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "급여",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "HR009",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "급여 지급일",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HR010",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "퇴직금 계산",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HR011",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "복리후생",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HR012",
+      "domain": "POLICY",
+      "category": "HR",
+      "query": "경조사 휴가",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC001",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "비밀번호",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "SEC002",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "비밀번호 변경",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true,
+      "note": "Phase 57 품질 측정 기준 쿼리"
+    },
+    {
+      "id": "SEC003",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "비밀번호 규칙",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC004",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "보안",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "SEC005",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "보안사고",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC006",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "보안사고 신고",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC007",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "USB 사용",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC008",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "USB 반출",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC009",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "권한",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC010",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "권한 신청",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC011",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "자료 반출 절차",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "SEC012",
+      "domain": "POLICY",
+      "category": "SECURITY",
+      "query": "메일 보안",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "EDU001",
+      "domain": "EDU",
+      "category": "EDU",
+      "query": "교육",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "EDU002",
+      "domain": "EDU",
+      "category": "EDU",
+      "query": "필수교육",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "EDU003",
+      "domain": "EDU",
+      "category": "EDU",
+      "query": "법정교육",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "EDU004",
+      "domain": "EDU",
+      "category": "EDU",
+      "query": "보안교육",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "EDU005",
+      "domain": "EDU",
+      "category": "EDU",
+      "query": "신입사원 교육",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "EDU006",
+      "domain": "EDU",
+      "category": "EDU",
+      "query": "교육 이수",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HAR001",
+      "domain": "POLICY",
+      "category": "HARASSMENT",
+      "query": "성희롱",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "HAR002",
+      "domain": "POLICY",
+      "category": "HARASSMENT",
+      "query": "성희롱 예방",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HAR003",
+      "domain": "POLICY",
+      "category": "HARASSMENT",
+      "query": "성희롱 신고",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HAR004",
+      "domain": "POLICY",
+      "category": "HARASSMENT",
+      "query": "직장내 괴롭힘",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "HAR005",
+      "domain": "POLICY",
+      "category": "HARASSMENT",
+      "query": "괴롭힘 신고",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "HAR006",
+      "domain": "POLICY",
+      "category": "HARASSMENT",
+      "query": "신고 절차",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "DIS001",
+      "domain": "POLICY",
+      "category": "DISABILITY",
+      "query": "장애인인식개선",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "DIS002",
+      "domain": "EDU",
+      "category": "DISABILITY",
+      "query": "장애인인식개선 교육",
+      "expect_expansion": false,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "DIS003",
+      "domain": "POLICY",
+      "category": "DISABILITY",
+      "query": "장애인 채용",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "DIS001",
+      "domain": "POLICY",
+      "category": "DISCIPLINE",
+      "query": "징계",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": true
+    },
+    {
+      "id": "DIS002",
+      "domain": "POLICY",
+      "category": "DISCIPLINE",
+      "query": "징계 절차",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "DIS003",
+      "domain": "POLICY",
+      "category": "DISCIPLINE",
+      "query": "징계 종류",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    },
+    {
+      "id": "DIS004",
+      "domain": "POLICY",
+      "category": "DISCIPLINE",
+      "query": "징계 처분",
+      "expect_expansion": true,
+      "min_sources": 1,
+      "critical": false
+    }
+  ],
+  "guardrails": {
+    "sources_zero_forbidden_categories": ["HR", "SECURITY", "HARASSMENT"],
+    "min_sources_threshold": 1,
+    "max_l2_distance": 1.8
+  }
+}
