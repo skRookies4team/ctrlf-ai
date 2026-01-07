@@ -1681,12 +1681,11 @@ class ChatService:
             ab_embedding_model=ab_info.get("embedding_model"),
             ab_collection_name=ab_info.get("collection_name"),
         )
-        if background_tasks:
-            # background_tasks.add_task(lambda: asyncio.ensure_future(log_coro))
-            background_tasks.add_task(log_coro_function, arg1, arg2)
-        else:
-            self._fire_and_forget(log_coro)
-
+        # if background_tasks:
+        #     background_tasks.add_task(lambda: asyncio.ensure_future(log_coro))
+        # else:
+        #     self._fire_and_forget(log_coro)
+        self._fire_and_forget(log_coro)
         # =====================================================================
         # 멀티턴 맥락 유지: Step 8 - 상태 저장 (TTL sliding 포함)
         # =====================================================================
