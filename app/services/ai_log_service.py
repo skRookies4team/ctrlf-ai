@@ -148,9 +148,10 @@ class AILogService:
 
     async def send_log(self, log_entry: AILogEntry) -> None:
         index_name = f"ctrlf-logs-{datetime.date.today():%Y.%m.%d}"
+        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
 
         doc = safe_es_doc({
-            "@timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "@timestamp": timestamp,
             "log_type": "ai_log",
             "domain": log_entry.domain,
             "intent": log_entry.intent,
@@ -162,6 +163,8 @@ class AILogService:
             "used_doc_ids": log_entry.used_doc_ids,  # 품질 분석용 문서 ID 목록
             "session_id": log_entry.session_id,
             "user_id": log_entry.user_id,
+            "user_role": log_entry.user_role,
+            "department": log_entry.department,
             "turn_index": log_entry.turn_index,
             "route": log_entry.route,
             "model_name": log_entry.model_name,
@@ -178,13 +181,26 @@ class AILogService:
                 timeout=2.0,
             )
 
-            if resp.status_code not in (200, 201):
+            if resp.status_code in (200, 201):
+                logger.info(
+                    f"[AI_LOG] ✅ Saved successfully | index={index_name} | "
+                    f"user_id={log_entry.user_id} | session_id={log_entry.session_id} | "
+                    f"domain={log_entry.domain} | route={log_entry.route} | "
+                    f"timestamp={timestamp}"
+                )
+            else:
                 logger.error(
-                    f"[AI_LOG] ES failed | status={resp.status_code} | body={resp.text}"
+                    f"[AI_LOG] ❌ ES failed | index={index_name} | "
+                    f"status={resp.status_code} | user_id={log_entry.user_id} | "
+                    f"session_id={log_entry.session_id} | body={resp.text[:500]}"
                 )
 
-        except Exception:
-            logger.exception("[AI_LOG] ES exception")
+        except Exception as e:
+            logger.exception(
+                f"[AI_LOG] ❌ ES exception | index={index_name} | "
+                f"user_id={log_entry.user_id} | session_id={log_entry.session_id} | "
+                f"error={str(e)}"
+            )
 
     # ==================================================
     # faq_log 저장
@@ -258,6 +274,10 @@ class AILogService:
             )
             await self.send_faq_log(log_entry)
 
-        except Exception:
-            logger.exception("[AI_LOG] background task failed")
+        except Exception as e:
+            logger.exception(
+                f"[AI_LOG] ❌ background task failed | "
+                f"user_id={log_entry.user_id} | session_id={log_entry.session_id} | "
+                f"error={str(e)}"
+            )
 

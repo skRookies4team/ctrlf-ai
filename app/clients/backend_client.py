@@ -433,7 +433,8 @@ class BackendClient:
         try:
             client = get_async_http_client()
             payload = to_backend_log_payload(log_entry)
-            headers = self._get_bearer_headers()
+            # 내부 API이므로 X-Internal-Token 헤더 사용
+            headers = self._get_internal_headers()
 
             response = await client.post(
                 endpoint,

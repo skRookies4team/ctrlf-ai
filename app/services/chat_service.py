@@ -1782,9 +1782,8 @@ class ChatService:
         ab_embedding_model: Optional[str] = None,
         ab_collection_name: Optional[str] = None,
     ) -> None:
-        logger.warning("[FAQ_LOG] _send_ai_log CALLED")
         """
-        AI 로그를 생성하고 백엔드로 전송합니다 (fire-and-forget).
+        AI 로그를 생성하고 Elasticsearch로 전송합니다 (fire-and-forget).
 
         LOG 단계 PII 마스킹을 적용하여 question_masked, answer_masked를 생성하고
         AILogEntry를 만들어 백엔드로 비동기 전송합니다.
@@ -1840,11 +1839,16 @@ class ChatService:
             )
 
             # 비동기 전송 (fire-and-forget)
+            # Elasticsearch에 저장 (배치 스크립트를 통해 백엔드로 일괄 전송됨)
             await self._ai_log.send_log_async(log_entry)
 
         except Exception as e:
             # 로그 생성/전송 실패는 메인 로직에 영향 주지 않음
-            logger.warning(f"[AI_LOG] Failed to send log (ignored): {e}")
+            logger.error(
+                f"[AI_LOG] ❌ Failed to send log (ignored) | "
+                f"user_id={req.user_id} | session_id={req.session_id} | "
+                f"error={str(e)}"
+            )
 
     def _build_llm_messages(
         self,
