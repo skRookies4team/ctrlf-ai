@@ -343,7 +343,7 @@ class TestVectorSearch:
                 "id": "doc_1",
                 "content": "테스트 내용",
                 "title": "doc_1",
-                "domain": "POLICY",
+                "domain": "사내규정",
                 "doc_id": "doc_1",
                 "score": 0.95,
                 "metadata": {"dataset_id": "사내규정", "chunk_id": 1},
@@ -351,13 +351,13 @@ class TestVectorSearch:
         ]
         milvus_client._search_sync = MagicMock(return_value=mock_results)
 
-        results = await milvus_client.search("테스트 쿼리", domain="POLICY", top_k=5)
+        results = await milvus_client.search("테스트 쿼리", domain="사내규정", top_k=5)
 
         assert len(results) == 1
         assert results[0]["id"] == "doc_1"
         assert results[0]["content"] == "테스트 내용"
         assert results[0]["score"] == 0.95
-        assert results[0]["domain"] == "POLICY"
+        assert results[0]["domain"] == "사내규정"
 
     @pytest.mark.anyio
     async def test_search_with_domain_filter(self, milvus_client):
@@ -407,7 +407,7 @@ class TestSearchAsSources:
                 "id": "doc_1",
                 "content": "내용1" * 100,  # 긴 내용
                 "title": "문서1",
-                "domain": "POLICY",
+                "domain": "사내규정",
                 "doc_id": "doc_001",
                 "score": 0.9,
                 "metadata": {"page": 5, "article_label": "제10조"},
@@ -416,7 +416,7 @@ class TestSearchAsSources:
                 "id": "doc_2",
                 "content": "내용2",
                 "title": "문서2",
-                "domain": "POLICY",
+                "domain": "사내규정",
                 "doc_id": "doc_002",
                 "score": 0.8,
                 "metadata": {},
@@ -426,7 +426,7 @@ class TestSearchAsSources:
 
         sources = await milvus_client.search_as_sources(
             query="연차 규정",
-            domain="POLICY",
+            domain="사내규정",
             top_k=5,
         )
 
@@ -632,7 +632,7 @@ class TestSearchAsSourcesWithDepartment:
                 "id": "doc_1",
                 "content": "개발팀 교육 내용",
                 "title": "개발팀 직무교육",
-                "domain": "EDUCATION",
+                "domain": "직무교육",
                 "doc_id": "edu_001",
                 "score": 0.9,
                 "metadata": {},
@@ -642,7 +642,7 @@ class TestSearchAsSourcesWithDepartment:
 
         sources = await client.search_as_sources(
             query="개발 교육",
-            domain="EDUCATION",
+            domain="직무교육",
             department="개발팀",
             top_k=5,
         )
@@ -659,7 +659,6 @@ class TestSearchAsSourcesWithDepartment:
         """dataset_id + department 필터 조합 테스트."""
         mock_settings.RAG_DEPARTMENT_FILTER_ENABLED = True
         mock_settings.RAG_DATASET_FILTER_ENABLED = True
-        mock_settings.RAG_EDUCATION_DATASET_IDS = "직무교육"
 
         clear_milvus_client()
         client = MilvusSearchClient()
@@ -670,7 +669,7 @@ class TestSearchAsSourcesWithDepartment:
 
         await client.search_as_sources(
             query="교육",
-            domain="EDUCATION",
+            domain="직무교육",
             department="인사팀",
             top_k=5,
         )
@@ -698,7 +697,7 @@ class TestSearchAsSourcesWithDepartment:
 
         await client.search_as_sources(
             query="교육",
-            domain="EDUCATION",
+            domain="직무교육",
             department="개발팀",
             top_k=5,
         )
@@ -723,7 +722,7 @@ class TestSearchAsSourcesWithDepartment:
 
         await client.search_as_sources(
             query="교육",
-            domain="EDUCATION",
+            domain="직무교육",
             department="개발팀",
             top_k=5,
         )

@@ -14,12 +14,8 @@ Option 3 (B안) 통합:
 
 Phase 48: domain → dataset_id 필터 강제 적용
 - RAG_DATASET_FILTER_ENABLED=True 시 검색에 dataset_id 필터 적용
-- POLICY → dataset_id="사내규정"
-- EDUCATION → dataset_id IN [...] (config에서 읽음)
-
-Phase 49: EDUCATION allowlist를 config로 분리
-- RAG_EDUCATION_DATASET_IDS 환경변수에서 쉼표 구분 목록 파싱
-- 운영 환경에서 재배포 없이 allowlist 변경 가능
+- 도메인명 = dataset_id (1:1 매핑)
+- 지원 도메인: 사내규정, 직무교육, 장애인인식개선교육, 직장내괴롭힘교육, 직장내성희롱교육, 정보보안교육
 
 주요 개선사항:
 1. 임베딩 계약 검증 (Fail-fast): 앱 시작 시 dim 불일치 감지
@@ -109,33 +105,30 @@ def escape_milvus_string(value: str) -> str:
 
 # =============================================================================
 # Phase 48: Domain → Dataset ID Mapping
-# Phase 49: EDUCATION allowlist를 config로 분리
+# 백엔드에서 전달하는 도메인명 = RAGFlow/Milvus dataset_id (1:1 매핑)
 # =============================================================================
 
 # domain → dataset_id 매핑 (Milvus 검색 시 필터 적용)
-# 이 매핑은 Milvus 컬렉션의 dataset_id 필드 값과 일치해야 함
-# POLICY는 단일 값, EDUCATION은 config에서 동적으로 로드
-DOMAIN_DATASET_MAPPING: Dict[str, Any] = {
-    "POLICY": "사내규정",
-    # EDUCATION은 get_education_dataset_ids()에서 config 기반 로드
+# 백엔드에서 전달하는 도메인명이 곧 dataset_id
+DOMAIN_DATASET_MAPPING: Dict[str, str] = {
+    "사내규정": "사내규정",
+    "직무교육": "직무교육",
+    "장애인인식개선교육": "장애인인식개선교육",
+    "직장내괴롭힘교육": "직장내괴롭힘교육",
+    "직장내성희롱교육": "직장내성희롱교육",
+    "정보보안교육": "정보보안교육",
 }
 
 
 def get_education_dataset_ids() -> List[str]:
     """
-    Phase 49: config에서 EDUCATION dataset_id allowlist를 파싱합니다.
-
-    RAG_EDUCATION_DATASET_IDS 환경변수 (쉼표 구분 문자열)를 파싱하여
-    리스트로 반환합니다.
+    교육 관련 dataset_id 목록을 반환합니다.
+    (하위 호환성 유지용 - 기존 코드에서 호출 시)
 
     Returns:
-        List[str]: EDUCATION 도메인에 허용된 dataset_id 목록
+        List[str]: 교육 관련 dataset_id 목록
     """
-    settings = get_settings()
-    raw = getattr(settings, "RAG_EDUCATION_DATASET_IDS", "")
-    if not raw:
-        return []
-    return [ds_id.strip() for ds_id in raw.split(",") if ds_id.strip()]
+    return ["직무교육", "장애인인식개선교육", "직장내괴롭힘교육", "직장내성희롱교육", "정보보안교육"]
 
 
 def get_department_filter_expr(department: Optional[str]) -> Optional[str]:
@@ -172,10 +165,11 @@ def get_department_filter_expr(department: Optional[str]) -> Optional[str]:
 def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
     """
     Phase 48: domain에 해당하는 dataset_id 필터 표현식을 반환합니다.
-    Phase 49: EDUCATION은 config에서 동적으로 allowlist 로드
+
+    백엔드에서 전달하는 도메인명이 곧 dataset_id이므로 1:1 매핑.
 
     Args:
-        domain: 도메인 (POLICY, EDUCATION 등)
+        domain: 도메인 (사내규정, 직무교육, 장애인인식개선교육 등)
 
     Returns:
         Optional[str]: Milvus filter expression 또는 None
@@ -183,33 +177,15 @@ def get_dataset_filter_expr(domain: Optional[str]) -> Optional[str]:
     if not domain:
         return None
 
-    domain_upper = domain.upper()
+    # 도메인명 = dataset_id (1:1 매핑)
+    dataset_id = DOMAIN_DATASET_MAPPING.get(domain)
 
-    # Phase 49: EDUCATION은 config에서 동적 로드
-    if domain_upper == "EDUCATION":
-        dataset_ids = get_education_dataset_ids()
-        if dataset_ids:
-            safe_ids = [f'"{escape_milvus_string(ds_id)}"' for ds_id in dataset_ids]
-            return f'dataset_id in [{", ".join(safe_ids)}]'
+    if not dataset_id:
+        logger.warning(f"[Phase48] Unknown domain: {domain}, no filter applied")
         return None
 
-    # 그 외 도메인은 DOMAIN_DATASET_MAPPING에서 조회
-    dataset_ids = DOMAIN_DATASET_MAPPING.get(domain_upper)
-
-    if not dataset_ids:
-        return None
-
-    # 단일 값인 경우 == 연산자
-    if isinstance(dataset_ids, str):
-        safe_id = escape_milvus_string(dataset_ids)
-        return f'dataset_id == "{safe_id}"'
-
-    # 다중 값인 경우 IN 연산자
-    if isinstance(dataset_ids, list) and dataset_ids:
-        safe_ids = [f'"{escape_milvus_string(ds_id)}"' for ds_id in dataset_ids]
-        return f'dataset_id in [{", ".join(safe_ids)}]'
-
-    return None
+    safe_id = escape_milvus_string(dataset_id)
+    return f'dataset_id == "{safe_id}"'
 
 
 def is_safe_doc_id(doc_id: str) -> bool:
@@ -620,18 +596,14 @@ class MilvusSearchClient:
     # =========================================================================
 
     def _extract_domain_from_dataset_id(self, dataset_id: str) -> str:
-        """dataset_id에서 domain을 추출합니다."""
-        dataset_lower = dataset_id.lower()
+        """dataset_id에서 domain을 추출합니다.
 
-        if "policy" in dataset_lower or "규정" in dataset_lower:
-            return "POLICY"
-        elif "training" in dataset_lower or "education" in dataset_lower or "edu" in dataset_lower:
-            return "EDU"
-        elif "incident" in dataset_lower or "사고" in dataset_lower:
-            return "INCIDENT"
-        elif "security" in dataset_lower or "보안" in dataset_lower:
-            return "SECURITY"
-
+        새 도메인 구조에서는 dataset_id = domain (1:1 매핑)
+        """
+        # 유효한 도메인인지 확인
+        valid_domains = {"사내규정", "직무교육", "장애인인식개선교육", "직장내괴롭힘교육", "직장내성희롱교육", "정보보안교육"}
+        if dataset_id in valid_domains:
+            return dataset_id
         return ""
 
     def _search_sync(
@@ -839,9 +811,11 @@ class MilvusSearchClient:
                 source_type = metadata.get("source_type")
                 if not source_type:
                     result_domain = result.get("domain", "")
-                    if result_domain == "TRAINING" or "training" in result.get("doc_id", "").lower():
+                    # 교육 관련 도메인
+                    education_domains = {"직무교육", "장애인인식개선교육", "직장내괴롭힘교육", "직장내성희롱교육", "정보보안교육"}
+                    if result_domain in education_domains:
                         source_type = "TRAINING_SCRIPT"
-                    elif result_domain == "POLICY" or "policy" in result.get("doc_id", "").lower():
+                    elif result_domain == "사내규정":
                         source_type = "POLICY"
                     else:
                         source_type = "DOCUMENT"

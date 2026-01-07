@@ -49,13 +49,24 @@ router = APIRouter(prefix="/v1/internal_ragflow/internal/ai", tags=["RAG Documen
 # Constants
 # =============================================================================
 
-# 허용 도메인
-ALLOWED_DOMAINS = {"POLICY", "EDU"}
+# 허용 도메인 (백엔드에서 전달하는 도메인명 = RAGFlow dataset_id)
+ALLOWED_DOMAINS = {
+    "사내규정",
+    "직무교육",
+    "장애인인식개선교육",
+    "직장내괴롭힘교육",
+    "직장내성희롱교육",
+    "정보보안교육",
+}
 
-# 도메인 → RAGFlow dataset_id 매핑
+# 도메인 → RAGFlow dataset_id 매핑 (동일한 값 사용)
 DOMAIN_DATASET_MAPPING = {
-    "POLICY": "사내규정",
-    "EDU": "교육",
+    "사내규정": "사내규정",
+    "직무교육": "직무교육",
+    "장애인인식개선교육": "장애인인식개선교육",
+    "직장내괴롭힘교육": "직장내괴롭힘교육",
+    "직장내성희롱교육": "직장내성희롱교육",
+    "정보보안교육": "정보보안교육",
 }
 
 

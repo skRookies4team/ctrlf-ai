@@ -329,12 +329,18 @@ class TestConstants:
 
     def test_allowed_domains(self):
         """허용 도메인 테스트."""
-        assert "POLICY" in ALLOWED_DOMAINS
-        assert "EDUCATION" not in ALLOWED_DOMAINS
+        assert "사내규정" in ALLOWED_DOMAINS
+        assert "직무교육" in ALLOWED_DOMAINS
+        assert "장애인인식개선교육" in ALLOWED_DOMAINS
+        assert "직장내괴롭힘교육" in ALLOWED_DOMAINS
+        assert "직장내성희롱교육" in ALLOWED_DOMAINS
+        assert "정보보안교육" in ALLOWED_DOMAINS
+        assert len(ALLOWED_DOMAINS) == 6
 
     def test_domain_dataset_mapping(self):
         """도메인 → dataset 매핑 테스트."""
-        assert DOMAIN_DATASET_MAPPING["POLICY"] == "사내규정"
+        assert DOMAIN_DATASET_MAPPING["사내규정"] == "사내규정"
+        assert DOMAIN_DATASET_MAPPING["직무교육"] == "직무교육"
 
 
 # =============================================================================

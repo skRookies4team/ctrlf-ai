@@ -59,10 +59,10 @@ async def test_faq_milvus_integration():
 
     print("\n[2] Milvus 검색 테스트 (_search_milvus)")
     try:
-        # 테스트 요청 생성 (domain은 RAGFLOW_DATASET_MAPPING에 있는 값 사용)
+        # 테스트 요청 생성 (도메인명 = dataset_id)
         req = FaqDraftGenerateRequest(
             cluster_id="test-cluster-001",
-            domain="POLICY",  # .env의 RAGFLOW_DATASET_MAPPING에 있는 값
+            domain="사내규정",  # 도메인명 = RAGFlow dataset_id
             canonical_question="코드리뷰는 어떻게 하나요?",
             sample_questions=["코드리뷰 절차가 어떻게 되나요?", "PR 리뷰 방법"],
         )

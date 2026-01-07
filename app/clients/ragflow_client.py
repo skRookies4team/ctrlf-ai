@@ -43,12 +43,14 @@ logger = get_logger(__name__)
 DEFAULT_TIMEOUT = 30.0  # RAGFlow 호출 타임아웃 (초)
 
 # 도메인 → RAGFlow dataset_id 매핑
-# 실제 RAGFlow dataset ID 사용 (이전에 curl로 확인한 ID)
+# 백엔드에서 전달하는 도메인명 = RAGFlow dataset_id (한글 이름 그대로 사용)
 DOMAIN_TO_DATASET_ID: Dict[str, str] = {
-    "POLICY": "6f3f9218e79011f0ad6f361530c2085d",
-    "EDUCATION": "6f3f9218e79011f0ad6f361530c2085d",
-    "HR": "6f3f9218e79011f0ad6f361530c2085d",
-    "GENERAL": "6f3f9218e79011f0ad6f361530c2085d",
+    "사내규정": "사내규정",
+    "직무교육": "직무교육",
+    "장애인인식개선교육": "장애인인식개선교육",
+    "직장내괴롭힘교육": "직장내괴롭힘교육",
+    "직장내성희롱교육": "직장내성희롱교육",
+    "정보보안교육": "정보보안교육",
 }
 
 

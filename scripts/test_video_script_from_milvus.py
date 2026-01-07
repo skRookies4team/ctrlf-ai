@@ -43,7 +43,7 @@ async def build_source_text_from_domain(domain: str) -> str:
 
     results = await milvus.search(
         query="교육 전체 내용 요약",
-        domain="EDUCATION",
+        domain=domain,  # 도메인명 = dataset_id
         top_k=50,
     )
 
