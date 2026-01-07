@@ -50,11 +50,12 @@ router = APIRouter(prefix="/v1/internal_ragflow/internal/ai", tags=["RAG Documen
 # =============================================================================
 
 # 허용 도메인
-ALLOWED_DOMAINS = {"POLICY"}
+ALLOWED_DOMAINS = {"POLICY", "EDU"}
 
 # 도메인 → RAGFlow dataset_id 매핑
 DOMAIN_DATASET_MAPPING = {
     "POLICY": "사내규정",
+    "EDU": "교육",
 }
 
 
