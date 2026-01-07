@@ -1329,7 +1329,8 @@ class ChatService:
                     sub_intent=_sub_intent if _sub_intent else None,
                     query=masked_query,
                 )
-                llm_timeout = pick_llm_timeout(self._settings, timeout_ctx)
+                # llm_timeout = pick_llm_timeout(self._settings, timeout_ctx)
+                llm_timeout = pick_llm_timeout(settings, timeout_ctx)
                 logger.debug(f"LLM timeout: {llm_timeout}s (longform={timeout_ctx.is_longform}, complex={timeout_ctx.is_complex})")
 
                 # Phase 12: LLM 호출 with latency 측정 + 토큰 사용량
