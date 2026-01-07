@@ -41,7 +41,7 @@ FEEDBACK 이벤트를 "요청 단위로 중복 없이" 발행하도록 보장하
 
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Literal, Optional, Set
+from typing import List, Literal, Optional, Set
 from uuid import uuid4
 
 from app.core.logging import get_logger
@@ -109,6 +109,8 @@ def emit_chat_turn_once(
     pii_detected_output: bool = False,
     oos: bool = False,
     rag_info: Optional[RagInfo] = None,
+    # 품질 분석용: 사용된 문서 ID 목록
+    used_doc_ids: Optional[List[str]] = None,
 ) -> bool:
     """CHAT_TURN 이벤트를 발행합니다 (턴당 1회만).
 
@@ -186,6 +188,8 @@ def emit_chat_turn_once(
             pii_detected_output=pii_detected_output,
             oos=oos,
             rag=rag_info,
+            # 품질 분석용: 사용된 문서 ID 목록 (항상 [] 보장)
+            used_doc_ids=used_doc_ids if used_doc_ids is not None else [],
         )
 
         # 5. Event 구성

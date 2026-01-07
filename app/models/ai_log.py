@@ -23,7 +23,7 @@ Phase 10 업데이트:
 """
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -162,6 +162,13 @@ class AILogEntry(BaseModel):
         default=False,
         description="RAG Gap 후보 여부 (POLICY/EDU 도메인에서 RAG 결과 없거나 점수 낮음)",
         serialization_alias="ragGapCandidate",
+    )
+
+    # 채팅 품질 평가: 문서 단위 분석용
+    used_doc_ids: List[str] = Field(
+        default_factory=list,
+        description="RAG 검색에 사용된 문서 ID 목록 (품질 분석용, 항상 [] 보장)",
+        serialization_alias="usedDocIds",
     )
 
     # Phase AB: A/B 테스트 정보

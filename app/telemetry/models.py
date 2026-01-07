@@ -173,6 +173,12 @@ class ChatTurnPayload(BaseModel):
         default=None,
         description="RAG 검색 상세 정보",
     )
+    # 품질 분석용: 사용된 문서 ID 목록 (조회 편의)
+    used_doc_ids: List[str] = Field(
+        default_factory=list,
+        description="사용된 문서 ID 목록 (품질 분석용, 항상 [] 보장)",
+        serialization_alias="usedDocIds",
+    )
 
 
 class FeedbackPayload(BaseModel):

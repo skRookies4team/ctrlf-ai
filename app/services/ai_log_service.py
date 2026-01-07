@@ -13,7 +13,7 @@ AI 로그 서비스 모듈 (AI Log Service Module)
 """
 
 import datetime
-from typing import Optional, Any
+from typing import List, Optional, Any
 
 from app.clients.http_client import get_async_http_client
 from app.core.config import get_settings
@@ -91,6 +91,8 @@ class AILogService:
         question_masked: Optional[str] = None,
         answer_masked: Optional[str] = None,
         rag_gap_candidate: bool = False,
+        # 품질 분석용: 사용된 문서 ID 목록
+        used_doc_ids: Optional[List[str]] = None,
         # Phase AB: A/B 테스트 정보
         ab_model: Optional[str] = None,
         ab_embedding_model: Optional[str] = None,
@@ -117,6 +119,8 @@ class AILogService:
             question_masked=question_masked,
             answer_masked=answer_masked,
             rag_gap_candidate=rag_gap_candidate,
+            # 품질 분석용: 사용된 문서 ID 목록 (항상 [] 보장)
+            used_doc_ids=used_doc_ids if used_doc_ids is not None else [],
             # Phase AB: A/B 테스트 정보
             ab_model=ab_model,
             ab_embedding_model=ab_embedding_model,
@@ -155,6 +159,7 @@ class AILogService:
             "rag_used": log_entry.rag_used,
             "rag_source_count": log_entry.rag_source_count,
             "rag_gap_candidate": log_entry.rag_gap_candidate,
+            "used_doc_ids": log_entry.used_doc_ids,  # 품질 분석용 문서 ID 목록
             "session_id": log_entry.session_id,
             "user_id": log_entry.user_id,
             "turn_index": log_entry.turn_index,

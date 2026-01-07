@@ -164,6 +164,7 @@ from app.utils.debug_log import (
     generate_request_id,
     is_debug_enabled,
 )
+from app.telemetry.context import get_request_context
 from app.telemetry.emitters import emit_chat_turn_once, emit_security_event_once
 from app.telemetry.metrics import (
     set_rag_metrics,
@@ -1660,7 +1661,29 @@ class ChatService:
             "embedding_model": None,
             "collection_name": None,
         }
-    
+
+        # 품질 분석용: sources 확정 후 1회 계산 (Single Source of Truth)
+        # 항상 [] 보장 (None 사용 안 함)
+        used_doc_ids: List[str] = [s.doc_id for s in sources] if sources else []
+
+        # turn_index: TelemetryContext에서 가져오기 (조인 키 안정화)
+        telemetry_ctx = get_request_context()
+        turn_index: Optional[int] = telemetry_ctx.turn_id
+        if turn_index is None:
+            # 누락 시 로깅 (조인 키 깨짐 원인 추적용)
+            logger.warning(
+                f"[AI_LOG] turn_index missing: session_id={req.session_id}, "
+                f"user_id={req.user_id}, trace_id={telemetry_ctx.trace_id}"
+            )
+
+        # 정합성 검증: used_doc_ids와 rag_source_count 일치 확인
+        rag_source_count = len(sources)
+        if len(used_doc_ids) != rag_source_count:
+            logger.error(
+                f"[AI_LOG] doc_ids mismatch: used_doc_ids={len(used_doc_ids)}, "
+                f"rag_source_count={rag_source_count}, session_id={req.session_id}"
+            )
+
         # AI 로그 전송 (fire-and-forget)
         log_coro = self._send_ai_log(
             req,
@@ -1678,6 +1701,8 @@ class ChatService:
             error_type,
             error_message,
             rag_gap_candidate_flag,
+            used_doc_ids=used_doc_ids,  # 품질 분석용
+            turn_index=turn_index,  # 조인 키
             ab_model=ab_info.get("model"),
             ab_embedding_model=ab_info.get("embedding_model"),
             ab_collection_name=ab_info.get("collection_name"),
@@ -1717,6 +1742,7 @@ class ChatService:
             pii_detected_output=pii_output.has_pii,
             oos=(final_route == RouteType.ERROR),
             rag_info=rag_metrics_to_rag_info(),
+            used_doc_ids=used_doc_ids,  # 품질 분석용 (ES/Telemetry 동일 값)
         )
 
         return ChatResponse(
@@ -1747,6 +1773,10 @@ class ChatService:
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
         rag_gap_candidate: bool = False,
+        # 품질 분석용: 사용된 문서 ID 목록
+        used_doc_ids: Optional[List[str]] = None,
+        # 조인 키: 턴 인덱스
+        turn_index: Optional[int] = None,
         # Phase AB: A/B 테스트 정보
         ab_model: Optional[str] = None,
         ab_embedding_model: Optional[str] = None,
@@ -1797,9 +1827,12 @@ class ChatService:
                 model_name=model_name,
                 error_code=error_code,
                 error_message=error_message,
+                turn_index=turn_index,  # 조인 키
                 question_masked=question_masked,
                 answer_masked=answer_masked,
                 rag_gap_candidate=rag_gap_candidate,
+                # 품질 분석용: 사용된 문서 ID 목록
+                used_doc_ids=used_doc_ids,
                 # Phase AB: A/B 테스트 정보
                 ab_model=ab_model,
                 ab_embedding_model=ab_embedding_model,
