@@ -27,6 +27,10 @@ Phase 48: Low-relevance Gate (L2 거리 기준)
 - L2 거리: 낮을수록 유사함 (0 = 완전 일치)
 - 앵커 키워드가 sources 텍스트에 없으면 → sources=[] 강등
 - 저관련 검색 결과로 '근거 있는 척' 하는 현상 방지
+
+Phase 57: 고급 RAG 기법
+- Query Expansion: 짧은 쿼리를 검색 키워드로 확장 (LLM 사용)
+- RAG Fusion (RRF): 원문 + 확장 쿼리 결과를 Reciprocal Rank Fusion으로 융합
 """
 
 import re
@@ -89,6 +93,8 @@ from app.core.retrieval_context import (
     get_block_reason,
     RetrievalBlockedError,
 )
+from app.services.search_merger import rrf_fuse_with_sources
+from app.services.chat.query_rewriter import expand_query_sync, RewriteResult
 
 logger = get_logger(__name__)
 
@@ -681,6 +687,10 @@ class RagHandler:
         - model 파라미터로 임베딩 모델 직접 선택 (권장)
         - 모델에 따라 적절한 Milvus 클라이언트 선택 (임베딩 + 컬렉션)
 
+        Phase 57: Query Expansion + RRF Fusion
+        - 짧은 쿼리는 LLM으로 확장
+        - 원문 + 확장 쿼리 2번 검색 후 RRF로 융합
+
         Args:
             query: 검색 쿼리
             domain: 도메인
@@ -722,25 +732,83 @@ class RagHandler:
             )
 
         try:
-            # Milvus 검색
-            # Step 7: req가 None일 때 user_role, department는 None으로 전달
-            # Phase AB: A/B 클라이언트 사용
-            sources = await milvus_client.search_as_sources(
+            # =================================================================
+            # Phase 57: Query Expansion + RRF Fusion 파이프라인
+            # =================================================================
+
+            # Step 1: 원문 쿼리 검색
+            original_sources = await milvus_client.search_as_sources(
                 query=query,
                 domain=domain,
                 user_role=req.user_role if req else None,
                 department=req.department if req else None,
-                top_k=effective_top_k,
+                top_k=effective_top_k * 2,  # RRF용으로 더 많이 가져옴
                 request_id=request_id,
             )
 
-            # Phase 45: Milvus 검색 similarity 분포 로깅
+            # Phase 45: 원문 검색 similarity 분포 로깅
             log_similarity_distribution(
-                sources=sources,
-                search_stage="milvus_search",
+                sources=original_sources,
+                search_stage="milvus_original",
                 query_preview=query,
                 domain=domain,
             )
+
+            # Step 2: Query Expansion (조건부)
+            expanded_sources = []
+            rewrite_result: Optional[RewriteResult] = None
+
+            if settings.QUERY_EXPANSION_ENABLED:
+                # 동기 버전 쿼리 확장 (규칙 기반, LLM 미사용)
+                # LLM 버전은 ChatService에서 호출 가능
+                rewrite_result = expand_query_sync(query, domain)
+
+                if rewrite_result.used:
+                    # 확장 쿼리로 추가 검색
+                    logger.info(
+                        f"[QueryExpansion] '{query[:20]}...' → '{rewrite_result.rewritten[:30]}...' "
+                        f"(reason={rewrite_result.reason})"
+                    )
+
+                    expanded_sources = await milvus_client.search_as_sources(
+                        query=rewrite_result.rewritten,
+                        domain=domain,
+                        user_role=req.user_role if req else None,
+                        department=req.department if req else None,
+                        top_k=effective_top_k * 2,
+                        request_id=request_id,
+                    )
+
+                    # 확장 검색 similarity 분포 로깅
+                    log_similarity_distribution(
+                        sources=expanded_sources,
+                        search_stage="milvus_expanded",
+                        query_preview=rewrite_result.rewritten,
+                        domain=domain,
+                    )
+
+            # Step 3: RRF Fusion (조건부)
+            if settings.RAG_FUSION_ENABLED and expanded_sources:
+                # RRF로 융합
+                rrf_result = rrf_fuse_with_sources(
+                    original_results=original_sources,
+                    expanded_results=expanded_sources,
+                    k=settings.RRF_K_PARAMETER,
+                    top_n=effective_top_k * 2,  # truncate 전이므로 여유 있게
+                )
+                sources = rrf_result.results
+
+                logger.info(
+                    f"[RRF Fusion] Applied: original={len(original_sources)}, "
+                    f"expanded={len(expanded_sources)} → fused={len(sources)}"
+                )
+            else:
+                # RRF 비활성화 또는 확장 검색 없음 → 원문 결과만 사용
+                sources = original_sources
+
+            # =================================================================
+            # 기존 로직 유지
+            # =================================================================
 
             # 컨텍스트 길이 제한 적용
             sources = self._truncate_context(sources)

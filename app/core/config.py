@@ -283,6 +283,26 @@ class Settings(BaseSettings):
     RAG_DATASET_FILTER_ENABLED: bool = True
 
     # =========================================================================
+    # Phase 57: 고급 RAG 기법 (Query Expansion + RRF Fusion)
+    # =========================================================================
+    # Query Expansion 활성화 (짧은 쿼리를 검색 키워드로 확장)
+    # True: LLM을 사용하여 쿼리 확장 (recall 향상)
+    # False: 쿼리 확장 비활성화 (기존 동작)
+    QUERY_EXPANSION_ENABLED: bool = True
+
+    # Query Expansion 최대 쿼리 길이 (이보다 길면 확장 불필요)
+    QUERY_EXPANSION_MAX_LENGTH: int = 40
+
+    # RAG Fusion (RRF) 활성화 (원문 + 확장 쿼리 결과 융합)
+    # True: 원문/확장 쿼리 2번 검색 후 RRF로 융합
+    # False: 확장 쿼리만 사용 (RRF 비활성화)
+    RAG_FUSION_ENABLED: bool = True
+
+    # RRF smoothing parameter (논문 권장값: 60)
+    # 높을수록 순위 차이의 영향이 줄어듦
+    RRF_K_PARAMETER: int = 60
+
+    # =========================================================================
     # Phase 55: 환각(Hallucination) 방지 강화 설정
     # =========================================================================
     # RAG 0건 시 LLM 호출 스킵 (고정 템플릿만 반환)

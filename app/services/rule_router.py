@@ -1005,7 +1005,7 @@ class RuleRouter:
 
         # Phase 49: 복합 조건 - "교육"이 포함되면 EDU 우선 체크
         # "정보보호교육", "성희롱예방교육" 등은 EDU로 분류해야 함
-        # 단, 퀴즈 점수/현황 또는 교육 현황 개인화 키워드가 있으면 개인화로 분류
+        # 단, 퀴즈 점수/현황 또는 교육 현황/이어보기 개인화 키워드가 있으면 개인화로 분류
         if "교육" in query_normalized:
             # 퀴즈 점수/현황 키워드가 있으면 개인화로 분류 (EDU_CONTENT_PRIORITY 스킵)
             has_quiz_personalization = (
@@ -1016,7 +1016,11 @@ class RuleRouter:
             has_edu_personalization = self._contains_any_normalized(
                 query_normalized, EDU_STATUS_KEYWORDS_NORM
             )
-            if has_quiz_personalization or has_edu_personalization:
+            # Phase 53: 교육 이어보기/재생위치 키워드가 있으면 개인화로 분류 (EDU_CONTENT_PRIORITY 스킵)
+            has_edu_resume = self._contains_any_normalized(
+                query_normalized, EDU_RESUME_KEYWORDS_NORM
+            )
+            if has_quiz_personalization or has_edu_personalization or has_edu_resume:
                 debug_info.rule_hits.append("EDU_CONTENT_PRIORITY_SKIPPED_PERSONALIZATION")
                 # 개인화 흐름으로 진행 (아래 분기에서 처리됨)
             elif self._contains_any_normalized(query_normalized, EDU_CONTENT_KEYWORDS_NORM):

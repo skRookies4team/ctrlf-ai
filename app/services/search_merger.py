@@ -12,6 +12,10 @@ Search Merger - 검색 결과 병합 및 순위 조정
 - top1 점수 하한
 - top1-top2 격차
 - keyword coverage (보조)
+
+Phase 57: RAG Fusion (RRF 알고리즘)
+- 여러 검색 전략 결과를 Reciprocal Rank Fusion으로 융합
+- 원문 쿼리 + 확장 쿼리 검색 결과를 RRF로 결합
 """
 
 import logging
@@ -514,3 +518,165 @@ def rerank_by_relevance(
 
     sorted_results = sorted(results, key=relevance_score, reverse=True)
     return sorted_results[:top_k]
+
+
+# =============================================================================
+# Phase 57: RAG Fusion (RRF - Reciprocal Rank Fusion)
+# =============================================================================
+
+@dataclass
+class RRFResult:
+    """RRF 융합 결과"""
+    results: List["ChatSource"]
+    source_counts: Dict[str, int]  # 각 소스(원문/확장)에서 온 결과 수
+    fusion_applied: bool
+
+
+def _get_source_id(source: "ChatSource") -> str:
+    """ChatSource에서 고유 ID 추출 (RRF용)"""
+    # doc_id가 있으면 사용, 없으면 title + snippet 해시
+    if hasattr(source, "doc_id") and source.doc_id:
+        return source.doc_id
+    # chunk 단위 구분이 필요하면 snippet 일부도 포함
+    title = source.title or ""
+    snippet_prefix = (source.snippet or "")[:50]
+    return f"{title}:{snippet_prefix}"
+
+
+def rrf_fuse(
+    rank_lists: List[List["ChatSource"]],
+    k: int = 60,
+    top_n: Optional[int] = None,
+) -> RRFResult:
+    """
+    Reciprocal Rank Fusion (RRF) 알고리즘
+
+    여러 검색 결과 리스트를 융합하여 최종 순위를 결정합니다.
+
+    RRF 공식: score(d) = Σ 1 / (k + rank(d))
+    - k: smoothing parameter (기본값 60, 논문 권장값)
+    - rank: 1부터 시작하는 순위
+
+    Args:
+        rank_lists: 검색 결과 리스트들 (각 리스트는 순위순으로 정렬됨)
+        k: smoothing parameter (기본값 60)
+        top_n: 반환할 상위 결과 수 (None이면 전체)
+
+    Returns:
+        RRFResult: 융합된 결과
+
+    Reference:
+        Cormack, G. V., Clarke, C. L., & Buettcher, S. (2009).
+        Reciprocal rank fusion outperforms condorcet and individual
+        rank learning methods. SIGIR '09.
+    """
+    if not rank_lists:
+        return RRFResult(results=[], source_counts={}, fusion_applied=False)
+
+    # 단일 리스트면 융합 불필요
+    if len(rank_lists) == 1:
+        results = rank_lists[0]
+        if top_n:
+            results = results[:top_n]
+        return RRFResult(
+            results=results,
+            source_counts={"single": len(results)},
+            fusion_applied=False
+        )
+
+    # RRF 점수 계산
+    rrf_scores: Dict[str, float] = {}
+    id_to_source: Dict[str, "ChatSource"] = {}
+    source_counts: Dict[str, int] = {}
+
+    for list_idx, items in enumerate(rank_lists):
+        list_name = f"list_{list_idx}"
+        source_counts[list_name] = 0
+
+        for rank, source in enumerate(items, start=1):
+            source_id = _get_source_id(source)
+
+            # RRF 점수 누적
+            rrf_scores[source_id] = rrf_scores.get(source_id, 0.0) + 1.0 / (k + rank)
+
+            # 소스 객체 저장 (처음 등장한 것 유지)
+            if source_id not in id_to_source:
+                id_to_source[source_id] = source
+                source_counts[list_name] += 1
+
+    # RRF 점수로 정렬
+    sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+
+    # 결과 생성
+    fused_results = [id_to_source[sid] for sid in sorted_ids]
+
+    if top_n:
+        fused_results = fused_results[:top_n]
+
+    logger.debug(
+        f"[RRF] Fused {len(rank_lists)} lists → {len(fused_results)} results | "
+        f"source_counts={source_counts}"
+    )
+
+    return RRFResult(
+        results=fused_results,
+        source_counts=source_counts,
+        fusion_applied=True
+    )
+
+
+def rrf_fuse_with_sources(
+    original_results: List["ChatSource"],
+    expanded_results: List["ChatSource"],
+    k: int = 60,
+    top_n: int = 5,
+) -> RRFResult:
+    """
+    원문 쿼리 + 확장 쿼리 검색 결과를 RRF로 융합
+
+    Phase 57 RAG Fusion의 메인 진입점.
+
+    Args:
+        original_results: 원문 쿼리 검색 결과
+        expanded_results: 확장 쿼리 검색 결과
+        k: RRF smoothing parameter
+        top_n: 반환할 상위 결과 수
+
+    Returns:
+        RRFResult: 융합된 결과
+    """
+    # 빈 결과 처리
+    if not original_results and not expanded_results:
+        return RRFResult(results=[], source_counts={}, fusion_applied=False)
+
+    if not expanded_results:
+        # 확장 결과 없으면 원문만 반환
+        return RRFResult(
+            results=original_results[:top_n],
+            source_counts={"original": len(original_results), "expanded": 0},
+            fusion_applied=False
+        )
+
+    if not original_results:
+        # 원문 결과 없으면 확장만 반환
+        return RRFResult(
+            results=expanded_results[:top_n],
+            source_counts={"original": 0, "expanded": len(expanded_results)},
+            fusion_applied=False
+        )
+
+    # RRF 융합
+    result = rrf_fuse([original_results, expanded_results], k=k, top_n=top_n)
+
+    # 소스 카운트 재명명
+    result.source_counts = {
+        "original": result.source_counts.get("list_0", 0),
+        "expanded": result.source_counts.get("list_1", 0),
+    }
+
+    logger.info(
+        f"[RRF Fusion] original={len(original_results)}, expanded={len(expanded_results)} "
+        f"→ fused={len(result.results)} (fusion_applied={result.fusion_applied})"
+    )
+
+    return result

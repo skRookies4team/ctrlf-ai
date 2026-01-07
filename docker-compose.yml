@@ -115,12 +115,18 @@ services:
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
+      # Phase 57 테스트: anchor_gate 완화
+      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
 
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
       # BACKEND_INTERNAL_TOKEN은 RAGFlow 서버의 AI_TO_RAGFLOW_TOKEN과 일치해야 함
       # RAGFlow 서버는 AI_TO_RAGFLOW_TOKEN=${RAGFLOW_API_KEY}로 설정되어 있음
       # 코드에서 BACKEND_INTERNAL_TOKEN이 없으면 RAGFLOW_API_KEY를 사용하도록 처리됨
       - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
+      # RouterOrchestrator 활성화 (EDU_RESUME_CHECK 등 개인화 라우팅 지원)
+      - ROUTER_ORCHESTRATOR_ENABLED=true
+      # 개인화 모드: mock (백엔드 없이 mock 데이터 사용), auto (백엔드 시도 후 실패시 mock), real (백엔드 필수)
+      - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-mock}
 
     depends_on:
       elasticsearch:      # 👈 공통 종속성을 여기로 이동
