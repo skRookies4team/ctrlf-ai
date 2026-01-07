@@ -197,7 +197,7 @@ class Settings(BaseSettings):
     # Phase 24: Milvus Vector Database 설정
     # =========================================================================
     # Milvus 서버 연결 정보 (환경변수로 설정 필요)
-    MILVUS_HOST: str = "58.127.241.84"
+    MILVUS_HOST: str = "localhost"
     MILVUS_PORT: int = 19540
 
     # Milvus 컬렉션 설정

@@ -776,7 +776,7 @@ ffmpeg -y \
 
 ```bash
 # LLM
-LLM_BASE_URL=http://58.127.241.84:1237/
+LLM_BASE_URL=http://<YOUR_LLM_SERVER>:1237/
 LLM_MODEL_NAME=LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct
 
 # TTS

@@ -6,18 +6,18 @@ RAGFlow Callback API 테스트 스크립트
 - 인증: X-Internal-Token 헤더 (AI_CALLBACK_TOKEN)
 """
 
+import os
 import httpx
 import json
 from datetime import datetime
 import uuid
 import sys
 
-# 서버 설정
-SERVER_URL = "http://localhost:8000"  # 로컬 서버
-# SERVER_URL = "http://58.127.241.84:8000"  # 원격 서버 (필요시 변경)
+# 서버 설정 (환경변수로 설정 가능)
+SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
 
 # 인증 토큰 (.env의 AI_CALLBACK_TOKEN)
-AI_CALLBACK_TOKEN = "ctrlf-r2a-w3e5t7y9u2i4"
+AI_CALLBACK_TOKEN = os.getenv("AI_CALLBACK_TOKEN", "ctrlf-r2a-w3e5t7y9u2i4")
 
 # API 엔드포인트
 CALLBACK_ENDPOINT = "/v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest"

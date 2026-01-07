@@ -101,7 +101,7 @@ services:
       - AI_ENV=real
       # Milvus 설정
       - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
-      - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
+      - MILVUS_HOST=${MILVUS_HOST:-localhost}
       - MILVUS_PORT=${MILVUS_PORT:-19540}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
       - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
@@ -114,7 +114,7 @@ services:
       - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:?RAGFLOW_BASE_URL_REAL must be set for real mode}
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://58.127.241.84:1237}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
 
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
       # BACKEND_INTERNAL_TOKEN은 RAGFlow 서버의 AI_TO_RAGFLOW_TOKEN과 일치해야 함

@@ -35,9 +35,9 @@ import numpy as np
 # 설정
 SOURCE_COLLECTION = "ragflow_chunks_openai"
 TARGET_COLLECTION = "ragflow_chunks_sroberta"
-MILVUS_HOST = os.getenv("MILVUS_HOST", "58.127.241.84")
+MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19540")
-EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://58.127.241.84:1234")
+EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:1234")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "jhgan/ko-sroberta-multitask")
 EMBEDDING_DIM = 768
 BATCH_SIZE = 50  # 임베딩 배치 크기

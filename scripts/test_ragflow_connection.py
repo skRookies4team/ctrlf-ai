@@ -5,7 +5,7 @@ RAGFlow 서버 연결 테스트 스크립트
     python scripts/test_ragflow_connection.py
 
 환경변수:
-    RAGFLOW_HOST: RAGFlow 서버 주소 (기본: 58.127.241.84:8765)
+    RAGFLOW_HOST: RAGFlow 서버 주소 (기본: http://localhost:8765)
     RAGFLOW_EMAIL: 로그인 이메일
     RAGFLOW_PASSWORD: 로그인 비밀번호
 """
@@ -17,7 +17,7 @@ import asyncio
 from typing import Optional
 
 # RAGFlow 서버 설정
-RAGFLOW_HOST = os.getenv("RAGFLOW_HOST", "http://58.127.241.84:8765")
+RAGFLOW_HOST = os.getenv("RAGFLOW_HOST", "http://localhost:8765")
 RAGFLOW_EMAIL = os.getenv("RAGFLOW_EMAIL", "lulla1613@gmail.com")
 RAGFLOW_PASSWORD = os.getenv("RAGFLOW_PASSWORD", "asdf1234*")
 

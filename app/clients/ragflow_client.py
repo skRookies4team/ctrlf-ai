@@ -250,7 +250,7 @@ class RagflowClient:
         """
         RAGFlow에 문서를 ingest합니다 (업로드 + 파싱 통합).
 
-        POST /internal/ragflow/ingest
+        POST //v1/internal_ragflow/internal/ragflow/ingest
 
         Args:
             dataset_id: RAGFlow dataset ID 또는 이름

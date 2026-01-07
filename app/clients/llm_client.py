@@ -26,6 +26,7 @@ Phase 12 업데이트:
     )
 """
 
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -90,8 +91,11 @@ INTERNAL_DOMAIN_PATTERNS: Set[str] = {
 INTERNAL_IP_PREFIXES = ("10.", "172.", "192.168.")
 
 # 외부이지만 허용할 LLM 서버 IP allowlist (운영 정책용)
+# 환경변수 ALLOWED_EXTERNAL_LLM_HOSTS로 쉼표 구분 IP/도메인 추가 가능
+_env_allowed_hosts = os.getenv("ALLOWED_EXTERNAL_LLM_HOSTS", "")
 ALLOWED_EXTERNAL_LLM_HOSTS: Set[str] = {
-    "58.127.241.84",
+    host.strip() for host in _env_allowed_hosts.split(",") if host.strip()
+} | {
     "api.openai.com",  # OpenAI API (관리자 대시보드에서 선택 가능)
 }
 
