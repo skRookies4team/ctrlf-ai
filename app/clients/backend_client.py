@@ -91,6 +91,9 @@ BACKEND_FAIL_CHUNK_BULK_UPSERT_PATH = "/internal/rag/documents/{document_id}/fai
 # RAG 문서 상태 업데이트 (POLICY ingest 콜백 → Backend)
 BACKEND_RAG_DOCUMENT_STATUS_PATH = "/internal/rag/documents/{rag_document_pk}/status"
 
+# FAQ 조회
+BACKEND_FAQ_LIST_PATH = "/chat/faq"
+
 
 # =============================================================================
 # Request/Response Models
@@ -1724,6 +1727,33 @@ class BackendClient:
             )
 
     # =========================================================================
+    # FAQ 조회
+    # =========================================================================
+
+    async def get_faq_list(
+        self,
+        domain: Optional[str] = None,
+    ) -> BackendDataResponse:
+        """활성화된 FAQ 목록을 조회합니다.
+        
+        Args:
+            domain: 도메인 필터 (선택)
+            
+        Returns:
+            BackendDataResponse: FAQ 목록 (data.faqs에 리스트로 포함)
+        """
+        if not self.is_configured:
+            logger.debug("Backend URL not configured, returning mock FAQ list")
+            return self._mock_faq_list(domain)
+
+        endpoint = f"{self._base_url}{BACKEND_FAQ_LIST_PATH}"
+        params: Dict[str, Any] = {}
+        if domain:
+            params["domain"] = domain
+
+        return await self._get_request(endpoint, params)
+
+    # =========================================================================
     # Mock 응답 (백엔드 미연동 시)
     # =========================================================================
 
@@ -1811,6 +1841,41 @@ class BackendClient:
                     "개인정보(주민번호, 연락처 등)를 신고 내용에 포함하지 마세요.",
                     "증거 자료는 원본을 보존하고 복사본을 제출해 주세요.",
                 ],
+            },
+        )
+
+    def _mock_faq_list(self, domain: Optional[str]) -> BackendDataResponse:
+        """Mock FAQ 목록 반환.
+        
+        실제 백엔드 API 응답 형식에 맞춰서 반환합니다.
+        FAQ에는 질문과 답변이 모두 포함되지만, 
+        AI 서버에서는 질문만 사용하여 매칭하고 AI로 답변을 생성합니다.
+        """
+        all_faqs = [
+            {
+                "id": "faq-1",
+                "question": "연차휴가 규정이 어떻게 되나요?",
+                "answer": "입사 1년 경과 시 15일이 부여됩니다.",  # 이 답변은 사용하지 않음
+                "domain": "POLICY",
+            },
+            {
+                "id": "faq-2",
+                "question": "개인정보보호 교육은 언제 받아야 하나요?",
+                "answer": "연 1회 필수 교육입니다.",  # 이 답변은 사용하지 않음
+                "domain": "EDUCATION",
+            },
+        ]
+        
+        # 도메인 필터링
+        if domain:
+            filtered_faqs = [faq for faq in all_faqs if faq.get("domain") == domain]
+        else:
+            filtered_faqs = all_faqs
+            
+        return BackendDataResponse(
+            success=True,
+            data={
+                "faqs": filtered_faqs,
             },
         )
 

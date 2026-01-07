@@ -92,6 +92,17 @@ class Settings(BaseSettings):
     # ctrlf-back infra-service 연동 URL (S3 presigned URL 등)
     INFRA_BASE_URL: Optional[HttpUrl] = None
 
+    # Backend infra-service URL (로그 동기화용)
+    BACKEND_INFRA_URL: Optional[HttpUrl] = None
+
+    # Elasticsearch 인덱스 패턴 (로그 동기화용)
+    ELASTICSEARCH_INDEX: str = "ctrlf-logs-*"
+
+    # 로그 동기화 설정
+    LOG_SYNC_INTERVAL_SECONDS: int = 3600  # 기본 1시간마다 동기화
+    LOG_FETCH_RANGE: str = "7d"  # 최근 7일간의 로그 조회
+    LOG_FETCH_LIMIT: int = 500  # 최대 500개 로그 조회
+
     # =========================================================================
     # PII 마스킹 서비스 설정
     # =========================================================================
