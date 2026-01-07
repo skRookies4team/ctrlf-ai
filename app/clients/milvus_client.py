@@ -912,12 +912,16 @@ class MilvusSearchClient:
                 safe_dataset_id = escape_milvus_string(dataset_id)
                 expr = f'{expr} && dataset_id in ["{safe_dataset_id}"]'
 
+            # 컬렉션을 먼저 로드하여 스키마 정보 확인 (department 필드 존재 여부)
+            await self._get_collection_async()
+            
             # department 필드가 스키마에 없을 수 있으므로 기본 필드만 요청
             base_output_fields = ["chunk_id", "text", "doc_id", "dataset_id"]
-            output_fields = base_output_fields + ["department"]
+            # _has_department_field가 True일 때만 department 필드 추가
+            use_department = self._has_department_field is True
+            output_fields = base_output_fields + (["department"] if use_department else [])
             all_chunks: List[Dict[str, Any]] = []
             offset = 0
-            use_department = True
 
             # Pagination으로 전체 청크 조회
             while len(all_chunks) < max_chunks:
