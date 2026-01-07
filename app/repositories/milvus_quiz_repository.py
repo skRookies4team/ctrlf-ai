@@ -3,20 +3,26 @@ from pymilvus import Collection
 
 from app.models.quiz_generate import QuizCandidateBlock
 
+
 class MilvusQuizRepository:
     def __init__(self, collection_name: str):
+        self.collection_name = collection_name
         self.collection = Collection(collection_name)
+
+        field_names = {f.name for f in self.collection.schema.fields}
+        self._has_department_field = "department" in field_names
 
     def fetch_blocks_by_domain(
         self,
         dataset_id: str,
-        limit: int = 200,
+        limit: int = 100,
     ) -> List[QuizCandidateBlock]:
-        """
-        특정 도메인(dataset_id)에서 퀴즈 후보 블록 조회
-        (직무 제외)
-        """
-        expr = f'dataset_id == "{dataset_id}" and department != "직무"'
+        # 기본 필터
+        expr = f'dataset_id == "{dataset_id}"'
+
+        # department 필드가 있을 때만 제외
+        if self._has_department_field:
+            expr += ' and department != "직무"'
 
         results = self.collection.query(
             expr=expr,
@@ -24,9 +30,6 @@ class MilvusQuizRepository:
                 "doc_id",
                 "chunk_id",
                 "text",
-                "section",
-                "section_path",
-                "document_title",
             ],
             limit=limit,
         )
@@ -39,8 +42,8 @@ class MilvusQuizRepository:
                     block_id=f'{r["doc_id"]}:{r["chunk_id"]}',
                     doc_id=r["doc_id"],
                     doc_version=None,
-                    chapter_id=r.get("section"),
-                    article_path=r.get("section_path"),
+                    chapter_id=None,          # ❌ section 제거
+                    article_path=None,        # ❌ section_path 제거
                     learning_objective_id=None,
                     tags=[dataset_id],
                     text=r["text"],

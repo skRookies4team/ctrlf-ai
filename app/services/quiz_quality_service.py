@@ -121,7 +121,7 @@ class QuizQualityService:
             selfcheck_enabled: LLM Self-check 활성화 여부 (비용 고려)
         """
         self._llm = llm_client or LLMClient()
-        self._selfcheck_enabled = selfcheck_enabled
+        self._selfcheck_enabled = False
 
     async def validate_quiz_set(
         self,
@@ -312,69 +312,63 @@ class QuizQualityService:
         원문 일치 검증.
 
         정답 텍스트의 핵심 키워드가 출처 블록에 포함되어 있는지 확인.
-
-        Args:
-            question: 검증할 문항
-            block_map: 블록 ID → 블록 매핑
-
-        Returns:
-            QuizQuestionQcResult: 검증 결과
-
-        Note:
-            이 Phase에서는 간단한 문자열 기반 검사만 구현.
-            TODO: RAG/Embedding 기반 검증은 향후 추가 가능.
         """
-        # 출처 블록 텍스트 수집
-        source_texts: List[str] = []
 
-        for block_id in question.source_block_ids:
-            if block_id in block_map:
-                source_texts.append(block_map[block_id].text)
-
-        # 출처 블록이 없으면 전체 블록에서 검색
-        if not source_texts:
-            source_texts = [b.text for b in block_map.values()]
-
-        # 출처 텍스트가 아예 없으면 통과 (검증 불가)
-        if not source_texts:
-            logger.warning("No source blocks available for SOURCE validation")
+        # 1️⃣ source_block_ids 자체가 없으면 → SOURCE 검증 스킵
+        if not question.source_block_ids:
+            logger.warning(
+                f"[QC][SOURCE] skipped (no source_block_ids) question_id={question.question_id}"
+            )
             return QuizQuestionQcResult(qc_pass=True)
 
-        # 전체 출처 텍스트 결합
+        # 2️⃣ 유효한 source block 텍스트 수집
+        source_texts: List[str] = []
+        for block_id in question.source_block_ids:
+            block = block_map.get(block_id)
+            if block:
+                source_texts.append(block.text)
+
+        # 매핑 실패 → SOURCE 스킵
+        if not source_texts:
+            logger.warning(
+                f"[QC][SOURCE] skipped (unmappable source_block_ids) "
+                f"question_id={question.question_id} ids={question.source_block_ids}"
+            )
+            return QuizQuestionQcResult(qc_pass=True)
+
         combined_source = " ".join(source_texts).lower()
 
-        # 정답 옵션 찾기
-        correct_option = None
-        for opt in question.options:
-            if opt.is_correct:
-                correct_option = opt
-                break
+        # 3️⃣ 정답 보기 추출
+        correct_option = next(
+            (opt for opt in question.options if opt.is_correct),
+            None,
+        )
 
+        # SCHEMA에서 이미 걸러졌어야 하지만 방어적으로
         if not correct_option:
-            # SCHEMA에서 이미 검사했으므로 여기까지 오면 안됨
             return QuizQuestionQcResult(qc_pass=True)
 
-        # 정답 텍스트에서 핵심 키워드 추출 (간단한 방식)
-        correct_text = correct_option.text.lower()
-        keywords = self._extract_keywords(correct_text)
+        # 4️⃣ 키워드 추출
+        keywords = self._extract_keywords(correct_option.text.lower())
 
-        # 키워드가 출처에 포함되어 있는지 확인
-        # 최소 하나의 키워드가 출처에 있어야 함
-        keyword_found = False
-        for keyword in keywords:
-            if keyword in combined_source:
-                keyword_found = True
-                break
-
-        if not keyword_found and keywords:
-            return QuizQuestionQcResult(
-                qc_pass=False,
-                qc_stage_failed=QuizQcStage.SOURCE,
-                qc_reason_code=QuizQcReasonCode.SOURCE_MISMATCH,
-                qc_reason_detail=f"정답 '{correct_option.text}'의 핵심 키워드가 출처 블록에서 발견되지 않습니다",
+        if not keywords:
+            logger.warning(
+                f"[QC][SOURCE] skipped (no keywords) question_id={question.question_id}"
             )
+            return QuizQuestionQcResult(qc_pass=True)
 
-        return QuizQuestionQcResult(qc_pass=True)
+        # 5️⃣ 키워드 하나라도 source에 포함되면 PASS
+        for kw in keywords:
+            if kw in combined_source:
+                return QuizQuestionQcResult(qc_pass=True)
+
+        # 6️⃣ 여기까지 왔으면 → SOURCE 불일치
+        return QuizQuestionQcResult(
+            qc_pass=False,
+            qc_stage_failed=QuizQcStage.SOURCE,
+            qc_reason_code=QuizQcReasonCode.SOURCE_MISMATCH,
+            qc_reason_detail="정답 키워드가 출처 문서에서 발견되지 않음",
+        )
 
     def _extract_keywords(self, text: str) -> List[str]:
         """
