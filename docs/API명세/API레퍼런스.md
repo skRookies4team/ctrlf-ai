@@ -286,7 +286,7 @@ RAG Gap 보완 제안
 ```json
 {
   "ragDocumentPk": "uuid-001",
-  "documentId": "POL-001",
+  "documentId": "사내규정.pdf",
   "version": 1,
   "sourceUrl": "https://s3.../doc.pdf",
   "domain": "POLICY",
@@ -301,7 +301,7 @@ RAG Gap 보완 제안
 {
   "received": true,
   "ragDocumentPk": "uuid-001",
-  "documentId": "POL-001",
+  "documentId": "사내규정.pdf",
   "version": 1,
   "status": "PROCESSING",
   "requestId": "req-001",
@@ -381,16 +381,16 @@ RAG Gap 보완 제안
 
 ## 5. 환경 변수
 
-| Variable                 | Description       | Default      |
-| ------------------------ | ----------------- | ------------ |
-| `AI_ENV`                 | 환경 (mock/real)  | `mock`       |
-| `LLM_BASE_URL`           | LLM 서비스 URL    | -            |
-| `LLM_MODEL_NAME`         | LLM 모델명        | -            |
-| `RAGFLOW_BASE_URL`       | RAGFlow URL       | -            |
-| `MILVUS_HOST`            | Milvus 호스트     | `localhost`  |
-| `MILVUS_PORT`            | Milvus 포트       | `19530`      |
-| `BACKEND_BASE_URL`       | Spring 백엔드 URL | -            |
-| `BACKEND_INTERNAL_TOKEN` | Internal API 토큰 | -            |
+| Variable                 | Description       | Default     |
+| ------------------------ | ----------------- | ----------- |
+| `AI_ENV`                 | 환경 (mock/real)  | `mock`      |
+| `LLM_BASE_URL`           | LLM 서비스 URL    | -           |
+| `LLM_MODEL_NAME`         | LLM 모델명        | -           |
+| `RAGFLOW_BASE_URL`       | RAGFlow URL       | -           |
+| `MILVUS_HOST`            | Milvus 호스트     | `localhost` |
+| `MILVUS_PORT`            | Milvus 포트       | `19530`     |
+| `BACKEND_BASE_URL`       | Spring 백엔드 URL | -           |
+| `BACKEND_INTERNAL_TOKEN` | Internal API 토큰 | -           |
 
 ---
 

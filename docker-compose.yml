@@ -125,7 +125,7 @@ services:
     depends_on:
       elasticsearch:      # 👈 공통 종속성을 여기로 이동
         condition: service_healthy
-    # Real 모드에서는 Mock 서비스 의존성 없음
+    # Real 모드에서는 Mock 서비스 의존성 없음일
 
   # =============================================================================
   # Mock RAGFlow 서비스 - RAG 검색 API (Mock 프로필 전용)

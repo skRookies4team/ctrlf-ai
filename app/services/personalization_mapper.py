@@ -66,6 +66,28 @@ HR_LEAVE_HISTORY_KEYWORDS = frozenset([
     "연차 썼", "연차썼", "휴가 썼", "휴가썼",  # 추가: "언제 연차 썼어" 등 패턴
 ])
 
+# Q13: 급여 명세서 요약 조회용 키워드
+HR_SALARY_KEYWORDS = frozenset([
+    "급여", "월급", "명세서", "급여명세", "급여 명세", "월급명세", "월급 명세",
+    "봉급", "급료", "페이", "pay", "salary", "이번 달 급여", "이번달 급여",
+    "급여 내역", "급여내역", "실수령", "실수령액", "세후", "세전",
+])
+
+# Q16: 내 인사 정보 조회용 키워드
+HR_PERSONAL_INFO_KEYWORDS = frozenset([
+    "인사 정보", "인사정보", "내 정보", "내정보", "프로필", "사원정보", "사원 정보",
+    "입사일", "입사 일", "입사 언제", "언제 입사", "사원번호", "사원 번호",
+    "직급", "직책", "이메일", "연락처", "전화번호",
+])
+
+# Q17: 내 팀/부서 정보 조회용 키워드
+HR_TEAM_INFO_KEYWORDS = frozenset([
+    "팀 정보", "팀정보", "부서 정보", "부서정보", "우리 팀", "우리팀",
+    "우리 부서", "우리부서", "팀 인원", "팀인원", "부서 인원", "부서인원",
+    "팀 구성", "팀구성", "팀원", "부서원", "몇 명", "몇명",
+    "팀장", "부서장",
+])
+
 # EDU_STATUS_CHECK 세분화용 키워드 매핑
 EDU_STATUS_KEYWORDS: dict[str, list[str]] = {
     "Q1": ["미이수", "안 들은", "안들은", "필수 미이수", "필수교육 미이수", "안한 교육", "안 한 교육"],
@@ -217,16 +239,34 @@ def _classify_quiz_score(query: str) -> str:
 
 
 def _classify_hr_leave(query: str) -> str:
-    """HR_LEAVE_CHECK를 Q10, Q11, Q12, Q14, Q15로 세분화합니다.
+    """HR_LEAVE_CHECK를 Q10, Q11, Q12, Q13, Q14, Q15, Q16, Q17로 세분화합니다.
 
     우선순위:
-    1. Q15: 복지 포인트 사용 내역 (내역/이력/사용 키워드)
-    2. Q14: 복지/식대 포인트 잔액
-    3. Q10: 근태 현황
-    4. Q12: 연차 사용 이력 (이력/내역/사용 키워드)
-    5. Q11: 남은 연차 일수 (기본값)
+    1. Q17: 팀/부서 정보 조회
+    2. Q16: 인사 정보 조회
+    3. Q13: 급여 명세서 요약
+    4. Q15: 복지 포인트 사용 내역 (내역/이력/사용 키워드)
+    5. Q14: 복지/식대 포인트 잔액
+    6. Q10: 근태 현황
+    7. Q12: 연차 사용 이력 (이력/내역/사용 키워드)
+    8. Q11: 남은 연차 일수 (기본값)
     """
     q_lower = query.lower()
+
+    # Q17: 팀/부서 정보 조회 (우선순위 높음)
+    for keyword in HR_TEAM_INFO_KEYWORDS:
+        if keyword in q_lower:
+            return "Q17"
+
+    # Q16: 인사 정보 조회
+    for keyword in HR_PERSONAL_INFO_KEYWORDS:
+        if keyword in q_lower:
+            return "Q16"
+
+    # Q13: 급여 명세서 요약
+    for keyword in HR_SALARY_KEYWORDS:
+        if keyword in q_lower:
+            return "Q13"
 
     # Q15: 복지 포인트 사용 내역 (Q14보다 우선 체크)
     for keyword in HR_WELFARE_HISTORY_KEYWORDS:

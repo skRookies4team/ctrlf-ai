@@ -624,6 +624,86 @@ class PersonalizationClient:
                     {"education_id": "EDU001", "title": "개인정보보호 교육", "deadline": "2025-01-31", "status": "진행중"},
                 ],
             },
+            "Q13": {  # 급여 명세서 요약
+                "metrics": {
+                    "pay_month": "2025-01",
+                    "base_salary": 4500000,          # 기본급
+                    "overtime_pay": 350000,          # 연장근로수당
+                    "bonus": 0,                      # 상여금
+                    "meal_allowance": 100000,        # 식대
+                    "transport_allowance": 100000,   # 교통비
+                    "total_earnings": 5050000,       # 총 지급액
+                    "income_tax": 215000,            # 소득세
+                    "local_tax": 21500,              # 지방소득세
+                    "national_pension": 202500,      # 국민연금
+                    "health_insurance": 177750,      # 건강보험
+                    "long_term_care": 22800,         # 장기요양보험
+                    "employment_insurance": 45450,   # 고용보험
+                    "total_deductions": 685000,      # 총 공제액
+                    "net_pay": 4365000,              # 실수령액
+                },
+                "items": [
+                    {"category": "지급", "item": "기본급", "amount": 4500000},
+                    {"category": "지급", "item": "연장근로수당", "amount": 350000},
+                    {"category": "지급", "item": "식대", "amount": 100000},
+                    {"category": "지급", "item": "교통비", "amount": 100000},
+                    {"category": "공제", "item": "소득세", "amount": -215000},
+                    {"category": "공제", "item": "지방소득세", "amount": -21500},
+                    {"category": "공제", "item": "국민연금", "amount": -202500},
+                    {"category": "공제", "item": "건강보험", "amount": -177750},
+                    {"category": "공제", "item": "장기요양보험", "amount": -22800},
+                    {"category": "공제", "item": "고용보험", "amount": -45450},
+                ],
+            },
+            "Q16": {  # 내 인사 정보 조회
+                "metrics": {
+                    "employee_id": "EMP20210315",
+                    "name": "홍길동",
+                    "department": "개발팀",
+                    "position": "선임연구원",
+                    "job_title": "백엔드 개발자",
+                    "hire_date": "2021-03-15",
+                    "years_of_service": 3,
+                    "months_of_service": 10,
+                    "email": "hong.gildong@company.com",
+                    "phone": "010-1234-5678",
+                    "office_phone": "02-1234-5678",
+                },
+                "items": [
+                    {"label": "사원번호", "value": "EMP20210315"},
+                    {"label": "이름", "value": "홍길동"},
+                    {"label": "부서", "value": "개발팀"},
+                    {"label": "직급", "value": "선임연구원"},
+                    {"label": "직책", "value": "백엔드 개발자"},
+                    {"label": "입사일", "value": "2021-03-15"},
+                    {"label": "근속연수", "value": "3년 10개월"},
+                    {"label": "이메일", "value": "hong.gildong@company.com"},
+                    {"label": "휴대폰", "value": "010-1234-5678"},
+                    {"label": "사내전화", "value": "02-1234-5678"},
+                ],
+            },
+            "Q17": {  # 내 팀/부서 정보 조회
+                "metrics": {
+                    "department_name": "개발팀",
+                    "department_code": "DEV001",
+                    "team_lead": "김팀장",
+                    "team_lead_position": "팀장",
+                    "total_members": 8,
+                    "full_time": 7,
+                    "contract": 1,
+                    "parent_department": "기술본부",
+                },
+                "items": [
+                    {"employee_id": "EMP001", "name": "김팀장", "position": "팀장", "job_title": "개발팀장", "is_leader": True},
+                    {"employee_id": "EMP002", "name": "이수석", "position": "수석연구원", "job_title": "테크리드", "is_leader": False},
+                    {"employee_id": "EMP003", "name": "박선임", "position": "선임연구원", "job_title": "프론트엔드 개발자", "is_leader": False},
+                    {"employee_id": "EMP004", "name": "홍길동", "position": "선임연구원", "job_title": "백엔드 개발자", "is_leader": False},
+                    {"employee_id": "EMP005", "name": "최주임", "position": "주임연구원", "job_title": "풀스택 개발자", "is_leader": False},
+                    {"employee_id": "EMP006", "name": "정사원", "position": "연구원", "job_title": "주니어 개발자", "is_leader": False},
+                    {"employee_id": "EMP007", "name": "강사원", "position": "연구원", "job_title": "주니어 개발자", "is_leader": False},
+                    {"employee_id": "EMP008", "name": "윤인턴", "position": "인턴", "job_title": "인턴 개발자", "is_leader": False},
+                ],
+            },
         }
 
         return mock_responses.get(sub_intent_id, {"metrics": {}, "items": []})

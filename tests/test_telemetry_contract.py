@@ -50,7 +50,7 @@ def test_chat_turn_event_serialization():
     """CHAT_TURN 이벤트 샘플 직렬화가 v1 계약과 일치하는지 검증."""
     # Given: CHAT_TURN 페이로드 생성 (RAG 정보 포함)
     rag_source = RagSource(
-        doc_id="POL-001",
+        doc_id="사내규정.pdf",
         chunk_id=12,
         score=0.63,
     )
@@ -138,7 +138,7 @@ def test_chat_turn_event_serialization():
                         "avgScore": 0.60,
                         "sources": [
                             {
-                                "docId": "POL-001",
+                                "docId": "사내규정.pdf",
                                 "chunkId": 12,
                                 "score": 0.63,
                             }

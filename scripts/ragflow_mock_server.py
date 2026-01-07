@@ -50,7 +50,7 @@ def internal_ragflow_ingest():
         Body:
         {
             "datasetId": "사내규정",
-            "docId": "POL-EDU-015",
+            "docId": "사내규정.pdf",
             "version": 3,
             "fileUrl": "https://...pdf",
             "replace": true,

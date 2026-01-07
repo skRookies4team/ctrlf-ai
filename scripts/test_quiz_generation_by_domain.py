@@ -196,7 +196,7 @@ async def run_quiz_generation(
 ):
     await ensure_milvus_ready()
 
-    milvus_repo = MilvusQuizRepository(collection_name="ragflow_chunks")
+    milvus_repo = MilvusQuizRepository(collection_name="ragflow_chunks_openai")
 
     qc_enabled = os.getenv("QUIZ_QC_ENABLED", "true").lower() == "true"
     quiz_service = QuizGenerateService(qc_enabled=qc_enabled)

@@ -130,7 +130,7 @@ class RAGFlowIngestClient:
 
         Args:
             dataset_id: RAGFlow dataset 이름 (예: "사내규정")
-            doc_id: 문서 ID (예: "POL-EDU-015")
+            doc_id: 문서 ID (예: "사내규정.pdf")
             version: 문서 버전
             file_url: 문서 파일 URL (S3 등)
             rag_document_pk: RAG 문서 PK (UUID)

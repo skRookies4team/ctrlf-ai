@@ -54,7 +54,7 @@ async def test_domain_pipeline_fast():
     """
 
     repo = MilvusQuizRepository(
-        collection_name="ragflow_chunks"
+        collection_name="ragflow_chunks_openai"
     )
 
     batch_service = DomainQuizBatchService(

@@ -1,0 +1,9 @@
+{
+  "ragDocumentPk": "test-uuid-123",
+  "documentId": "test_policy.pdf",
+  "version": 1,
+  "sourceUrl": "https://ctrl-s3.s3.ap-northeast-2.amazonaws.com/docs/hr_safety_v3.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260107T075123Z&X-Amz-SignedHeaders=host&X-Amz-Credential=AKIA4PYYC6WQY734V4Z7%2F20260107%2Fap-northeast-2%2Fs3%2Faws4_request&X-Amz-Expires=43200&X-Amz-Signature=ec0bca547b2193fb6aa0c6bb131a3696462bbaa26771e582080e1ec2abbd42fe",
+  "domain": "POLICY",
+  "requestId": "test-req-1",
+  "traceId": "test-trace-1"
+}

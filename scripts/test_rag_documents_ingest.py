@@ -111,7 +111,7 @@ def sample_ingest_request():
     """샘플 ingest 요청."""
     return {
         "ragDocumentPk": "pk-001",
-        "documentId": "POL-TEST-001",
+        "documentId": "사내규정TEST.pdf",
         "version": 1,
         "sourceUrl": "https://s3.example.com/doc.pdf",
         "domain": "POLICY",
@@ -125,7 +125,7 @@ def sample_callback_request():
     """샘플 콜백 요청."""
     return {
         "ingestId": "ingest-001",
-        "docId": "POL-TEST-001",
+        "docId": "사내규정TEST.pdf",
         "version": 1,
         "status": "COMPLETED",
         "processedAt": "2025-12-29T12:00:00Z",
@@ -367,13 +367,13 @@ class TestIngestEndpointNoToken:
             data = response.json()
             assert data["received"] is True
             assert data["status"] == "PROCESSING"
-            assert data["documentId"] == "POL-TEST-001"
+            assert data["documentId"] == "사내규정TEST.pdf"
             assert data["version"] == 1
 
     def test_ingest_duplicate_processing_202(self, client, sample_ingest_request):
         """중복 요청 (처리 중) - 202 반환."""
         # 캐시에 처리 중으로 표시
-        _mark_request_processing("POL-TEST-001", 1)
+        _mark_request_processing("사내규정TEST.pdf", 1)
 
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = None
@@ -390,7 +390,7 @@ class TestIngestEndpointNoToken:
     def test_ingest_duplicate_completed_200(self, client, sample_ingest_request):
         """중복 요청 (이미 완료) - 200 반환."""
         # 캐시에 완료로 표시
-        _mark_request_completed("POL-TEST-001", 1, "COMPLETED")
+        _mark_request_completed("사내규정TEST.pdf", 1, "COMPLETED")
 
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings:
             mock_get_settings.return_value.BACKEND_INTERNAL_TOKEN = None
@@ -425,7 +425,7 @@ class TestIngestEndpointNoToken:
     def test_ingest_new_version_separate(self, client, sample_ingest_request):
         """새 버전은 별도 처리."""
         # 버전 1 완료
-        _mark_request_completed("POL-TEST-001", 1, "COMPLETED")
+        _mark_request_completed("사내규정TEST.pdf", 1, "COMPLETED")
 
         # 버전 2 요청
         sample_ingest_request["version"] = 2
@@ -526,7 +526,7 @@ class TestCallbackEndpoint:
     def test_callback_updates_cache_to_completed(self, client, sample_callback_request):
         """콜백 수신 시 캐시 상태 COMPLETED로 업데이트."""
         # 초기 상태: 처리 중
-        _mark_request_processing("POL-TEST-001", 1)
+        _mark_request_processing("사내규정TEST.pdf", 1)
 
         with patch("app.api.v1.rag_documents.get_settings") as mock_get_settings, \
              patch("app.api.v1.rag_documents.get_backend_client") as mock_client:
@@ -541,7 +541,7 @@ class TestCallbackEndpoint:
             assert response.status_code == 200
 
             # 캐시 상태 확인
-            cached = _get_cached_status("POL-TEST-001", 1)
+            cached = _get_cached_status("사내규정TEST.pdf", 1)
             assert cached is not None
             assert cached["status"] == "COMPLETED"
 
@@ -563,7 +563,7 @@ class TestCallbackEndpoint:
             assert response.status_code == 200
 
             # 캐시 상태 확인
-            cached = _get_cached_status("POL-TEST-001", 1)
+            cached = _get_cached_status("사내규정TEST.pdf", 1)
             assert cached["status"] == "FAILED"
 
     def test_callback_calls_backend_client(self, client, sample_callback_request):
@@ -584,7 +584,7 @@ class TestCallbackEndpoint:
             mock_client.update_rag_document_status.assert_called_once_with(
                 rag_document_pk="pk-001",
                 status="COMPLETED",
-                document_id="POL-TEST-001",
+                document_id="사내규정TEST.pdf",
                 version=1,
                 processed_at="2025-12-29T12:00:00Z",
                 fail_reason=None,
@@ -730,7 +730,7 @@ class TestRAGFlowIngestClient:
 
         result = await client.ingest(
             dataset_id="사내규정",
-            doc_id="POL-001",
+            doc_id="사내규정.pdf",
             version=1,
             file_url="https://s3.example.com/doc.pdf",
             rag_document_pk="pk-001",
@@ -753,7 +753,7 @@ class TestRAGFlowIngestClient:
             with pytest.raises(RAGFlowUnavailableError) as exc_info:
                 await client.ingest(
                     dataset_id="사내규정",
-                    doc_id="POL-001",
+                    doc_id="사내규정.pdf",
                     version=1,
                     file_url="https://s3.example.com/doc.pdf",
                     rag_document_pk="pk-001",
@@ -779,7 +779,7 @@ class TestRAGFlowIngestClient:
         with pytest.raises(RAGFlowIngestError) as exc_info:
             await client.ingest(
                 dataset_id="사내규정",
-                doc_id="POL-001",
+                doc_id="사내규정.pdf",
                 version=1,
                 file_url="https://s3.example.com/doc.pdf",
                 rag_document_pk="pk-001",
@@ -808,7 +808,7 @@ class TestRAGFlowIngestClient:
         with pytest.raises(RAGFlowIngestError) as exc_info:
             await client.ingest(
                 dataset_id="사내규정",
-                doc_id="POL-001",
+                doc_id="사내규정.pdf",
                 version=1,
                 file_url="https://s3.example.com/doc.pdf",
                 rag_document_pk="pk-001",
@@ -835,7 +835,7 @@ class TestRAGFlowIngestClient:
         with pytest.raises(RAGFlowUnavailableError):
             await client.ingest(
                 dataset_id="사내규정",
-                doc_id="POL-001",
+                doc_id="사내규정.pdf",
                 version=1,
                 file_url="https://s3.example.com/doc.pdf",
                 rag_document_pk="pk-001",
@@ -857,7 +857,7 @@ class TestRAGFlowIngestClient:
         with pytest.raises(RAGFlowUnavailableError) as exc_info:
             await client.ingest(
                 dataset_id="사내규정",
-                doc_id="POL-001",
+                doc_id="사내규정.pdf",
                 version=1,
                 file_url="https://s3.example.com/doc.pdf",
                 rag_document_pk="pk-001",
@@ -883,7 +883,7 @@ class TestRAGFlowIngestClient:
         with pytest.raises(RAGFlowUnavailableError) as exc_info:
             await client.ingest(
                 dataset_id="사내규정",
-                doc_id="POL-001",
+                doc_id="사내규정.pdf",
                 version=1,
                 file_url="https://s3.example.com/doc.pdf",
                 rag_document_pk="pk-001",
@@ -921,7 +921,7 @@ class TestBackendClientUpdateStatus:
         result = await client.update_rag_document_status(
             rag_document_pk="pk-001",
             status="COMPLETED",
-            document_id="POL-001",
+            document_id="사내규정.pdf",
             version=1,
             processed_at="2025-12-29T12:00:00Z",
         )
@@ -947,7 +947,7 @@ class TestBackendClientUpdateStatus:
         result = await client.update_rag_document_status(
             rag_document_pk="pk-001",
             status="COMPLETED",
-            document_id="POL-001",
+            document_id="사내규정.pdf",
             version=1,
         )
 
@@ -968,7 +968,7 @@ class TestBackendClientUpdateStatus:
             result = await client.update_rag_document_status(
                 rag_document_pk="pk-001",
                 status="COMPLETED",
-                document_id="POL-001",
+                document_id="사내규정.pdf",
                 version=1,
             )
 
@@ -993,7 +993,7 @@ class TestBackendClientUpdateStatus:
             await client.update_rag_document_status(
                 rag_document_pk="pk-001",
                 status="COMPLETED",
-                document_id="POL-001",
+                document_id="사내규정.pdf",
                 version=1,
             )
 
@@ -1018,7 +1018,7 @@ class TestBackendClientUpdateStatus:
             await client.update_rag_document_status(
                 rag_document_pk="pk-001",
                 status="COMPLETED",
-                document_id="POL-001",
+                document_id="사내규정.pdf",
                 version=1,
             )
 
@@ -1045,7 +1045,7 @@ class TestBackendClientUpdateStatus:
             await client.update_rag_document_status(
                 rag_document_pk="pk-001",
                 status="COMPLETED",
-                document_id="POL-001",
+                document_id="사내규정.pdf",
                 version=1,
             )
 
@@ -1068,7 +1068,7 @@ class TestBackendClientUpdateStatus:
             await client.update_rag_document_status(
                 rag_document_pk="pk-001",
                 status="COMPLETED",
-                document_id="POL-001",
+                document_id="사내규정.pdf",
                 version=1,
             )
 

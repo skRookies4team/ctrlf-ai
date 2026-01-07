@@ -130,7 +130,7 @@ _CACHE_MAX_SIZE = 10000
 class IngestRequest(BaseModel):
     """Backend → AI ingest 요청."""
     ragDocumentPk: str = Field(..., description="RAG 문서 PK (UUID)")
-    documentId: str = Field(..., description="문서 ID (예: POL-EDU-015)")
+    documentId: str = Field(..., description="문서 ID (예: 사내규정.pdf)")
     version: int = Field(..., description="문서 버전")
     sourceUrl: str = Field(..., description="문서 파일 URL (S3 등)")
     domain: str = Field(..., description="도메인 (POLICY만 허용)")

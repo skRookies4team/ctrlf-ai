@@ -10,13 +10,13 @@
 
 ### 서비스 연결 정보
 
-| 서비스 | URL | 용도 |
-|--------|-----|------|
-| **AI Gateway** | `http://localhost:8000` | 채팅/RAG/영상 생성 통합 API |
-| **RAGFlow** | `http://your-ragflow-host:9380` | RAG 검색 |
-| **LLM Server** | `http://your-llm-server:port/v1` | LLM 응답 생성 |
-| **Milvus** | `<MILVUS_HOST>:<MILVUS_PORT>` | 벡터 DB (RAG 검색) |
-| **Embedding Server** | `http://your-embedding-server:port/v1/embeddings` | 임베딩 생성 |
+| 서비스               | URL                                               | 용도                        |
+| -------------------- | ------------------------------------------------- | --------------------------- |
+| **AI Gateway**       | `http://localhost:8000`                           | 채팅/RAG/영상 생성 통합 API |
+| **RAGFlow**          | `http://your-ragflow-host:9380`                   | RAG 검색                    |
+| **LLM Server**       | `http://your-llm-server:port/v1`                  | LLM 응답 생성               |
+| **Milvus**           | `<MILVUS_HOST>:<MILVUS_PORT>`                     | 벡터 DB (RAG 검색)          |
+| **Embedding Server** | `http://your-embedding-server:port/v1/embeddings` | 임베딩 생성                 |
 
 ### Milvus 핵심 정보
 
@@ -29,14 +29,14 @@ Metric: COSINE
 
 ### Dataset ID (한글 카테고리명)
 
-| dataset_id | 도메인 | 청크 수 |
-|------------|--------|--------|
-| `사내규정` | POLICY | 390 |
-| `정보보안교육` | EDUCATION | 1,442 |
-| `직장내성희롱교육` | EDUCATION | 486 |
-| `직무교육` | EDUCATION | 330 |
-| `직장내괴롭힘교육` | EDUCATION | 152 |
-| `장애인인식개선교육` | EDUCATION | 125 |
+| dataset_id           | 도메인    | 청크 수 |
+| -------------------- | --------- | ------- |
+| `사내규정`           | POLICY    | 390     |
+| `정보보안교육`       | EDUCATION | 1,442   |
+| `직장내성희롱교육`   | EDUCATION | 486     |
+| `직무교육`           | EDUCATION | 330     |
+| `직장내괴롭힘교육`   | EDUCATION | 152     |
+| `장애인인식개선교육` | EDUCATION | 125     |
 
 > **주의**: `kb_policy_001` 같은 ID는 존재하지 않습니다. 실제 dataset_id는 위의 한글 값입니다.
 
@@ -79,23 +79,23 @@ Metric: COSINE
 
 ### 1.2 서비스별 역할
 
-| 서비스 | 위치 | 포트 | 역할 |
-|--------|------|------|------|
-| **AI Gateway** | 로컬 | 8000 | 채팅/RAG API, LLM 호출 |
-| **Backend** | 로컬 | 9002 | 콜백 수신, 사용자/세션 관리 |
-| **vLLM** | 외부 | .env 참조 | LLM 응답 생성 |
-| **Embedding** | 외부 | .env 참조 | 임베딩 벡터 생성 (ko-sroberta) |
-| **Milvus** | 외부 | .env 참조 | 벡터 검색 |
+| 서비스         | 위치 | 포트      | 역할                           |
+| -------------- | ---- | --------- | ------------------------------ |
+| **AI Gateway** | 로컬 | 8000      | 채팅/RAG API, LLM 호출         |
+| **Backend**    | 로컬 | 9002      | 콜백 수신, 사용자/세션 관리    |
+| **vLLM**       | 외부 | .env 참조 | LLM 응답 생성                  |
+| **Embedding**  | 외부 | .env 참조 | 임베딩 벡터 생성 (ko-sroberta) |
+| **Milvus**     | 외부 | .env 참조 | 벡터 검색                      |
 
 ### 1.3 테스트 시나리오별 최소 구성
 
-| 테스트 목적 | 필요한 서비스 | 백엔드 |
-|------------|--------------|--------|
-| **기본 AI 채팅** | AI Gateway + vLLM + RAGFlow | 불필요 |
-| **채팅 + 로그 저장** | 위 + chat-service | chat-service만 |
-| **스크립트/영상 생성** | AI Gateway + vLLM + education-service + FFmpeg | education-service |
-| **퀴즈 생성** | AI Gateway + vLLM + RAGFlow | quiz-service (선택) |
-| **전체 통합 테스트** | 모든 서비스 | 모두 |
+| 테스트 목적            | 필요한 서비스                                  | 백엔드              |
+| ---------------------- | ---------------------------------------------- | ------------------- |
+| **기본 AI 채팅**       | AI Gateway + vLLM + RAGFlow                    | 불필요              |
+| **채팅 + 로그 저장**   | 위 + chat-service                              | chat-service만      |
+| **스크립트/영상 생성** | AI Gateway + vLLM + education-service + FFmpeg | education-service   |
+| **퀴즈 생성**          | AI Gateway + vLLM + RAGFlow                    | quiz-service (선택) |
+| **전체 통합 테스트**   | 모든 서비스                                    | 모두                |
 
 > **핵심**: 기본 AI 채팅은 **백엔드 없이도** 테스트 가능합니다.
 
@@ -118,6 +118,7 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 **확인:**
+
 ```bash
 curl http://localhost:8000/health
 ```
@@ -143,15 +144,15 @@ curl http://localhost:8000/health
 
 ### 2.2 API 엔드포인트
 
-| 엔드포인트 | 메서드 | 설명 |
-|-----------|--------|------|
-| `/health` | GET | 서버 상태 확인 |
-| `/health/ready` | GET | 준비 상태 확인 |
-| `/ai/chat/messages` | POST | **동기 채팅 응답 생성** |
-| `/ai/chat/stream` | POST | **스트리밍 채팅 응답 (NDJSON)** |
-| `/ai/gap/policy-edu/suggestions` | POST | RAG Gap 보완 제안 |
-| `/ai/quiz/generate` | POST | 퀴즈 생성 |
-| `/ai/faq/generate` | POST | FAQ 생성 |
+| 엔드포인트                       | 메서드 | 설명                            |
+| -------------------------------- | ------ | ------------------------------- |
+| `/health`                        | GET    | 서버 상태 확인                  |
+| `/health/ready`                  | GET    | 준비 상태 확인                  |
+| `/ai/chat/messages`              | POST   | **동기 채팅 응답 생성**         |
+| `/ai/chat/stream`                | POST   | **스트리밍 채팅 응답 (NDJSON)** |
+| `/ai/gap/policy-edu/suggestions` | POST   | RAG Gap 보완 제안               |
+| `/ai/quiz/generate`              | POST   | 퀴즈 생성                       |
+| `/ai/faq/generate`               | POST   | FAQ 생성                        |
 
 ---
 
@@ -178,15 +179,15 @@ curl http://localhost:8000/health
 }
 ```
 
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| `session_id` | string | O | 세션 식별자 |
-| `user_id` | string | O | 사용자 ID |
-| `user_role` | string | O | `EMPLOYEE`, `ADMIN`, `INCIDENT_MANAGER` |
-| `domain` | string | X | `POLICY`, `EDU`, `INCIDENT` |
-| `department` | string | X | 부서명 |
-| `channel` | string | X | `WEB`, `MOBILE`, `SLACK` |
-| `messages` | array | O | 메시지 배열 |
+| 필드         | 타입   | 필수 | 설명                                    |
+| ------------ | ------ | ---- | --------------------------------------- |
+| `session_id` | string | O    | 세션 식별자                             |
+| `user_id`    | string | O    | 사용자 ID                               |
+| `user_role`  | string | O    | `EMPLOYEE`, `ADMIN`, `INCIDENT_MANAGER` |
+| `domain`     | string | X    | `POLICY`, `EDU`, `INCIDENT`             |
+| `department` | string | X    | 부서명                                  |
+| `channel`    | string | X    | `WEB`, `MOBILE`, `SLACK`                |
+| `messages`   | array  | O    | 메시지 배열                             |
 
 **응답:**
 
@@ -225,7 +226,7 @@ curl http://localhost:8000/health
   "session_id": "sess-uuid-1234",
   "user_id": "emp-001",
   "user_role": "EMPLOYEE",
-  "messages": [{"role": "user", "content": "연차휴가 규정"}]
+  "messages": [{ "role": "user", "content": "연차휴가 규정" }]
 }
 ```
 
@@ -293,6 +294,7 @@ curl -X POST http://localhost:8000/internal/ai/source-sets/test-source-set-001/s
 ```
 
 **응답 (202 Accepted):**
+
 ```json
 {
   "source_set_id": "test-source-set-001",
@@ -317,6 +319,7 @@ curl -X POST http://localhost:8000/internal/ai/render-jobs \
 ```
 
 **응답 (202 Accepted):**
+
 ```json
 {
   "received": true,
@@ -335,7 +338,7 @@ curl -X POST http://localhost:8000/internal/ai/rag-documents/ingest \
   -H "X-Internal-Token: your-token" \
   -d '{
     "ragDocumentPk": "uuid-001",
-    "documentId": "POL-001",
+    "documentId": "사내규정.pdf",
     "version": 1,
     "sourceUrl": "https://s3.../doc.pdf",
     "domain": "POLICY",
@@ -356,18 +359,18 @@ curl -X POST http://localhost:8000/internal/ai/rag-documents/ingest \
 
 ### 5.1 HTTP 상태 코드
 
-| 코드 | 설명 |
-|------|------|
-| 200 | 성공 |
-| 202 | 접수됨 (비동기 처리 시작) |
-| 400 | 잘못된 요청 |
-| 401 | 인증 실패 (Internal API) |
-| 403 | 권한 없음 |
-| 404 | 리소스 없음 |
-| 410 | 제거된 엔드포인트 (Deprecated API) |
-| 422 | 유효성 검증 실패 |
-| 500 | 서버 내부 오류 |
-| 503 | RAG 서비스 불가 (RAGFlow 장애) |
+| 코드 | 설명                               |
+| ---- | ---------------------------------- |
+| 200  | 성공                               |
+| 202  | 접수됨 (비동기 처리 시작)          |
+| 400  | 잘못된 요청                        |
+| 401  | 인증 실패 (Internal API)           |
+| 403  | 권한 없음                          |
+| 404  | 리소스 없음                        |
+| 410  | 제거된 엔드포인트 (Deprecated API) |
+| 422  | 유효성 검증 실패                   |
+| 500  | 서버 내부 오류                     |
+| 503  | RAG 서비스 불가 (RAGFlow 장애)     |
 
 ### 5.2 Fallback 응답
 
@@ -401,10 +404,10 @@ RAGFlow 장애 시:
 
 ## 변경 이력
 
-| 날짜 | 버전 | 내용 |
-|------|------|------|
-| 2025-12-31 | 2.0 | 실제 AI 서버 API만 반영, 불필요한 내용 제거 |
-| 2025-12-28 | 1.0 | 초기 작성 |
+| 날짜       | 버전 | 내용                                        |
+| ---------- | ---- | ------------------------------------------- |
+| 2025-12-31 | 2.0  | 실제 AI 서버 API만 반영, 불필요한 내용 제거 |
+| 2025-12-28 | 1.0  | 초기 작성                                   |
 
 ---
 
