@@ -1682,7 +1682,8 @@ class ChatService:
             ab_collection_name=ab_info.get("collection_name"),
         )
         if background_tasks:
-            background_tasks.add_task(lambda: asyncio.ensure_future(log_coro))
+            # background_tasks.add_task(lambda: asyncio.ensure_future(log_coro))
+            background_tasks.add_task(log_coro_function, arg1, arg2)
         else:
             self._fire_and_forget(log_coro)
 
