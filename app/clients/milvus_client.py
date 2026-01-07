@@ -800,16 +800,19 @@ class MilvusSearchClient:
 
         # Phase 56: department 필터 생성 (부서별 교육영상 필터링)
         # 스키마에 department 필드가 없으면 필터 비활성화
+        # _has_department_field가 None(미확인)이거나 False면 스킵
         if settings.RAG_DEPARTMENT_FILTER_ENABLED:
-            if self._has_department_field is False:
-                logger.debug("[Phase56] Department filter skipped: department field not in schema")
-            else:
+            if self._has_department_field is True:
                 dept_expr = get_department_filter_expr(department)
                 if dept_expr:
                     filter_exprs.append(dept_expr)
                     logger.info(
                         f"[Phase56] Department filter applied: department={department} -> {dept_expr}"
                     )
+            else:
+                logger.debug(
+                    f"[Phase56] Department filter skipped: _has_department_field={self._has_department_field}"
+                )
 
         # 필터 조합 (여러 필터가 있으면 && 연산자로 연결)
         filter_expr = " && ".join(filter_exprs) if filter_exprs else None
