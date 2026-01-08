@@ -1,21 +1,22 @@
 # =============================================================================
-# ctrlf-ai Docker Compose 설정 (REAL ONLY)
+# ctrlf-ai Docker Compose 설정
+# =============================================================================
 #
-# ⚠️ NOTE
-# - mock / profile / extends 기반 구조는 초기 통합 테스트용 설계
-# - 현재는 REAL 환경에서 LLMOps / Observability 검증에 집중
-# - mock 관련 서비스는 제거하되, 주석은 설계 이력 보존용으로 유지
+# 사용법:
+#   docker compose up -d
 #
-# 사용법 (REAL):
-#   export RAGFLOW_BASE_URL_REAL=...
-#   export LLM_BASE_URL_REAL=...
-#   export BACKEND_BASE_URL_REAL=...
-#   docker compose up -d --build
+# 필수 환경변수 설정:
+#   export RAGFLOW_BASE_URL_REAL=http://ragflow-server:8080
+#   export LLM_BASE_URL_REAL=http://llm-server:8001
+#   export BACKEND_BASE_URL_REAL=http://backend-server:8080
+#   export RAGFLOW_API_KEY=your-api-key
+#   export OPENAI_API_KEY=your-openai-key
+#
 # =============================================================================
 
 services:
   # =============================================================================
-  # AI Gateway (REAL)
+  # AI Gateway (ctrlf-ai)
   # =============================================================================
   ai-gateway:
     build:
@@ -28,45 +29,55 @@ services:
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
       - LOG_LEVEL=DEBUG
-      - AI_ENV=real
-
-      # Elasticsearch (Logs / Search)
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-
-      # ===============================
-      # REAL External Dependencies
-      # ===============================
-      - MILVUS_ENABLED=true
+      # Milvus 설정
+      - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
       - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
       - MILVUS_PORT=${MILVUS_PORT:-19540}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
-
+      - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
+      # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_EMBED_MODEL=text-embedding-3-large
-      - OPENAI_EMBED_DIM=3072
-      - EMBEDDING_DIMENSION=3072
-
+      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
+      - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
+      # 외부 서비스 URL
       - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL}
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
-      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN}
-
+      # 인증 토큰
+      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
+      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-ctrlf-r2a-w3e5t7y9u2i4}
+      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-ctrlf-a2b-z6x8c1v3b5n7}
+      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-ctrlf-a2b-h4j6k8l0m2n4}
+      # PII 설정
+      - PII_BASE_URL=
+      - PII_ENABLED=true
+      # RouterOrchestrator 활성화
+      - ROUTER_ORCHESTRATOR_ENABLED=true
+      # 개인화 모드: auto (백엔드 시도 후 실패시 fallback), real (백엔드 필수)
+      - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
+      # Quality Gate 설정
+      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
+      - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
+      - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
+      - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
     networks:
       - ctrlf-net
-
     depends_on:
       elasticsearch:
         condition: service_healthy
-
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
   # =============================================================================
-  # Elasticsearch
+  # Elasticsearch - 로그 저장소
   # =============================================================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
@@ -81,9 +92,30 @@ services:
       - ctrlf-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # =============================================================================
-  # Prometheus (Metrics)
+  # Kibana - 로그 시각화
+  # =============================================================================
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: ctrlf-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
+      - SERVER_NAME=ctrlf-kibana
+      - SERVER_HOST=0.0.0.0
+    ports:
+      - "5601:5601"
+    networks:
+      - ctrlf-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # =============================================================================
+  # Prometheus - 메트릭 수집
   # =============================================================================
   prometheus:
     image: prom/prometheus:latest
@@ -96,36 +128,20 @@ services:
       - ctrlf-net
 
   # =============================================================================
-  # Grafana (Dashboard)
+  # Grafana - 메트릭 시각화
   # =============================================================================
   grafana:
     image: grafana/grafana:latest
     container_name: ctrlf-grafana
     ports:
       - "3000:3000"
+    networks:
+      - ctrlf-net
     depends_on:
       - prometheus
-    networks:
-      - ctrlf-net
-
-  # =============================================================================
-  # Kibana (Log Visualization)
-  # =============================================================================
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.3
-    container_name: ctrlf-kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    networks:
-      - ctrlf-net
 
 # =============================================================================
-# Network
+# 네트워크 설정
 # =============================================================================
 networks:
   ctrlf-net:

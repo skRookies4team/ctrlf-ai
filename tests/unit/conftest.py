@@ -10,23 +10,16 @@ import os
 # Set environment variables BEFORE importing any app modules
 # This ensures Settings class uses these values
 
-# Disable mock URLs for unit tests (no external services required)
-os.environ["RAGFLOW_BASE_URL_MOCK"] = ""
-os.environ["LLM_BASE_URL_MOCK"] = ""
-os.environ["BACKEND_BASE_URL_MOCK"] = ""
-
 # Disable Milvus for unit tests (no external services required)
 os.environ["MILVUS_ENABLED"] = "false"
 os.environ["RETRIEVAL_BACKEND"] = "ragflow"
 os.environ["CHAT_RETRIEVER_BACKEND"] = "ragflow"
 
-# Remove direct URL env vars (HttpUrl type doesn't accept empty string)
-# So we need to unset them entirely
-for key in ["RAGFLOW_BASE_URL", "LLM_BASE_URL", "BACKEND_BASE_URL"]:
+# Remove URL env vars (HttpUrl type doesn't accept empty string)
+# So we need to unset them entirely to prevent external calls
+for key in ["RAGFLOW_BASE_URL", "LLM_BASE_URL", "BACKEND_BASE_URL",
+            "RAGFLOW_BASE_URL_REAL", "LLM_BASE_URL_REAL", "BACKEND_BASE_URL_REAL"]:
     os.environ.pop(key, None)
-
-# Set AI_ENV to mock mode (but with empty mock URLs = no external calls)
-os.environ["AI_ENV"] = "mock"
 
 # Now clear the settings cache so Settings reloads with new values
 # Import AFTER setting env vars to ensure clean state
