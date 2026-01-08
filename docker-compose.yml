@@ -117,6 +117,10 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
       # Phase 57 테스트: anchor_gate 완화
       - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
+      # Phase 58: Quality Gate 설정
+      - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
+      - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
+      - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
 
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
       # BACKEND_INTERNAL_TOKEN은 RAGFlow 서버의 AI_TO_RAGFLOW_TOKEN과 일치해야 함
