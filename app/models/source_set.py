@@ -342,6 +342,10 @@ class GeneratedScript(BaseModel):
 
     콜백 body의 script 객체
     Spring DB에 바로 저장 가능한 정본 JSON 구조
+    
+    스크립트 2종 생성:
+    - 백엔드 저장용: chapters/scenes 구조 (기존)
+    - Heygen 영상 제작용: heygen_script 필드 (신규)
     """
     script_id: str = Field(
         ...,
@@ -378,7 +382,12 @@ class GeneratedScript(BaseModel):
     )
     chapters: List[GeneratedChapter] = Field(
         default_factory=list,
-        description="챕터 목록",
+        description="챕터 목록 (백엔드 저장용)",
+    )
+    heygen_script: Optional[Dict[str, Any]] = Field(
+        None,
+        alias="heygenScript",
+        description="Heygen 영상 제작용 스크립트 (승인 후 영상 생성 시 사용)",
     )
 
     class Config:
@@ -463,7 +472,7 @@ class SourceSetCompleteRequest(BaseModel):
     )
     script: Optional[GeneratedScript] = Field(
         None,
-        description="생성된 스크립트 (전체 전송 시)",
+        description="생성된 스크립트 (전체 전송 시, 백엔드 저장용 + Heygen용 포함)",
     )
     script_patch: Optional[ScriptPatch] = Field(
         None,

@@ -194,9 +194,40 @@ class RAGFlowIngestClient:
                     f"RAGFlow ingest accepted: doc_id={doc_id}, version={version}"
                 )
                 try:
-                    return response.json()
-                except Exception:
-                    return {"accepted": True}
+                    result = response.json()
+                    # 명세: {"received":true,"ingestId":"uuid-or-string","status":"QUEUED"}
+                    # 응답 형식 검증 (필수 필드 확인)
+                    if not isinstance(result, dict):
+                        logger.warning(
+                            f"RAGFlow response is not a dict: {type(result)}, "
+                            f"doc_id={doc_id}"
+                        )
+                        return {"received": True, "ingestId": "", "status": "QUEUED"}
+                    # 명세에 맞는 필드가 있는지 확인
+                    if "ingestId" not in result:
+                        logger.warning(
+                            f"RAGFlow response missing ingestId: {result}, "
+                            f"doc_id={doc_id}"
+                        )
+                        # fallback: 임시 ingestId 생성
+                        import uuid
+                        result["ingestId"] = str(uuid.uuid4())
+                    if "status" not in result:
+                        result["status"] = "QUEUED"
+                    if "received" not in result:
+                        result["received"] = True
+                    return result
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to parse RAGFlow response: {e}, doc_id={doc_id}"
+                    )
+                    # fallback: 명세에 맞는 기본 응답 반환
+                    import uuid
+                    return {
+                        "received": True,
+                        "ingestId": str(uuid.uuid4()),
+                        "status": "QUEUED"
+                    }
 
             elif response.status_code == 401:
                 raise RAGFlowIngestError(

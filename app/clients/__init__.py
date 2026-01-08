@@ -29,4 +29,6 @@ __all__ = [
     # from app.clients.llm_client import LLMClient
     # from app.clients.milvus_client import MilvusSearchClient, get_milvus_client, ...
     # from app.clients.personalization_client import PersonalizationClient
+    # from app.clients.heygen_client import HeyGenClient
+    # from app.clients.backend_client import BackendClient, get_backend_client
 ]

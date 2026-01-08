@@ -250,10 +250,30 @@ app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
 # - GET /internal/ai/source-sets/{sourceSetId}/status: 처리 상태 조회
 app.include_router(source_sets.router, tags=["SourceSet Orchestration"])
 
-# RAG Documents Ingest API (POLICY 문서 Ingest)
+# Milvus 기반 스크립트 생성 API (Backend → AI)
+# - POST /internal/ai/scripts/generate-from-milvus: 도메인 기반 스크립트 생성
+from app.api.v1 import scripts_milvus
+
+app.include_router(scripts_milvus.router, tags=["Script Generation (Milvus)"])
+
+# RAG Documents Ingest API (RAG 문서 Ingest)
 # - POST /internal/ai/rag-documents/ingest: Backend → AI ingest 요청
 # - POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest: RAGFlow → AI 콜백
-app.include_router(rag_documents.router, tags=["RAG Documents Ingest"])
+app.include_router(rag_documents.router, tags=["RAG Documents Ingest (RAGFlow Callback)"])
+app.include_router(rag_documents.internal_router, tags=["RAG Documents Ingest (Internal)"])
+
+# Video Creation API (통합 영상 생성)
+# - POST /api/v1/videos/create-from-source-set: 소스셋으로부터 영상 생성
+from app.api.v1 import video_creation
+
+app.include_router(video_creation.router, tags=["Video Creation"])
+
+# Video Job API (HeyGen 영상 생성)
+# - POST /internal/ai/video/job: 영상 생성 Job 시작 (Backend → AI)
+# - GET /internal/ai/video/job/{jobId}: Job 상태 조회
+from app.api.v1 import video_job
+
+app.include_router(video_job.router, tags=["Video Job (HeyGen)"])
 
 # Feedback Internal API (A6)
 # - POST /internal/ai/feedback: Backend → AI 피드백 수신

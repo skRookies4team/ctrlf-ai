@@ -73,36 +73,15 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
-# Internal State
+# Internal State (파일 기반 저장소로 이동)
 # =============================================================================
 
-
-class ProcessingStatus(str, Enum):
-    """내부 처리 상태."""
-    PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-
-
-@dataclass
-class ProcessingJob:
-    """소스셋 처리 작업 상태."""
-    source_set_id: str
-    video_id: str
-    education_id: Optional[str]
-    request_id: Optional[str]
-    trace_id: Optional[str]
-    script_policy_id: Optional[str]
-    llm_model_hint: Optional[str]
-    status: ProcessingStatus = ProcessingStatus.PENDING
-    documents: List[SourceSetDocument] = field(default_factory=list)
-    document_results: List[DocumentResult] = field(default_factory=list)
-    generated_script: Optional[GeneratedScript] = None
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+# ProcessingJob과 ProcessingStatus는 source_set_job_store.py로 이동
+from app.services.source_set_job_store import (
+    ProcessingJob,
+    ProcessingStatus,
+    get_source_set_job_store,
+)
 
 
 @dataclass
@@ -129,7 +108,7 @@ class SourceSetOrchestrator:
 
     Attributes:
         _backend_client: 백엔드 API 클라이언트
-        _processing_jobs: 진행 중인 작업 상태 (in-memory)
+        _job_store: Job 상태 저장소 (파일 기반)
         _running_tasks: 비동기 태스크 관리
         _ragflow_client: RAGFlow API 클라이언트 (Phase 51 복구)
     """
@@ -139,6 +118,7 @@ class SourceSetOrchestrator:
         backend_client: Optional[BackendClient] = None,
         milvus_client: Optional[MilvusSearchClient] = None,
         ragflow_client: Optional[RagflowClient] = None,
+        job_store=None,  # SourceSetJobStore (None이면 싱글톤 사용)
     ):
         """초기화.
 
@@ -146,10 +126,15 @@ class SourceSetOrchestrator:
             backend_client: 백엔드 클라이언트 (None이면 싱글톤 사용)
             milvus_client: Milvus 클라이언트 (None이면 싱글톤 사용, Option 3)
             ragflow_client: RAGFlow 클라이언트 (None이면 싱글톤 사용, Phase 51)
+            job_store: Job 상태 저장소 (None이면 싱글톤 사용)
         """
         self._backend_client = backend_client or get_backend_client()
-        self._processing_jobs: Dict[str, ProcessingJob] = {}
+        self._job_store = job_store or get_source_set_job_store()
         self._running_tasks: Dict[str, asyncio.Task] = {}
+        
+        # 콜백 대기 메커니즘 (ingest_id -> Event, Result 매핑)
+        self._callback_events: Dict[str, asyncio.Event] = {}
+        self._callback_results: Dict[str, Dict[str, Any]] = {}
 
         # Option 3: Milvus 클라이언트 (SCRIPT_RETRIEVER_BACKEND=milvus 시 사용)
         self._settings = get_settings()
@@ -204,11 +189,11 @@ class SourceSetOrchestrator:
             - 비동기: 즉시 202 반환 후 백그라운드에서 처리
         """
         # 1. 멱등성 체크: 이미 처리 중인 경우
-        if source_set_id in self._processing_jobs:
-            job = self._processing_jobs[source_set_id]
+        existing_job = self._job_store.get(source_set_id)
+        if existing_job:
             logger.info(
                 f"SourceSet already processing: source_set_id={source_set_id}, "
-                f"status={job.status}"
+                f"status={existing_job.status}"
             )
             return SourceSetStartResponse(
                 received=True,
@@ -225,9 +210,9 @@ class SourceSetOrchestrator:
             trace_id=request.trace_id,
             script_policy_id=request.script_policy_id,
             llm_model_hint=request.llm_model_hint,
-            status=ProcessingStatus.PROCESSING,
+            status=ProcessingStatus.PENDING,  # 초기 상태는 PENDING, 문서 조회 후 PROCESSING으로 변경
         )
-        self._processing_jobs[source_set_id] = job
+        self._job_store.save(job)  # 초기 상태 저장
 
         logger.info(
             f"Starting source set processing: source_set_id={source_set_id}, "
@@ -254,7 +239,7 @@ class SourceSetOrchestrator:
         Returns:
             ProcessingJob 또는 None
         """
-        return self._processing_jobs.get(source_set_id)
+        return self._job_store.get(source_set_id)
 
     # =========================================================================
     # Background Processing
@@ -268,7 +253,7 @@ class SourceSetOrchestrator:
         3. 스크립트 생성
         4. 완료 콜백 전송
         """
-        job = self._processing_jobs.get(source_set_id)
+        job = self._job_store.get(source_set_id)
         if not job:
             logger.error(f"Job not found: source_set_id={source_set_id}")
             return
@@ -280,6 +265,7 @@ class SourceSetOrchestrator:
                 source_set_id
             )
             job.documents = documents_response.documents
+            self._job_store.save(job)  # 상태 저장
 
             if not job.documents:
                 logger.warning(f"No documents in source set: {source_set_id}")
@@ -332,9 +318,15 @@ class SourceSetOrchestrator:
                     has_failure = True
 
             job.document_results = document_results
+            self._job_store.save(job)  # 상태 저장
 
             # 3. 하나라도 실패했으면 전체 실패 처리
             if has_failure:
+                job.status = ProcessingStatus.FAILED
+                job.error_code = "DOCUMENT_PROCESSING_FAILED"
+                job.error_message = "하나 이상의 문서 처리에 실패했습니다."
+                job.updated_at = datetime.utcnow()
+                self._job_store.save(job)  # 상태 저장
                 await self._send_failure_callback(
                     job,
                     error_code="DOCUMENT_PROCESSING_FAILED",
@@ -345,6 +337,11 @@ class SourceSetOrchestrator:
             # 4. 청크가 없으면 실패 처리
             total_chunks = sum(len(chunks) for chunks in all_document_chunks.values())
             if total_chunks == 0:
+                job.status = ProcessingStatus.FAILED
+                job.error_code = "NO_CHUNKS_GENERATED"
+                job.error_message = "문서 처리는 성공했으나 청크가 생성되지 않았습니다."
+                job.updated_at = datetime.utcnow()
+                self._job_store.save(job)  # 상태 저장
                 await self._send_failure_callback(
                     job,
                     error_code="NO_CHUNKS_GENERATED",
@@ -356,6 +353,7 @@ class SourceSetOrchestrator:
             logger.info(f"Generating script: source_set_id={source_set_id}, total_chunks={total_chunks}")
             script = await self._generate_script(job, all_document_chunks)
             job.generated_script = script
+            self._job_store.save(job)  # 상태 저장
 
             # 5. 성공 콜백 전송
             await self._send_success_callback(job)
@@ -363,6 +361,7 @@ class SourceSetOrchestrator:
             # 6. 상태 업데이트
             job.status = ProcessingStatus.COMPLETED
             job.updated_at = datetime.utcnow()
+            self._job_store.save(job)  # 상태 저장
 
             logger.info(
                 f"Source set processing completed: source_set_id={source_set_id}"
@@ -373,6 +372,8 @@ class SourceSetOrchestrator:
             job.status = ProcessingStatus.FAILED
             job.error_code = e.error_code
             job.error_message = e.message
+            job.updated_at = datetime.utcnow()
+            self._job_store.save(job)  # 상태 저장
             await self._send_failure_callback(
                 job,
                 error_code=e.error_code,
@@ -384,6 +385,8 @@ class SourceSetOrchestrator:
             job.status = ProcessingStatus.FAILED
             job.error_code = "PROCESSING_ERROR"
             job.error_message = str(e)[:200]
+            job.updated_at = datetime.utcnow()
+            self._job_store.save(job)  # 상태 저장
             await self._send_failure_callback(
                 job,
                 error_code="PROCESSING_ERROR",
@@ -520,75 +523,79 @@ class SourceSetOrchestrator:
 
                 logger.info(f"Document ingest accepted: doc_id={doc.document_id}, ingest_id={ingest_id}")
 
-                # 2. 바로 폴링 시작 (대기 없음)
-                start_time = asyncio.get_event_loop().time()
-
+                # 2. Ingest 완료 대기 - 콜백만 사용 (polling 불가: RAGFLOW_API_KEY는 UI 토큰, 문서 리스트 API 접근 권한 없음)
                 logger.info(
-                    f"Starting polling for document: doc_id={doc.document_id}, "
-                    f"poll_interval={poll_interval}s, timeout={max_wait_time}s"
+                    f"Waiting for RAGFlow callback: doc_id={doc.document_id}, "
+                    f"ingest_id={ingest_id}, timeout={max_wait_time}s. "
+                    f"Note: Polling is not available because RAGFLOW_API_KEY is UI token without document list API access."
                 )
-
-                ragflow_internal_id = None  # RAGFlow 내부 UUID (polling에서 발견 시 설정)
-                final_status = None
-                chunk_count = 0
-                poll_count = 0
-                is_fail = False
-
-                while (asyncio.get_event_loop().time() - start_time) < max_wait_time:
-                    await asyncio.sleep(poll_interval)
-                    poll_count += 1
-                    elapsed = asyncio.get_event_loop().time() - start_time
-
-                    logger.debug(
-                        f"Polling attempt {poll_count}: doc_id={doc.document_id}, "
-                        f"elapsed={elapsed:.1f}s"
-                    )
-
-                    # 문서 리스트에서 docId(파일명)로 문서 찾기
-                    found_doc = await self._ragflow_client.find_document_by_doc_id(
-                        dataset_id=dataset_id,
-                        doc_id=ragflow_doc_id,  # 파일명.확장자 형태
-                    )
-
-                    if found_doc:
-                        ragflow_internal_id = found_doc.get("id")  # RAGFlow 내부 UUID
-                        if ragflow_internal_id:
-                            # 문서 상태 확인
-                            try:
-                                doc_status = await self._ragflow_client.get_document_status(
-                                    dataset_id=dataset_id,
-                                    document_id=ragflow_internal_id,
-                                )
-                                final_status = doc_status.get("run")
-                                chunk_count = doc_status.get("chunk_count", 0)
-
-                                logger.info(
-                                    f"Document status check: doc_id={ragflow_doc_id}, "
-                                    f"ragflow_internal_id={ragflow_internal_id}, status={final_status}, "
-                                    f"chunks={chunk_count}"
-                                )
-
-                                if final_status == "DONE":
-                                    logger.info(f"Document ingest completed: doc_id={ragflow_doc_id}, ragflow_internal_id={ragflow_internal_id}")
-                                    break
-                                elif final_status == "FAIL":
-                                    logger.error(f"Document ingest failed: doc_id={ragflow_doc_id}")
-                                    last_fail_reason = "RAGFlow ingest failed"
-                                    is_fail = True
-                                    break  # polling 루프 탈출 후 재시도
-                            except Exception as e:
-                                logger.warning(f"Error checking document status: doc_id={ragflow_doc_id}, error={e}")
-                                continue
+                
+                # 콜백 대기 (전체 타임아웃 사용)
+                callback_result = await self._wait_for_callback(
+                    ingest_id=ingest_id,
+                    timeout=max_wait_time,
+                    doc_id=doc.document_id,
+                )
+                
+                if callback_result is None:
+                    # 콜백 타임아웃
+                    last_fail_reason = f"RAGFlow callback timeout after {max_wait_time}s. RAGFlow server did not send callback."
+                    logger.error(f"{last_fail_reason}: doc_id={doc.document_id}, ingest_id={ingest_id}")
+                    continue  # 재시도
+                
+                callback_status = callback_result.get("status")
+                if callback_status == "FAILED":
+                    last_fail_reason = callback_result.get("failReason") or "RAGFlow ingest failed"
+                    logger.error(f"RAGFlow ingest failed: doc_id={doc.document_id}, reason={last_fail_reason}")
+                    continue  # 재시도
+                
+                if callback_status != "COMPLETED":
+                    last_fail_reason = f"Unexpected callback status: {callback_status}"
+                    logger.error(f"{last_fail_reason}: doc_id={doc.document_id}")
+                    continue  # 재시도
+                
+                # 성공: 콜백에서 받은 정보 사용
+                callback_doc_id = callback_result.get("documentId")  # 콜백에서 받은 docId (파일명)
+                final_status = "DONE"
+                chunk_count = callback_result.get("chunkCount", 0)
+                
+                logger.info(
+                    f"RAGFlow callback received: doc_id={doc.document_id}, "
+                    f"status={callback_status}, callback_doc_id={callback_doc_id}, "
+                    f"chunks={chunk_count}"
+                )
+                
+                # RAGFlow 내부 UUID 찾기 (문서 리스트에서)
+                ragflow_internal_id = None
+                if callback_doc_id:
+                    try:
+                        found_doc = await self._ragflow_client.find_document_by_doc_id(
+                            dataset_id=dataset_id,
+                            doc_id=callback_doc_id,
+                        )
+                        if found_doc:
+                            ragflow_internal_id = found_doc.get("id")
+                            logger.info(
+                                f"Found RAGFlow internal ID: doc_id={callback_doc_id}, "
+                                f"ragflow_internal_id={ragflow_internal_id}"
+                            )
                         else:
-                            logger.debug(f"Document found but no ID: doc_id={ragflow_doc_id}")
-                    else:
-                        logger.debug(f"Document not found yet: doc_id={doc.document_id}, attempt={poll_count}")
-
-                # FAIL이면 재시도, DONE이면 retry 루프 탈출
-                if is_fail:
-                    continue  # 다음 retry 시도
-                if final_status == "DONE":
-                    break  # 성공, retry 루프 탈출
+                            logger.warning(
+                                f"Document not found in RAGFlow list: doc_id={callback_doc_id}, "
+                                f"will try to use callback_doc_id directly"
+                            )
+                            # 문서를 찾지 못한 경우, callback_doc_id를 직접 사용 시도
+                            ragflow_internal_id = callback_doc_id
+                    except Exception as e:
+                        logger.warning(
+                            f"Error finding document in RAGFlow list: doc_id={callback_doc_id}, "
+                            f"error={e}, will try to use callback_doc_id directly"
+                        )
+                        # 에러 발생 시 callback_doc_id를 직접 사용 시도
+                        ragflow_internal_id = callback_doc_id
+                
+                # 성공, retry 루프 탈출
+                break
 
             # 모든 재시도 후에도 실패한 경우
             if final_status != "DONE":
@@ -601,6 +608,14 @@ class SourceSetOrchestrator:
                 )
 
             # 3. 청크 조회 (RAGFlow 내부 UUID 사용)
+            if not ragflow_internal_id:
+                logger.error(f"RAGFlow internal ID not found: doc_id={doc.document_id}")
+                return DocumentProcessingResult(
+                    document_id=doc.document_id,
+                    success=False,
+                    fail_reason="RAGFlow internal ID not found after callback",
+                )
+            
             logger.info(f"Fetching chunks: doc_id={ragflow_doc_id}, ragflow_internal_id={ragflow_internal_id}, count={chunk_count}")
             chunks = await self._fetch_all_chunks(
                 dataset_id=dataset_id,
@@ -1414,6 +1429,145 @@ JSON 스크립트:"""
         )
 
     # =========================================================================
+    # RAGFlow Callback Handling
+    # =========================================================================
+    
+    async def _wait_for_callback(
+        self,
+        ingest_id: str,
+        timeout: float,
+        doc_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """RAGFlow 콜백을 기다립니다.
+        
+        Args:
+            ingest_id: RAGFlow ingest ID
+            timeout: 타임아웃 (초)
+            doc_id: 문서 ID (로깅용)
+            
+        Returns:
+            Optional[Dict]: 콜백 결과 또는 None (타임아웃)
+        """
+        # Event 생성 및 등록
+        event = asyncio.Event()
+        self._callback_events[ingest_id] = event
+        
+        try:
+            logger.info(
+                f"Waiting for callback: ingest_id={ingest_id}, "
+                f"doc_id={doc_id}, timeout={timeout}s. "
+                f"Note: RAGFlow server must be configured with callback URL: "
+                f"POST /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest"
+            )
+            
+            # 주기적으로 대기 상태 로깅 (5분마다)
+            check_interval = 300.0  # 5분
+            start_time = asyncio.get_event_loop().time()
+            last_log_time = start_time
+            
+            # 타임아웃과 함께 대기
+            try:
+                while True:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    remaining = timeout - elapsed
+                    
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError()
+                    
+                    # 5분마다 상태 로깅
+                    if elapsed - last_log_time >= check_interval:
+                        logger.info(
+                            f"Still waiting for callback: ingest_id={ingest_id}, "
+                            f"doc_id={doc_id}, elapsed={elapsed:.1f}s, "
+                            f"remaining={remaining:.1f}s. "
+                            f"Please verify RAGFlow server callback configuration."
+                        )
+                        last_log_time = elapsed
+                    
+                    # 짧은 간격으로 체크 (타임아웃 정확도 향상)
+                    wait_time = min(remaining, check_interval)
+                    try:
+                        await asyncio.wait_for(event.wait(), timeout=wait_time)
+                        break  # 이벤트가 설정됨
+                    except asyncio.TimeoutError:
+                        continue  # 계속 대기
+                        
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Callback timeout: ingest_id={ingest_id}, "
+                    f"doc_id={doc_id}, timeout={timeout}s. "
+                    f"RAGFlow server did not send callback. "
+                    f"Please verify: "
+                    f"1. RAGFlow server callback URL is configured correctly, "
+                    f"2. RAGFlow server can reach AI server at callback endpoint, "
+                    f"3. RAGFlow server has correct AI_CALLBACK_TOKEN."
+                )
+                return None
+            
+            # 콜백 결과 반환
+            result = self._callback_results.get(ingest_id)
+            if result:
+                logger.info(
+                    f"Callback received: ingest_id={ingest_id}, "
+                    f"doc_id={doc_id}, status={result.get('status')}"
+                )
+                return result
+            else:
+                logger.warning(
+                    f"Callback event set but no result: ingest_id={ingest_id}, "
+                    f"doc_id={doc_id}"
+                )
+                return None
+                
+        finally:
+            # 정리
+            if ingest_id in self._callback_events:
+                del self._callback_events[ingest_id]
+            if ingest_id in self._callback_results:
+                del self._callback_results[ingest_id]
+    
+    def notify_callback(
+        self,
+        ingest_id: str,
+        status: str,
+        document_id: Optional[str] = None,
+        chunk_count: Optional[int] = None,
+        fail_reason: Optional[str] = None,
+    ) -> None:
+        """RAGFlow 콜백을 처리합니다.
+        
+        Args:
+            ingest_id: RAGFlow ingest ID
+            status: 상태 (COMPLETED, FAILED)
+            document_id: RAGFlow 내부 문서 ID (선택)
+            chunk_count: 청크 수 (선택)
+            fail_reason: 실패 사유 (선택)
+        """
+        logger.info(
+            f"RAGFlow callback notification: ingest_id={ingest_id}, "
+            f"status={status}, document_id={document_id}, "
+            f"chunk_count={chunk_count}"
+        )
+        
+        # 결과 저장
+        result = {
+            "status": status,
+            "documentId": document_id,
+            "chunkCount": chunk_count,
+            "failReason": fail_reason,
+        }
+        self._callback_results[ingest_id] = result
+        
+        # Event 설정 (대기 중인 태스크 깨우기)
+        if ingest_id in self._callback_events:
+            self._callback_events[ingest_id].set()
+            logger.debug(f"Callback event set: ingest_id={ingest_id}")
+        else:
+            logger.warning(
+                f"Callback received but no waiting task: ingest_id={ingest_id}"
+            )
+
+    # =========================================================================
     # Callbacks
     # =========================================================================
 
@@ -1529,6 +1683,7 @@ JSON 스크립트:"""
         job.error_code = error_code
         job.error_message = error_message
         job.updated_at = datetime.utcnow()
+        self._job_store.save(job)  # 상태 저장
 
         request = SourceSetCompleteRequest(
             video_id=job.video_id,

@@ -28,6 +28,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.video_render import RenderJobStartResponse
 from app.services.video_renderer_mvp import get_mvp_video_renderer
+from app.services.video_renderer_heygen import get_heygen_video_renderer
 
 logger = get_logger(__name__)
 
@@ -159,10 +160,16 @@ class InternalRenderJobResponse(BaseModel):
 def get_render_job_runner():
     """RenderJobRunner 의존성."""
     from app.services.render_job_runner import get_render_job_runner as _get_runner
+    import os
 
     runner = _get_runner()
     if runner._renderer is None:
-        runner.set_renderer(get_mvp_video_renderer())
+        # 환경변수로 렌더러 선택 (HEYGEN_ENABLED=true면 HeyGen 사용)
+        use_heygen = os.getenv("HEYGEN_ENABLED", "true").lower() == "true"
+        if use_heygen:
+            runner.set_renderer(get_heygen_video_renderer())
+        else:
+            runner.set_renderer(get_mvp_video_renderer())
     return runner
 
 

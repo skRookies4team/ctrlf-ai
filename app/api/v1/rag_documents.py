@@ -39,34 +39,40 @@ from app.clients.ragflow_ingest_client import (
 )
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.source_set_orchestrator import get_source_set_orchestrator
 
 logger = get_logger(__name__)
 
+# 라우터는 두 개로 분리:
+# 1. Backend → AI: /internal/ai/rag-documents/ingest
+# 2. RAGFlow → AI 콜백: /v1/internal_ragflow/internal/ai/callbacks/ragflow/ingest
 router = APIRouter(prefix="/v1/internal_ragflow/internal/ai", tags=["RAG Documents Ingest"])
+internal_router = APIRouter(prefix="/internal/ai", tags=["RAG Documents Ingest (Internal)"])
 
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-# 허용 도메인 (백엔드에서 전달하는 도메인명 = RAGFlow dataset_id)
+# 허용 도메인 (명세서: Backend에서 전달하는 영어 도메인명)
+# 주석: "사내규정,직무교육,장애인인식개선교육,직장내괴롭힘교육,직장내성희롱교육,정보보안교육"
 ALLOWED_DOMAINS = {
-    "사내규정",
-    "직무교육",
-    "장애인인식개선교육",
-    "직장내괴롭힘교육",
-    "직장내성희롱교육",
-    "정보보안교육",
+    "POLICY",  # 사내규정
+    "EDUCATION",  # 직무교육
+    "DISABILITY_AWARENESS",  # 장애인인식개선교육
+    "WORKPLACE_HARASSMENT",  # 직장내괴롭힘교육
+    "SEXUAL_HARASSMENT",  # 직장내성희롱교육
+    "INFO_SECURITY",  # 정보보안교육
 }
 
-# 도메인 → RAGFlow dataset_id 매핑 (동일한 값 사용)
+# 도메인(영어) → RAGFlow dataset_id(한글) 매핑
 DOMAIN_DATASET_MAPPING = {
-    "사내규정": "사내규정",
-    "직무교육": "직무교육",
-    "장애인인식개선교육": "장애인인식개선교육",
-    "직장내괴롭힘교육": "직장내괴롭힘교육",
-    "직장내성희롱교육": "직장내성희롱교육",
-    "정보보안교육": "정보보안교육",
+    "POLICY": "사내규정",
+    "EDUCATION": "직무교육",
+    "DISABILITY_AWARENESS": "장애인인식개선교육",
+    "WORKPLACE_HARASSMENT": "직장내괴롭힘교육",
+    "SEXUAL_HARASSMENT": "직장내성희롱교육",
+    "INFO_SECURITY": "정보보안교육",
 }
 
 
@@ -133,7 +139,7 @@ class IngestRequest(BaseModel):
     documentId: str = Field(..., description="문서 ID (예: 사내규정.pdf)")
     version: int = Field(..., description="문서 버전")
     sourceUrl: str = Field(..., description="문서 파일 URL (S3 등)")
-    domain: str = Field(..., description="도메인 (POLICY만 허용)")
+    domain: str = Field(..., description="도메인 (POLICY, EDUCATION, DISABILITY_AWARENESS, WORKPLACE_HARASSMENT, SEXUAL_HARASSMENT, INFO_SECURITY)")
     requestId: str = Field(..., description="요청 ID (UUID)")
     traceId: str = Field(..., description="추적 ID")
     title: Optional[str] = Field(
@@ -407,17 +413,20 @@ def _get_cache_stats() -> Dict[str, Any]:
 # =============================================================================
 
 
-@router.post(
+@internal_router.post(
     "/rag-documents/ingest",
-    summary="사내규정 문서 Ingest 요청 (Backend → AI)",
+    summary="RAG 문서 Ingest 요청 (Backend → AI)",
     description="""
-Backend에서 호출하여 사내규정(POLICY) 문서를 RAGFlow에 ingest합니다.
+Backend에서 호출하여 문서를 RAGFlow에 ingest합니다.
 
 **URL**: POST /internal/ai/rag-documents/ingest
 
 **호출 주체**: Spring 백엔드
 
-**인증**: X-Internal-Token 헤더 필수
+**Headers**:
+- **Content-Type**: application/json (필수)
+- **X-Internal-Token**: <BACKEND_INTERNAL_TOKEN> (필수)
+- **X-Request-Id**: <uuid> (선택, trace 통일용)
 
 **처리 흐름**:
 1. 즉시 202 Accepted 반환 (비동기 처리)
@@ -426,25 +435,37 @@ Backend에서 호출하여 사내규정(POLICY) 문서를 RAGFlow에 ingest합�
 4. AI → Backend 상태 업데이트
 
 **멱등성**:
-- 이미 처리 중: 202 + PROCESSING
-- 이미 완료: 200 + COMPLETED
+- 같은 (documentId, version)로 재호출 시 중복 인덱싱 금지
+- 이미 처리 중: 202 + status=PROCESSING
+- 이미 완료: 200 + status=COMPLETED
 
-**제약사항**:
-- domain은 POLICY만 허용 (다른 값: 400 INVALID_DOMAIN)
+**에러 규격**:
+- 400 INVALID_REQUEST: 필드 누락/타입 오류
+- 401 UNAUTHORIZED: 내부 토큰 불일치
+- 409 VERSION_CONFLICT: 정책적으로 금지된 버전 (예: 현재 DB 버전보다 낮은 버전)
+- 502 RAGFLOW_UNAVAILABLE: RAGFlow 호출 실패/타임아웃
+- 500 INTERNAL_ERROR: 내부 오류
 """,
     responses={
         200: {"description": "이미 완료됨", "model": IngestResponse},
         202: {"description": "접수됨 (비동기 처리 시작)", "model": IngestResponse},
         400: {"description": "잘못된 요청 (INVALID_REQUEST, INVALID_DOMAIN)"},
-        401: {"description": "인증 실패"},
-        502: {"description": "RAGFlow 서비스 불가"},
+        401: {"description": "인증 실패 (UNAUTHORIZED)"},
+        409: {"description": "버전 충돌 (VERSION_CONFLICT)"},
+        502: {"description": "RAGFlow 서비스 불가 (RAGFLOW_UNAVAILABLE)"},
+        500: {"description": "내부 오류 (INTERNAL_ERROR)"},
     },
 )
 async def ingest_rag_document(
     request: IngestRequest,
     x_internal_token: Optional[str] = Header(None, alias="X-Internal-Token"),
+    x_request_id: Optional[str] = Header(None, alias="X-Request-Id"),
 ):
-    """사내규정 문서 ingest 요청을 처리합니다."""
+    """RAG 문서 ingest 요청을 처리합니다."""
+    # X-Request-Id 헤더 로깅 (선택, trace 통일용)
+    if x_request_id:
+        logger.debug(f"X-Request-Id header: {x_request_id}, trace_id={request.traceId}")
+    
     # 인증 검증
     settings = get_settings()
     expected_token = settings.BACKEND_INTERNAL_TOKEN
@@ -470,18 +491,18 @@ async def ingest_rag_document(
     logger.info(
         f"Received ingest request: document_id={request.documentId}, "
         f"version={request.version}, domain={request.domain}, "
-        f"trace_id={request.traceId}"
+        f"trace_id={request.traceId}, request_id={request.requestId}"
     )
 
     # 도메인 검증
     if request.domain not in ALLOWED_DOMAINS:
         logger.warning(
-            f"Invalid domain: {request.domain}, trace_id={request.traceId}"
+            f"Invalid domain: {request.domain}, allowed={list(ALLOWED_DOMAINS)}, trace_id={request.traceId}"
         )
         return _error_response(
             status_code=400,
             error="INVALID_DOMAIN",
-            message=f"도메인 '{request.domain}'은(는) 허용되지 않습니다. 허용: {list(ALLOWED_DOMAINS)}",
+            message=f"도메인 '{request.domain}'은(는) 허용되지 않습니다. 허용: {', '.join(sorted(ALLOWED_DOMAINS))}",
             trace_id=request.traceId,
         )
 
@@ -578,20 +599,23 @@ async def ingest_rag_document(
                 f"RAGFlow unavailable: document_id={request.documentId}, "
                 f"error={e}, trace_id={request.traceId}"
             )
-            # 캐시 정리 (재시도 허용)
+            # 502 RAGFLOW_UNAVAILABLE: 캐시 정리 (재시도 허용)
             _clear_request_cache(request.documentId, request.version)
+            # TODO: Backend에 상태 업데이트 (FAILED) - 콜백 없이 실패 처리
         except RAGFlowIngestError as e:
             logger.error(
                 f"RAGFlow ingest failed: document_id={request.documentId}, "
                 f"error={e}, trace_id={request.traceId}"
             )
             _clear_request_cache(request.documentId, request.version)
+            # TODO: Backend에 상태 업데이트 (FAILED) - 콜백 없이 실패 처리
         except Exception as e:
             logger.error(
                 f"RAGFlow ingest unexpected error: document_id={request.documentId}, "
                 f"error={e}, trace_id={request.traceId}"
             )
             _clear_request_cache(request.documentId, request.version)
+            # TODO: Backend에 상태 업데이트 (FAILED) - 콜백 없이 실패 처리
 
     # 백그라운드 태스크로 RAGFlow 호출
     asyncio.create_task(call_ragflow())
@@ -668,6 +692,32 @@ async def ingest_callback(
         f"ingest_id={request.ingestId}, trace_id={request.meta.traceId}"
     )
 
+    # SourceSetOrchestrator에 콜백 알림 (polling 대신 콜백 대기 방식)
+    try:
+        orchestrator = get_source_set_orchestrator()
+        logger.debug(
+            f"Notifying orchestrator callback: ingest_id={request.ingestId}, "
+            f"status={request.status}, trace_id={request.meta.traceId}"
+        )
+        orchestrator.notify_callback(
+            ingest_id=request.ingestId,
+            status=request.status,
+            document_id=request.docId,  # RAGFlow 내부 문서 ID (docId 사용)
+            chunk_count=request.stats.chunks if request.stats else None,
+            fail_reason=request.failReason,
+        )
+        logger.info(
+            f"Orchestrator callback notified successfully: ingest_id={request.ingestId}, "
+            f"status={request.status}, trace_id={request.meta.traceId}"
+        )
+    except Exception as e:
+        # 콜백 알림 실패해도 계속 진행 (로깅만)
+        logger.error(
+            f"Failed to notify orchestrator callback: ingest_id={request.ingestId}, "
+            f"error={e}, trace_id={request.meta.traceId}",
+            exc_info=True
+        )
+
     # 캐시에 완료 상태 저장 (멱등성: 다음 동일 요청 시 200 + COMPLETED 반환)
     _mark_request_completed(request.docId, request.version, request.status)
 
@@ -675,23 +725,26 @@ async def ingest_callback(
     content: Optional[str] = None
     if request.status == "COMPLETED":
         try:
-            milvus_client = get_milvus_client()
-
-            # domain에 맞는 dataset_id 결정
-            # meta.domain이 있으면 그대로 사용 (RAGFlow dataset_id와 동일)
-            # 없으면 기본값 "사내규정" 사용 (하위 호환성)
-            dataset_id = request.meta.domain if request.meta.domain else "사내규정"
-
-            logger.debug(
-                f"Retrieving document content: doc_id={request.docId}, "
-                f"domain={request.meta.domain}, dataset_id={dataset_id}, "
-                f"trace_id={request.meta.traceId}"
-            )
-
-            content = await milvus_client.get_full_document_text(
-                doc_id=request.docId,
-                dataset_id=dataset_id,
-            )
+            # domain → dataset_id 매핑
+            dataset_id = DOMAIN_DATASET_MAPPING.get(request.meta.domain)
+            if not dataset_id:
+                logger.warning(
+                    f"Unknown domain in callback: domain={request.meta.domain}, "
+                    f"trace_id={request.meta.traceId}, skipping Milvus content retrieval"
+                )
+            else:
+                milvus_client = get_milvus_client()
+                
+                logger.debug(
+                    f"Retrieving document content: doc_id={request.docId}, "
+                    f"domain={request.meta.domain}, dataset_id={dataset_id}, "
+                    f"trace_id={request.meta.traceId}"
+                )
+                
+                content = await milvus_client.get_full_document_text(
+                    doc_id=request.docId,
+                    dataset_id=dataset_id,
+                )
             if content:
                 logger.info(
                     f"Retrieved document content from Milvus: doc_id={request.docId}, "

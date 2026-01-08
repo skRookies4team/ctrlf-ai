@@ -5,7 +5,6 @@ import asyncio
 import argparse
 from pathlib import Path
 
-import boto3
 import httpx
 from dotenv import load_dotenv
 
@@ -21,12 +20,14 @@ from app.utils.heygen_payload import (
     build_heygen_generate_payload,
 )
 from app.clients.heygen_client import HeyGenClient
+from app.utils.s3_uploader import upload_to_s3
+from app.clients.backend_client import get_backend_client
 
 # ============================================================
 # 설정
 # ============================================================
 INPUT_SCRIPT_PATH = Path(
-    "test_output_script/generated_script_직장내괴롭힘교육.cleaned.json"
+    "test_output_script/video_script_직장내괴롭힘교육.cleaned.json"
 )
 OUTPUT_DIR = Path("test_output_script/chapters")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -43,6 +44,7 @@ def parse_args():
     )
     parser.add_argument("--chapter", type=int, help="실행할 챕터 번호 (ex: 1)")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--job-id", type=str, help="백엔드 Job ID (콜백용, optional)")
     return parser.parse_args()
 
 # ============================================================
@@ -54,25 +56,6 @@ async def download_file(url: str, out_path: Path):
         r.raise_for_status()
         out_path.write_bytes(r.content)
 
-
-def upload_to_s3(file_path: Path, s3_key: str) -> str:
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        region_name=os.getenv("AWS_REGION", "ap-northeast-2"),
-    )
-
-    bucket = os.getenv("S3_BUCKET_NAME")
-    s3.upload_file(
-        Filename=str(file_path),
-        Bucket=bucket,
-        Key=s3_key,
-        ExtraArgs={"ContentType": "video/mp4"},
-    )
-
-    return f"s3://{bucket}/{s3_key}"
-
 # ============================================================
 # 단일 챕터 렌더링
 # ============================================================
@@ -80,11 +63,24 @@ async def render_single_chapter_to_s3(
     client: HeyGenClient,
     chapter: dict,
     idx: int,
+    job_id: str = None,
 ):
     chapter_no = f"{idx:02d}"
     chapter_title = chapter.get("title", f"Chapter {idx}")
 
     print(f"\n🎬 [CHAPTER {chapter_no}] {chapter_title}")
+
+    # 환경 변수 확인
+    avatar_id = os.getenv("HEYGEN_AVATAR_ID")
+    voice_id = os.getenv("HEYGEN_VOICE_ID")
+    
+    if not avatar_id:
+        raise ValueError("HEYGEN_AVATAR_ID environment variable is not set")
+    if not voice_id:
+        raise ValueError("HEYGEN_VOICE_ID environment variable is not set")
+    
+    print(f"🔧 Using avatar_id: {avatar_id}")
+    print(f"🔧 Using voice_id: {voice_id}")
 
     # 1️⃣ 기존에 성공하던 방식 그대로
     enhanced = enhance_video_script_for_video({"chapters": [chapter]})
@@ -96,8 +92,8 @@ async def render_single_chapter_to_s3(
 
     video_inputs = build_heygen_video_inputs(
         enhanced,
-        avatar_id=os.getenv("HEYGEN_AVATAR_ID"),
-        voice_id=os.getenv("HEYGEN_VOICE_ID"),
+        avatar_id=avatar_id,
+        voice_id=voice_id,
         bg_type=os.getenv("HEYGEN_BG_TYPE", "color"),
         bg_value=os.getenv("HEYGEN_BG_VALUE", "#FFFFFF"),
     )
@@ -136,11 +132,53 @@ async def render_single_chapter_to_s3(
             await download_file(video_url, mp4_path)
             print(f"🎞️ mp4 saved → {mp4_path}")
 
+            # S3에 업로드 (s3_uploader 사용)
             s3_key = (
                 f"education_videos/{INPUT_SCRIPT_PATH.stem}/chapter_{chapter_no}.mp4"
             )
-            s3_uri = upload_to_s3(mp4_path, s3_key)
-            print(f"☁️ S3 uploaded → {s3_uri}")
+            s3_url = upload_to_s3(mp4_path, s3_key)
+            print(f"☁️ S3 uploaded → {s3_url}")
+            
+            # s3:// 형식 URI로 변환 (백엔드 API용)
+            bucket = os.getenv("S3_BUCKET_NAME")
+            s3_uri = f"s3://{bucket}/{s3_key}" if bucket else s3_url
+
+            # 영상 길이 계산 (대략적으로)
+            # 챕터의 모든 씬 duration 합계로 계산
+            duration_sec = 0
+            for sc in enhanced["chapters"][0]["scenes"]:
+                duration_sec += int(sc.get("duration_sec", 30))
+            
+            # 또는 ffprobe 사용 (있는 경우)
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(mp4_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    duration_sec = int(float(result.stdout.strip()))
+            except:
+                pass  # ffprobe가 없으면 위에서 계산한 값 사용
+
+            # 백엔드 API 콜백 (job_id가 있는 경우)
+            if job_id:
+                try:
+                    backend_client = get_backend_client()
+                    callback_result = await backend_client.notify_job_complete(
+                        job_id=job_id,
+                        video_url=s3_uri,
+                        duration=duration_sec,
+                        status="COMPLETED",
+                    )
+                    if callback_result.saved:
+                        print(f"✅ Backend callback sent successfully")
+                    else:
+                        print(f"⚠️ Backend callback failed")
+                except Exception as e:
+                    print(f"⚠️ Backend callback error: {e}")
 
             result_path = OUTPUT_DIR / f"chapter_{chapter_no}.result.json"
             result_path.write_text(
@@ -150,6 +188,8 @@ async def render_single_chapter_to_s3(
                         "chapter_no": idx,
                         "video_id": video_id,
                         "s3_uri": s3_uri,
+                        "duration_sec": duration_sec,
+                        "job_id": job_id,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -171,7 +211,16 @@ async def render_single_chapter_to_s3(
 # ============================================================
 async def main():
     args = parse_args()
-    load_dotenv(ROOT_DIR / ".env")
+    env_path = ROOT_DIR / ".env"
+    print(f"📁 Loading .env from: {env_path}")
+    print(f"📁 .env file exists: {env_path.exists()}")
+    load_dotenv(env_path, override=True)
+    
+    # 디버그: 환경 변수 확인
+    voice_id = os.getenv("HEYGEN_VOICE_ID")
+    avatar_id = os.getenv("HEYGEN_AVATAR_ID")
+    print(f"🔍 HEYGEN_VOICE_ID from env: {voice_id}")
+    print(f"🔍 HEYGEN_AVATAR_ID from env: {avatar_id}")
 
     client = HeyGenClient(api_key=os.getenv("HEYGEN_API_KEY"))
 
@@ -186,6 +235,7 @@ async def main():
             client=client,
             chapter=chapter,
             idx=idx,
+            job_id=getattr(args, "job_id", None),
         )
 
 if __name__ == "__main__":

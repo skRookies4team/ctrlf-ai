@@ -54,13 +54,17 @@ def build_heygen_video_inputs(
                         "value": bg_value if bg_type == "color" else bg_value,
                     },
                     # 오버레이 필드는 문서 예시 기준으로 명확히 보이지 않아 metadata로만 보존 :contentReference[oaicite:8]{index=8}
+                    # metadata는 선택적이며, null 값은 제외
                     "metadata": {
-                        "chapter_id": chapter_id,
-                        "chapter_title": chapter_title,
-                        "scene_id": sc.get("scene_id"),
-                        "scene_type": sc.get("scene_type"),
-                        "on_screen_text": sc.get("on_screen_text"),
-                        "duration_sec": sc.get("duration_sec"),
+                        k: v
+                        for k, v in {
+                            "chapter_id": chapter_id,
+                            "chapter_title": chapter_title,
+                            "scene_id": sc.get("scene_id"),
+                            "scene_type": sc.get("scene_type"),
+                            "on_screen_text": sc.get("on_screen_text"),
+                        }.items()
+                        if v is not None
                     },
                 }
             )

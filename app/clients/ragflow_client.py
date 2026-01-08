@@ -42,15 +42,16 @@ logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 30.0  # RAGFlow 호출 타임아웃 (초)
 
-# 도메인 → RAGFlow dataset_id 매핑
-# 백엔드에서 전달하는 도메인명 = RAGFlow dataset_id (한글 이름 그대로 사용)
+# 도메인(영어) → RAGFlow dataset_id(한글) 매핑
+# 백엔드에서 전달하는 영어 도메인명을 한글 dataset_id로 변환
+# rag_documents.py의 DOMAIN_DATASET_MAPPING과 일치해야 함
 DOMAIN_TO_DATASET_ID: Dict[str, str] = {
-    "사내규정": "사내규정",
-    "직무교육": "직무교육",
-    "장애인인식개선교육": "장애인인식개선교육",
-    "직장내괴롭힘교육": "직장내괴롭힘교육",
-    "직장내성희롱교육": "직장내성희롱교육",
-    "정보보안교육": "정보보안교육",
+    "POLICY": "사내규정",
+    "EDUCATION": "직무교육",  # 기본값 (실제로는 meta.domain에 따라 다를 수 있음)
+    "DISABILITY_AWARENESS": "장애인인식개선교육",
+    "WORKPLACE_HARASSMENT": "직장내괴롭힘교육",
+    "SEXUAL_HARASSMENT": "직장내성희롱교육",
+    "INFO_SECURITY": "정보보안교육",
 }
 
 
@@ -177,10 +178,16 @@ class RagflowClient:
         settings = get_settings()
         self._base_url = (base_url or settings.ragflow_base_url or "").rstrip("/")
         self._api_key = api_key or settings.RAGFLOW_API_KEY
-        # RAGFlow 내부 API용 토큰: internal_token이 명시적으로 제공되면 사용,
-        # 그렇지 않으면 RAGFLOW_API_KEY 사용 (RAGFlow 서버는 AI_TO_RAGFLOW_TOKEN=${RAGFLOW_API_KEY}로 설정됨)
+        # RAGFlow 내부 API용 토큰: 우선순위
+        # 1. internal_token (명시적으로 제공된 경우)
+        # 2. RAGFLOW_INTERNAL_TOKEN (환경 변수)
+        # 3. RAGFLOW_API_KEY (fallback)
         # BACKEND_INTERNAL_TOKEN은 백엔드 서버와의 통신용이므로 사용하지 않음
-        self._internal_token = internal_token or settings.RAGFLOW_API_KEY
+        self._internal_token = (
+            internal_token 
+            or settings.RAGFLOW_INTERNAL_TOKEN 
+            or settings.RAGFLOW_API_KEY
+        )
         self._timeout = timeout
         self._external_client = client
 
@@ -230,14 +237,37 @@ class RagflowClient:
         """도메인을 RAGFlow dataset_id로 변환합니다.
 
         Args:
-            domain: 도메인 (예: "POLICY", "EDUCATION")
+            domain: 도메인 (예: "POLICY", "EDUCATION" 또는 "직장내성희롱교육")
+                   - 영어 도메인명: 매핑 테이블에서 조회
+                   - 한글 dataset_id: 그대로 반환 (이미 dataset_id)
 
         Returns:
             dataset_id 또는 None (매핑 없음)
         """
         if not domain:
             return None
-        return DOMAIN_TO_DATASET_ID.get(domain.upper())
+        
+        # 영어 도메인명인 경우 매핑 테이블에서 조회
+        dataset_id = DOMAIN_TO_DATASET_ID.get(domain.upper())
+        if dataset_id:
+            return dataset_id
+        
+        # 한글인 경우 (이미 dataset_id일 수 있음)
+        # 허용된 dataset_id 목록에 있는지 확인
+        allowed_dataset_ids = [
+            "사내규정",
+            "직무교육",
+            "장애인인식개선교육",
+            "직장내괴롭힘교육",
+            "직장내성희롱교육",
+            "정보보안교육",
+        ]
+        
+        if domain in allowed_dataset_ids:
+            return domain  # 이미 dataset_id이므로 그대로 반환
+        
+        # 매핑 실패
+        return None
 
     async def ingest_document(
         self,
@@ -279,23 +309,37 @@ class RagflowClient:
         masked_token = f"{'*' * 10}{self._internal_token[-4:]}" if self._internal_token and len(self._internal_token) > 4 else "***"
         logger.debug(f"Ingest request headers: X-Internal-Token={masked_token}")
 
+        # version은 RAGFlow API 필수 파라미터 (실제 서버 요구사항)
+        # version이 None이거나 0 이하이면 기본값 1 사용
+        final_version = version if version is not None and version > 0 else 1
+        
         payload = {
             "datasetId": dataset_id,
             "docId": doc_id,
             "fileUrl": file_url,
+            "version": final_version,  # 필수 파라미터: 항상 포함
             "replace": True,
         }
-        if version is not None:
-            payload["version"] = version
         if meta:
             payload["meta"] = meta
 
         masked_token = f"{'*' * 10}{self._internal_token[-4:]}" if self._internal_token and len(self._internal_token) > 4 else "NOT_SET"
+        
+        # 실제 전송되는 payload 로깅 (민감한 정보 제외, 하지만 구조는 확인 가능)
+        payload_for_log = {**payload}
+        if "meta" in payload_for_log and isinstance(payload_for_log["meta"], dict):
+            # meta의 일부만 로깅 (전체는 너무 길 수 있음)
+            meta_sample = {k: v for k, v in list(payload_for_log["meta"].items())[:3]}
+            payload_for_log["meta"] = f"{meta_sample}... (truncated)"
+        
+        # INFO 레벨로 payload의 구조 확인 (version 필수 확인)
         logger.info(
             f"Ingesting document to RAGFlow: dataset_id={dataset_id}, "
             f"doc_id={doc_id}, file_url={file_url[:100]}..., "
-            f"internal_token={masked_token}"
+            f"version={final_version}, internal_token={masked_token}"
         )
+        logger.info(f"RAGFlow ingest payload keys: {list(payload.keys())}, version in payload: {'version' in payload}, version value: {payload.get('version')}")
+        logger.debug(f"RAGFlow ingest payload (sending): {payload_for_log}")
 
         try:
             if self._external_client:
@@ -330,7 +374,12 @@ class RagflowClient:
                 raise RagflowDocumentError("Unauthorized - invalid or missing internal token")
             elif response.status_code == 400:
                 error_msg = response.text[:200]
-                logger.error(f"Ingest failed: status={response.status_code}, error={error_msg}")
+                # 400 오류 시 실제 전송된 payload 확인 (version 포함 여부)
+                logger.error(
+                    f"Ingest failed: status={response.status_code}, error={error_msg}, "
+                    f"payload_keys={list(payload.keys())}, version_in_payload={'version' in payload}, "
+                    f"version_value={payload.get('version')}"
+                )
                 raise RagflowDocumentError(f"Ingest failed: {error_msg}")
             else:
                 error_msg = response.text[:200]
@@ -658,7 +707,23 @@ class RagflowClient:
             raise RagflowConnectionError("RAGFLOW_BASE_URL not configured")
 
         url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
-        headers = self._get_headers()
+        # 실제 서버는 Authorization Bearer와 X-Internal-Token 둘 다 요구할 수 있음
+        # 두 헤더를 모두 포함
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        # Authorization Bearer 헤더 (필수)
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        # X-Internal-Token 헤더 (내부 API용)
+        if self._internal_token:
+            headers["X-Internal-Token"] = self._internal_token
+        logger.debug(
+            f"Using both Authorization Bearer and X-Internal-Token for documents API: "
+            f"url={url}, dataset_id={dataset_id}, "
+            f"has_api_key={bool(self._api_key)}, has_internal_token={bool(self._internal_token)}"
+        )
 
         try:
             if self._external_client:
@@ -675,16 +740,82 @@ class RagflowClient:
                     timeout=self._timeout,
                 )
 
+            # 권한 오류 발생 시 Authorization Bearer로 재시도
             if response.status_code == 200:
                 result = response.json()
+                
+                # 실제 응답 구조 로깅 (디버깅용)
+                logger.info(
+                    f"RAGFlow documents API response: status=200, "
+                    f"result_keys={list(result.keys()) if isinstance(result, dict) else 'not_dict'}, "
+                    f"url={url}"
+                )
+                
+                # code와 message가 있으면 에러 응답일 수 있음
+                # code=0이어도 data=False이고 message가 있으면 에러로 처리
+                if isinstance(result, dict):
+                    code = result.get("code")
+                    message = result.get("message")
+                    data_value = result.get("data")
+                    
+                    # 에러 조건: code != 0 또는 (code=0이고 data=False이고 message가 있음)
+                    is_error = (
+                        (code is not None and code != 0) or
+                        (code == 0 and data_value is False and message)
+                    )
+                    
+                    if is_error:
+                        logger.warning(
+                            f"RAGFlow documents API returned error: code={code}, "
+                            f"data={data_value}, message={message}, url={url}"
+                        )
+                        # "Authorization can't be empty" 오류인 경우
+                        # Authorization Bearer를 사용 중이지만 여전히 오류 발생
+                        # 이는 토큰 설정 문제이거나 API 스펙 문제일 수 있음
+                        if message and "authorization" in str(message).lower():
+                            logger.error(
+                                f"RAGFlow documents API Authorization error: "
+                                f"message={message}, url={url}. "
+                                f"RAGFLOW_API_KEY is configured: {bool(self._api_key)}. "
+                                f"This may indicate that the API token is invalid or "
+                                f"the endpoint requires different authentication."
+                            )
+                            # Authorization 오류는 None 반환 (문서를 찾을 수 없음)
+                            return None
+                    # code가 0이 아니거나 message가 있으면 전체 응답 로깅
+                    if isinstance(result, dict) and (result.get("code") != 0 or result.get("message")):
+                        logger.info(f"RAGFlow documents API full response: {result}")
+                
+                # 권한 오류(code=102)가 발생한 경우
+                if isinstance(result, dict):
+                    final_code = result.get("code")
+                    final_message = result.get("message")
+                    if final_code == 102 and "don't own" in str(final_message).lower():
+                        logger.error(
+                            f"RAGFlow documents API permission denied: code={final_code}, "
+                            f"message={final_message}, dataset_id={dataset_id}, url={url}. "
+                            f"Both Authorization Bearer and X-Internal-Token headers were sent, "
+                            f"but the API token does not have access to the dataset. "
+                            f"This is a server-side permission issue. "
+                            f"Note: According to the spec, RAGFlow should send a callback instead of polling."
+                        )
+                        # 권한 오류는 None 반환 (문서를 찾을 수 없음)
+                        return None
+                
                 data = result.get("data", [])
                 
                 # data가 dict인 경우 (예: {"docs": [...]})
                 if isinstance(data, dict):
                     documents = data.get("docs", data.get("data", []))
+                    logger.debug(f"Data is dict, extracted documents: {len(documents)} items")
                 elif isinstance(data, list):
                     documents = data
+                    logger.debug(f"Data is list: {len(documents)} items")
                 else:
+                    logger.warning(
+                        f"Unexpected data type: {type(data)}, value={data}, "
+                        f"result={result}"
+                    )
                     return None
 
                 # docId로 문서 찾기
@@ -828,7 +959,16 @@ class RagflowClient:
                 
                 return None
             else:
-                logger.warning(f"Failed to get document list: status={response.status_code}")
+                error_text = response.text[:500] if response.text else "No error message"
+                logger.warning(
+                    f"Failed to get document list: status={response.status_code}, "
+                    f"url={url}, error={error_text}"
+                )
+                try:
+                    error_json = response.json()
+                    logger.warning(f"Error response JSON: {error_json}")
+                except:
+                    pass
                 return None
 
         except Exception as e:
@@ -938,7 +1078,15 @@ class RagflowClient:
 
         # 문서 리스트를 가져와서 특정 문서를 찾기
         url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
-        headers = self._get_headers()
+        # 실제 서버는 Authorization Bearer와 X-Internal-Token 둘 다 요구할 수 있음
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        if self._internal_token:
+            headers["X-Internal-Token"] = self._internal_token
 
         try:
             if self._external_client:
@@ -1053,7 +1201,15 @@ class RagflowClient:
 
         url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents/{document_id}/chunks"
         params = {"page": page, "page_size": page_size}
-        headers = self._get_headers()
+        # 실제 서버는 Authorization Bearer와 X-Internal-Token 둘 다 요구할 수 있음
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        if self._internal_token:
+            headers["X-Internal-Token"] = self._internal_token
 
         try:
             if self._external_client:

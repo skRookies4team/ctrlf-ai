@@ -1,6 +1,9 @@
 import sys
+import io
 from pathlib import Path
 import json
+
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # 프로젝트 루트 추가
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -10,7 +13,7 @@ from app.utils.heygen_converter import convert_video_script_to_heygen
 
 
 INPUT_PATH = Path(
-    "test_output_script/generated_script_직장내괴롭힘교육.cleaned.json"
+    "test_output_script/video_script_직장내괴롭힘교육.cleaned.json"
 )
 OUTPUT_PATH = Path(
     "test_output_script/heygen_script_직장내괴롭힘교육.json"

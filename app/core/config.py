@@ -140,6 +140,11 @@ class Settings(BaseSettings):
 
     # RAGFlow API Key (인증 필요 시)
     RAGFLOW_API_KEY: Optional[str] = None
+    
+    # RAGFlow 내부 API 토큰 (X-Internal-Token 헤더용)
+    # RAGFlow ingest API 등 내부 API 호출 시 사용
+    # 미설정 시 RAGFLOW_API_KEY를 사용
+    RAGFLOW_INTERNAL_TOKEN: Optional[str] = None
 
     # Dataset 슬러그 → dataset_id 매핑
     # 형식: "slug1:dataset_id1,slug2:dataset_id2,..."
@@ -162,7 +167,7 @@ class Settings(BaseSettings):
     # Step 3: SourceSet 오케스트레이션 설정
     # =========================================================================
     # RAGFlow 파싱 완료 Polling 설정
-    RAGFLOW_POLL_INITIAL_DELAY_SEC: float = 600.0  # 폴링 시작 전 대기 (10분)
+    RAGFLOW_POLL_INITIAL_DELAY_SEC: float = 60.0  # 폴링 시작 전 대기 (1분, 환경변수로 오버라이드 가능)
     RAGFLOW_POLL_INTERVAL_SEC: float = 3.0  # 폴링 간격 (초)
     RAGFLOW_POLL_TIMEOUT_SEC: float = 2400.0  # 폴링 타임아웃 (40분)
     RAGFLOW_CHUNK_PAGE_SIZE: int = 1000  # 청크 조회 페이지 크기
@@ -607,6 +612,20 @@ class Settings(BaseSettings):
 
     # 씬 기본 duration (duration_sec <= 0일 때 사용)
     SCENE_DEFAULT_DURATION_SEC: float = 5.0
+
+    # =========================================================================
+    # HeyGen API 설정
+    # =========================================================================
+    # HeyGen API 키
+    HEYGEN_API_KEY: Optional[str] = None
+    # HeyGen Voice ID
+    HEYGEN_VOICE_ID: Optional[str] = None
+    # HeyGen API 타임아웃 (초)
+    HEYGEN_TIMEOUT_SEC: float = 60.0
+    # HeyGen 폴링 간격 (초)
+    HEYGEN_POLL_INTERVAL_SEC: float = 5.0
+    # HeyGen 폴링 최대 대기 시간 (초, 기본 1시간)
+    HEYGEN_POLL_TIMEOUT_SEC: float = 3600.0
 
     # =========================================================================
     # Validators: 빈 문자열을 None으로 변환

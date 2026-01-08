@@ -865,9 +865,17 @@ class RenderJobRunner:
             # 에셋 조회
             rendered = await self._renderer.get_rendered_assets(job_id)
 
+            # HeyGen 렌더러의 경우 S3 URI 사용
+            video_url = rendered.mp4_path
+            if hasattr(self._renderer, "get_s3_uri"):
+                s3_uri = self._renderer.get_s3_uri(job_id)
+                if s3_uri:
+                    video_url = s3_uri
+                    logger.info(f"Using S3 URI from renderer: {video_url}")
+
             # 에셋 저장
             assets = {
-                "video_url": rendered.mp4_path,
+                "video_url": video_url,
                 "subtitle_url": rendered.subtitle_path,
                 "thumbnail_url": rendered.thumbnail_path,
                 "duration_sec": rendered.duration_sec,
@@ -899,7 +907,7 @@ class RenderJobRunner:
             asyncio.create_task(
                 self._notify_job_complete(
                     job_id=job_id,
-                    video_url=rendered.mp4_path,
+                    video_url=video_url,
                     duration=int(rendered.duration_sec),
                 )
             )
