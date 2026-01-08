@@ -650,7 +650,11 @@ class MilvusSearchClient:
                 content = getattr(entity, "text", "")
                 doc_id = getattr(entity, "doc_id", "")
                 chunk_id = getattr(entity, "chunk_id", None)
-                department = getattr(entity, "department", "")
+                department = (
+                    getattr(entity, "department", None)
+                    or getattr(entity, "dataset_id", None)
+                    or ""
+                )
 
                 domain_guess = self._extract_domain_from_dataset_id(dataset_id)
 

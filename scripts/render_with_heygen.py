@@ -79,11 +79,7 @@ async def render_single_chapter(
     }
 
     # 1️⃣ 인트로 + duration 보정
-    enhanced = enhance_video_script_for_video(
-        chapter_script,
-        safe_intro=True,   # ← IndexError 방지용
-        max_total_sec=170  # ← HeyGen 180초 안전선
-    )
+    enhanced = enhance_video_script_for_video(chapter_script)
 
     enhanced_path = OUT_DIR / f"chapter_{chapter_index_1based:02d}.enhanced.json"
     enhanced_path.write_text(
