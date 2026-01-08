@@ -103,6 +103,7 @@ class ProcessingJob:
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+    document_completion_info: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # RAGFlow 콜백 정보
 
 
 @dataclass
@@ -256,6 +257,46 @@ class SourceSetOrchestrator:
         """
         return self._processing_jobs.get(source_set_id)
 
+    async def notify_document_completed(
+        self,
+        source_set_id: str,
+        document_id: str,
+        ragflow_doc_id: str,
+        status: str,
+    ) -> None:
+        """RAGFlow 콜백으로 문서 완료를 알립니다.
+
+        모든 문서가 완료되면 스크립트 생성 및 백엔드 콜백을 처리합니다.
+
+        Args:
+            source_set_id: 소스셋 ID
+            document_id: Spring 문서 ID
+            ragflow_doc_id: RAGFlow 문서 ID
+            status: 완료 상태 (COMPLETED|FAILED)
+        """
+        job = self._processing_jobs.get(source_set_id)
+        if not job:
+            logger.debug(
+                f"Job not found for source_set_id={source_set_id}, "
+                f"document_id={document_id} (may have already completed)"
+            )
+            return
+
+        # 문서 완료 정보 저장
+        job.document_completion_info[document_id] = {
+            "status": status,
+            "ragflow_doc_id": ragflow_doc_id,
+            "completed_at": datetime.utcnow(),
+        }
+
+        logger.info(
+            f"Document completion notified: source_set_id={source_set_id}, "
+            f"document_id={document_id}, ragflow_doc_id={ragflow_doc_id}, status={status}"
+        )
+
+        # 모든 문서 완료 체크 및 처리
+        await self._check_and_process_completion(source_set_id)
+
     # =========================================================================
     # Background Processing
     # =========================================================================
@@ -294,79 +335,53 @@ class SourceSetOrchestrator:
                 f"Found {len(job.documents)} documents: source_set_id={source_set_id}"
             )
 
-            # 2. 각 문서 처리 및 청크 수집
-            # Option 3: SCRIPT_RETRIEVER_BACKEND에 따라 Milvus 또는 RAGFlow 사용
-            all_document_chunks: Dict[str, List[Dict[str, Any]]] = {}  # doc_id → chunks
-            document_results: List[DocumentResult] = []
-            processing_results: List[DocumentProcessingResult] = []
-            has_failure = False
-
+            # 2. 모든 문서를 RAGFlow에 ingest 요청만 보냄 (콜백 기반 처리)
+            # 각 문서의 완료는 RAGFlow 콜백으로 처리됨
+            ingest_tasks = []
             for doc in job.documents:
-                try:
-                    result = await self._process_document_with_routing(
-                        source_set_id, doc, job
-                    )
-                    processing_results.append(result)
-                    document_results.append(
-                        DocumentResult(
-                            document_id=doc.document_id,
-                            status="COMPLETED" if result.success else "FAILED",
-                            fail_reason=result.fail_reason,
-                        )
-                    )
-                    if result.success and result.chunks:
-                        all_document_chunks[doc.document_id] = result.chunks
-                    if not result.success:
-                        has_failure = True
-                except Exception as e:
+                task = asyncio.create_task(
+                    self._ingest_document_only(source_set_id, doc, job)
+                )
+                ingest_tasks.append(task)
+            
+            # 모든 ingest 요청 완료 대기 (실패해도 계속 진행)
+            ingest_results = await asyncio.gather(*ingest_tasks, return_exceptions=True)
+            
+            # ingest 실패한 문서 체크
+            ingest_failures = []
+            for i, result in enumerate(ingest_results):
+                if isinstance(result, Exception):
+                    doc = job.documents[i]
                     logger.error(
-                        f"Document processing failed: doc_id={doc.document_id}, error={e}"
+                        f"Document ingest failed: doc_id={doc.document_id}, error={result}"
                     )
-                    document_results.append(
-                        DocumentResult(
-                            document_id=doc.document_id,
-                            status="FAILED",
-                            fail_reason=str(e)[:200],
-                        )
+                    ingest_failures.append(doc.document_id)
+                elif not result:
+                    doc = job.documents[i]
+                    logger.error(
+                        f"Document ingest failed: doc_id={doc.document_id}"
                     )
-                    has_failure = True
-
-            job.document_results = document_results
-
-            # 3. 하나라도 실패했으면 전체 실패 처리
-            if has_failure:
+                    ingest_failures.append(doc.document_id)
+            
+            if ingest_failures:
                 await self._send_failure_callback(
                     job,
-                    error_code="DOCUMENT_PROCESSING_FAILED",
-                    error_message="하나 이상의 문서 처리에 실패했습니다.",
+                    error_code="DOCUMENT_INGEST_FAILED",
+                    error_message=f"문서 ingest 실패: {', '.join(ingest_failures)}",
                 )
                 return
-
-            # 4. 청크가 없으면 실패 처리
-            total_chunks = sum(len(chunks) for chunks in all_document_chunks.values())
-            if total_chunks == 0:
-                await self._send_failure_callback(
-                    job,
-                    error_code="NO_CHUNKS_GENERATED",
-                    error_message="문서 처리는 성공했으나 청크가 생성되지 않았습니다.",
-                )
-                return
-
-            # 5. 스크립트 생성
-            logger.info(f"Generating script: source_set_id={source_set_id}, total_chunks={total_chunks}")
-            script = await self._generate_script(job, all_document_chunks)
-            job.generated_script = script
-
-            # 5. 성공 콜백 전송
-            await self._send_success_callback(job)
-
-            # 6. 상태 업데이트
-            job.status = ProcessingStatus.COMPLETED
-            job.updated_at = datetime.utcnow()
-
+            
+            # 3. 이제 모든 처리는 RAGFlow 콜백에서 처리됨
+            # notify_document_completed에서 모든 문서 완료 시 스크립트 생성 및 백엔드 콜백
             logger.info(
-                f"Source set processing completed: source_set_id={source_set_id}"
+                f"All documents ingest requested: source_set_id={source_set_id}, "
+                f"document_count={len(job.documents)}, "
+                f"waiting for RAGFlow callbacks..."
             )
+            
+            # 작업 상태를 PROCESSING으로 설정 (콜백에서 완료 처리)
+            job.status = ProcessingStatus.PROCESSING
+            job.updated_at = datetime.utcnow()
 
         except SourceSetDocumentsFetchError as e:
             logger.error(f"Failed to fetch documents: {e}")
@@ -394,6 +409,256 @@ class SourceSetOrchestrator:
             # 태스크 정리
             if source_set_id in self._running_tasks:
                 del self._running_tasks[source_set_id]
+
+    async def _ingest_document_only(
+        self,
+        source_set_id: str,
+        doc: SourceSetDocument,
+        job: ProcessingJob,
+    ) -> bool:
+        """문서를 RAGFlow에 ingest 요청만 보냅니다 (콜백 기반 처리).
+
+        Args:
+            source_set_id: 소스셋 ID
+            doc: 처리할 문서
+            job: 처리 작업 상태
+
+        Returns:
+            bool: ingest 요청 성공 여부
+        """
+        try:
+            # dataset_id 결정 (domain → dataset_id 매핑)
+            dataset_id = self._ragflow_client._dataset_to_kb_id(doc.domain)
+
+            # domain 매핑 검증
+            if not dataset_id:
+                logger.error(
+                    f"Invalid domain - no dataset mapping: "
+                    f"doc_id={doc.document_id}, domain={doc.domain}"
+                )
+                return False
+
+            # ragflow_doc_id 결정
+            ragflow_doc_id = doc.title.strip() if doc.title else None
+            if not ragflow_doc_id:
+                ragflow_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
+
+            logger.info(
+                f"Ingesting document to RAGFlow: ragflow_doc_id={ragflow_doc_id}, "
+                f"title={doc.title}, spring_doc_id={doc.document_id}"
+            )
+
+            # RAGFlow에 ingest 요청
+            ingest_result = await self._ragflow_client.ingest_document_with_retry(
+                dataset_id=dataset_id,
+                doc_id=ragflow_doc_id,
+                file_url=doc.source_url,
+                version=1,
+                meta={
+                    "ragDocumentPk": doc.document_id,
+                    "traceId": job.trace_id if job else None,
+                    "requestId": job.request_id if job else None,
+                    "domain": doc.domain,
+                    "source_set_id": job.source_set_id if job else None,
+                    "spring_document_id": doc.document_id,
+                },
+            )
+
+            ingest_id = ingest_result.get("ingestId")
+            if not ingest_id:
+                logger.error(f"RAGFlow ingest failed: no ingest ID returned: doc_id={doc.document_id}")
+                return False
+
+            logger.info(f"Document ingest accepted: doc_id={doc.document_id}, ingest_id={ingest_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Document ingest error: doc_id={doc.document_id}, error={e}")
+            return False
+
+    async def _check_and_process_completion(self, source_set_id: str) -> None:
+        """모든 문서가 완료되었는지 체크하고, 완료되면 스크립트 생성 및 백엔드 콜백을 처리합니다.
+
+        Args:
+            source_set_id: 소스셋 ID
+        """
+        job = self._processing_jobs.get(source_set_id)
+        if not job:
+            return
+
+        # 이미 완료된 작업은 처리하지 않음
+        if job.status == ProcessingStatus.COMPLETED:
+            return
+
+        # 모든 문서의 완료 상태 체크
+        completed_count = 0
+        failed_count = 0
+        total_count = len(job.documents)
+
+        for doc in job.documents:
+            completion_info = job.document_completion_info.get(doc.document_id)
+            if not completion_info:
+                # 아직 완료되지 않은 문서가 있음
+                return
+            
+            status = completion_info.get("status")
+            if status == "COMPLETED":
+                completed_count += 1
+            elif status == "FAILED":
+                failed_count += 1
+
+        # 모든 문서가 완료되지 않았으면 대기
+        if completed_count + failed_count < total_count:
+            logger.debug(
+                f"Waiting for more documents: source_set_id={source_set_id}, "
+                f"completed={completed_count}, failed={failed_count}, total={total_count}"
+            )
+            return
+
+        # 하나라도 실패한 경우 전체 실패 처리
+        if failed_count > 0:
+            logger.error(
+                f"Source set processing failed: source_set_id={source_set_id}, "
+                f"failed_documents={failed_count}/{total_count}"
+            )
+            await self._send_failure_callback(
+                job,
+                error_code="DOCUMENT_PROCESSING_FAILED",
+                error_message=f"{failed_count}개 문서 처리 실패",
+            )
+            job.status = ProcessingStatus.FAILED
+            return
+
+        # 모든 문서가 완료되었으므로 청크 조회 및 스크립트 생성
+        logger.info(
+            f"All documents completed: source_set_id={source_set_id}, "
+            f"total={total_count}, processing chunks and generating script..."
+        )
+
+        # 청크 조회 및 스크립트 생성
+        await self._process_chunks_and_generate_script(source_set_id)
+
+    async def _process_chunks_and_generate_script(self, source_set_id: str) -> None:
+        """완료된 문서들의 청크를 조회하고 스크립트를 생성합니다.
+
+        Args:
+            source_set_id: 소스셋 ID
+        """
+        job = self._processing_jobs.get(source_set_id)
+        if not job:
+            return
+
+        try:
+            # 모든 문서의 청크 조회
+            all_document_chunks: Dict[str, List[Dict[str, Any]]] = {}
+            document_results: List[DocumentResult] = []
+
+            for doc in job.documents:
+                completion_info = job.document_completion_info.get(doc.document_id)
+                if not completion_info or completion_info.get("status") != "COMPLETED":
+                    continue
+
+                ragflow_doc_id = completion_info.get("ragflow_doc_id")
+                if not ragflow_doc_id:
+                    logger.warning(f"No ragflow_doc_id for completed document: doc_id={doc.document_id}")
+                    continue
+
+                # Milvus에서 청크 조회
+                dataset_id = self._ragflow_client._dataset_to_kb_id(doc.domain)
+                chunks = []
+                try:
+                    if self._use_milvus and self._milvus_client:
+                        milvus_chunks = await self._milvus_client.get_document_chunks(
+                            doc_id=ragflow_doc_id,
+                            dataset_id=dataset_id,
+                        )
+                        chunks = [
+                            {
+                                "chunk_id": chunk.get("chunk_id", ""),
+                                "text": chunk.get("text", ""),
+                                "metadata": {
+                                    "page_num": chunk.get("page_num", 0),
+                                    "section": chunk.get("section", ""),
+                                    "section_path": chunk.get("section_path", ""),
+                                },
+                            }
+                            for chunk in milvus_chunks
+                        ]
+                        
+                        # Spring DB에 청크 저장
+                        await self._save_chunks_to_backend(doc.document_id, chunks, job)
+                        
+                        logger.info(f"Retrieved {len(chunks)} chunks from Milvus: doc_id={ragflow_doc_id}")
+                    else:
+                        logger.warning(f"Milvus not available: doc_id={doc.document_id}")
+                except Exception as e:
+                    logger.error(f"Failed to fetch chunks from Milvus: doc_id={doc.document_id}, error={e}")
+                    document_results.append(
+                        DocumentResult(
+                            document_id=doc.document_id,
+                            status="FAILED",
+                            fail_reason=f"Failed to fetch chunks: {str(e)[:200]}",
+                        )
+                    )
+                    continue
+
+                if chunks:
+                    all_document_chunks[doc.document_id] = chunks
+                    document_results.append(
+                        DocumentResult(
+                            document_id=doc.document_id,
+                            status="COMPLETED",
+                            fail_reason="",
+                        )
+                    )
+                else:
+                    document_results.append(
+                        DocumentResult(
+                            document_id=doc.document_id,
+                            status="FAILED",
+                            fail_reason="No chunks generated",
+                        )
+                    )
+
+            job.document_results = document_results
+
+            # 청크가 없으면 실패 처리
+            total_chunks = sum(len(chunks) for chunks in all_document_chunks.values())
+            if total_chunks == 0:
+                await self._send_failure_callback(
+                    job,
+                    error_code="NO_CHUNKS_GENERATED",
+                    error_message="문서 처리는 성공했으나 청크가 생성되지 않았습니다.",
+                )
+                job.status = ProcessingStatus.FAILED
+                return
+
+            # 스크립트 생성
+            logger.info(f"Generating script: source_set_id={source_set_id}, total_chunks={total_chunks}")
+            script = await self._generate_script(job, all_document_chunks)
+            job.generated_script = script
+
+            # 성공 콜백 전송
+            await self._send_success_callback(job)
+
+            # 상태 업데이트
+            job.status = ProcessingStatus.COMPLETED
+            job.updated_at = datetime.utcnow()
+
+            logger.info(
+                f"Source set processing completed: source_set_id={source_set_id}"
+            )
+
+        except Exception as e:
+            logger.exception(f"Failed to process chunks and generate script: source_set_id={source_set_id}")
+            job.status = ProcessingStatus.FAILED
+            job.error_code = "SCRIPT_GENERATION_ERROR"
+            job.error_message = str(e)[:200]
+            await self._send_failure_callback(
+                job,
+                error_code="SCRIPT_GENERATION_ERROR",
+                error_message=str(e)[:200],
+            )
 
     async def _process_document(
         self,
@@ -470,7 +735,7 @@ class SourceSetOrchestrator:
             import asyncio
             max_retry_count = settings.RAGFLOW_MAX_RETRY_COUNT
             initial_delay = settings.RAGFLOW_POLL_INITIAL_DELAY_SEC
-            max_wait_time = settings.RAGFLOW_POLL_TIMEOUT_SEC
+            max_wait_time = 720.0  # 최대 12분 (720초) 대기
             poll_interval = settings.RAGFLOW_POLL_INTERVAL_SEC
 
             ragflow_doc_id = None  # 파일명.확장자 (retry 루프에서 설정)
@@ -493,7 +758,7 @@ class SourceSetOrchestrator:
                     ragflow_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
                 logger.info(
                     f"Ingesting document to RAGFlow: ragflow_doc_id={ragflow_doc_id}, "
-                    f"title={doc.title}, version={doc.version}, spring_doc_id={doc.document_id}"
+                    f"title={doc.title}, spring_doc_id={doc.document_id}"
                 )
 
                 # 재시도 로직이 내장된 래퍼 사용 (네트워크 타임아웃/오류에도 1회 재시도)
@@ -501,7 +766,7 @@ class SourceSetOrchestrator:
                     dataset_id=dataset_id,
                     doc_id=ragflow_doc_id,  # 파일명.확장자 형태
                     file_url=doc.source_url,
-                    version=doc.version,  # 백엔드에서 전달받은 버전 (멱등성 캐시 키)
+                    version=1,  # RAGFlow API 필수 파라미터
                     meta={
                         "ragDocumentPk": doc.document_id,  # RAGFlow API 필수
                         "traceId": job.trace_id if job else None,  # RAGFlow API 필수
@@ -520,80 +785,88 @@ class SourceSetOrchestrator:
 
                 logger.info(f"Document ingest accepted: doc_id={doc.document_id}, ingest_id={ingest_id}")
 
-                # 2. 바로 폴링 시작 (대기 없음)
-                start_time = asyncio.get_event_loop().time()
-
-                logger.info(
-                    f"Starting polling for document: doc_id={doc.document_id}, "
-                    f"ragflow_doc_id={ragflow_doc_id}, dataset_id={dataset_id}, "
-                    f"domain={doc.domain}, poll_interval={poll_interval}s, timeout={max_wait_time}s"
-                )
-
-                ragflow_internal_id = None  # RAGFlow 내부 UUID (polling에서 발견 시 설정)
+                # RAGFlow 콜백만 기다림 (폴링 제거)
+                # RAGFlow가 콜백을 보내면 이미 Milvus에 적재 완료된 상태
+                ragflow_internal_id = None
                 final_status = None
                 chunk_count = 0
-                poll_count = 0
-                is_fail = False
+                start_time = asyncio.get_event_loop().time()
+                callback_check_interval = 1.0  # 콜백 확인 간격 (1초)
+                
+                logger.info(
+                    f"Waiting for RAGFlow callback: doc_id={doc.document_id}, "
+                    f"ragflow_doc_id={ragflow_doc_id}, dataset_id={dataset_id}, "
+                    f"timeout={max_wait_time}s ({max_wait_time/60:.1f} minutes)"
+                )
 
+                # 콜백 대기 루프
+                last_log_time = start_time
+                log_interval = 30.0  # 30초마다 로그 출력
+                
                 while (asyncio.get_event_loop().time() - start_time) < max_wait_time:
-                    await asyncio.sleep(poll_interval)
-                    poll_count += 1
                     elapsed = asyncio.get_event_loop().time() - start_time
-
-                    logger.debug(
-                        f"Polling attempt {poll_count}: doc_id={doc.document_id}, "
-                        f"elapsed={elapsed:.1f}s"
-                    )
-
-                    # 문서 리스트에서 docId(파일명)로 문서 찾기
-                    found_doc = await self._ragflow_client.find_document_by_doc_id(
-                        dataset_id=dataset_id,
-                        doc_id=ragflow_doc_id,  # 파일명.확장자 형태
-                    )
-
-                    if found_doc:
-                        ragflow_internal_id = found_doc.get("id")  # RAGFlow 내부 UUID
-                        if ragflow_internal_id:
-                            # 문서 상태 확인
-                            try:
-                                doc_status = await self._ragflow_client.get_document_status(
-                                    dataset_id=dataset_id,
-                                    document_id=ragflow_internal_id,
-                                )
-                                final_status = doc_status.get("run")
-                                chunk_count = doc_status.get("chunk_count", 0)
-
-                                logger.info(
-                                    f"Document status check: doc_id={ragflow_doc_id}, "
-                                    f"ragflow_internal_id={ragflow_internal_id}, status={final_status}, "
-                                    f"chunks={chunk_count}"
-                                )
-
-                                if final_status == "DONE":
-                                    logger.info(f"Document ingest completed: doc_id={ragflow_doc_id}, ragflow_internal_id={ragflow_internal_id}")
-                                    break
-                                elif final_status == "FAIL":
-                                    logger.error(f"Document ingest failed: doc_id={ragflow_doc_id}")
-                                    last_fail_reason = "RAGFlow ingest failed"
-                                    is_fail = True
-                                    break  # polling 루프 탈출 후 재시도
-                            except Exception as e:
-                                logger.warning(f"Error checking document status: doc_id={ragflow_doc_id}, error={e}")
-                                continue
-                        else:
-                            logger.debug(f"Document found but no ID: doc_id={ragflow_doc_id}")
-                    else:
-                        logger.debug(f"Document not found yet: doc_id={doc.document_id}, attempt={poll_count}")
+                    current_time = asyncio.get_event_loop().time()
+                    
+                    # 30초마다 대기 중 로그 출력
+                    if current_time - last_log_time >= log_interval:
+                        logger.info(
+                            f"Waiting for RAGFlow callback: doc_id={doc.document_id}, "
+                            f"ragflow_doc_id={ragflow_doc_id}, elapsed={elapsed:.1f}s/{max_wait_time:.1f}s ({elapsed/60:.1f}/{max_wait_time/60:.1f} minutes)"
+                        )
+                        last_log_time = current_time
+                    
+                    # 콜백으로 완료되었는지 확인
+                    completion_info = job.document_completion_info.get(doc.document_id)
+                    if completion_info:
+                        status = completion_info.get("status")
+                        if status == "COMPLETED":
+                            logger.info(
+                                f"Document completed via RAGFlow callback: doc_id={doc.document_id}, "
+                                f"ragflow_doc_id={completion_info.get('ragflow_doc_id')}, "
+                                f"waited={elapsed:.1f}s"
+                            )
+                            final_status = "DONE"
+                            # ragflow_doc_id 업데이트 (콜백에서 받은 값 사용)
+                            if completion_info.get("ragflow_doc_id"):
+                                ragflow_doc_id = completion_info.get("ragflow_doc_id")
+                            break
+                        elif status == "FAILED":
+                            logger.error(
+                                f"Document failed via RAGFlow callback: doc_id={doc.document_id}, "
+                                f"waited={elapsed:.1f}s"
+                            )
+                            last_fail_reason = completion_info.get("fail_reason", "RAGFlow ingest failed")
+                            final_status = "FAIL"
+                            break
+                    
+                    # 콜백 확인 간격만큼 대기
+                    await asyncio.sleep(callback_check_interval)
+                
+                # 타임아웃 체크
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if final_status != "DONE" and final_status != "FAIL":
+                    if elapsed >= max_wait_time:
+                        last_fail_reason = f"RAGFlow callback timeout after {max_wait_time}s ({max_wait_time/60:.1f} minutes), no callback received"
+                        logger.error(
+                            f"Document callback timeout: doc_id={doc.document_id}, "
+                            f"ragflow_doc_id={ragflow_doc_id}, dataset_id={dataset_id}, "
+                            f"reason={last_fail_reason}"
+                        )
+                        return DocumentProcessingResult(
+                            document_id=doc.document_id,
+                            success=False,
+                            fail_reason=last_fail_reason,
+                        )
 
                 # FAIL이면 재시도, DONE이면 retry 루프 탈출
-                if is_fail:
+                if final_status == "FAIL":
                     continue  # 다음 retry 시도
                 if final_status == "DONE":
                     break  # 성공, retry 루프 탈출
 
             # 모든 재시도 후에도 실패한 경우
             if final_status != "DONE":
-                fail_reason = last_fail_reason or f"RAGFlow parsing {final_status} after {max_retry_count} retries"
+                fail_reason = last_fail_reason or f"RAGFlow callback failed after {max_retry_count} retries"
                 logger.error(f"Document processing failed after retries: doc_id={doc.document_id}, reason={fail_reason}")
                 return DocumentProcessingResult(
                     document_id=doc.document_id,
@@ -601,13 +874,35 @@ class SourceSetOrchestrator:
                     fail_reason=fail_reason,
                 )
 
-            # 3. 청크 조회 (RAGFlow 내부 UUID 사용)
-            logger.info(f"Fetching chunks: doc_id={ragflow_doc_id}, ragflow_internal_id={ragflow_internal_id}, count={chunk_count}")
-            chunks = await self._fetch_all_chunks(
-                dataset_id=dataset_id,
-                document_id=ragflow_internal_id,  # RAGFlow 내부 UUID
-                page_size=settings.RAGFLOW_CHUNK_PAGE_SIZE,
-            )
+            # 3. 청크 조회 (Milvus에서 직접 조회)
+            # RAGFlow 콜백을 받았으므로 이미 Milvus에 적재 완료된 상태
+            logger.info(f"Fetching chunks from Milvus: doc_id={ragflow_doc_id}, dataset_id={dataset_id}")
+            chunks = []
+            try:
+                if self._use_milvus and self._milvus_client:
+                    # Milvus에서 문서의 모든 청크 조회
+                    milvus_chunks = await self._milvus_client.get_document_chunks(
+                        doc_id=ragflow_doc_id,
+                        dataset_id=dataset_id,
+                    )
+                    # Milvus 청크를 RAGFlow 형식으로 변환
+                    chunks = [
+                        {
+                            "chunk_id": chunk.get("chunk_id", ""),
+                            "text": chunk.get("text", ""),
+                            "metadata": {
+                                "page_num": chunk.get("page_num", 0),
+                                "section": chunk.get("section", ""),
+                                "section_path": chunk.get("section_path", ""),
+                            },
+                        }
+                        for chunk in milvus_chunks
+                    ]
+                    logger.info(f"Retrieved {len(chunks)} chunks from Milvus: doc_id={ragflow_doc_id}")
+                else:
+                    logger.warning(f"Milvus not available, cannot fetch chunks for callback-completed document: doc_id={doc.document_id}")
+            except Exception as e:
+                logger.error(f"Failed to fetch chunks from Milvus: doc_id={doc.document_id}, error={e}")
 
             if not chunks:
                 logger.warning(f"No chunks found: doc_id={doc.document_id}")
@@ -1013,8 +1308,8 @@ class SourceSetOrchestrator:
         chunk_items = [
             ChunkItem(
                 chunk_index=chunk.get("chunk_index", idx),
-                chunk_text=chunk.get("chunk_text", ""),
-                chunk_meta=chunk.get("chunk_meta"),
+                chunk_text=chunk.get("text", chunk.get("chunk_text", "")),  # Milvus에서는 "text"로 저장됨
+                chunk_meta=chunk.get("metadata", chunk.get("chunk_meta")),  # Milvus에서는 "metadata"로 저장됨
             )
             for idx, chunk in enumerate(chunks)
         ]
@@ -1444,7 +1739,11 @@ JSON 스크립트:"""
             total_scenes: 전체 씬 수
         """
         # 결정적 request_id 생성 (재시도 시 중복 방지)
-        patch_request_id = f"{job.source_set_id}:{chapter_index}:{scene_index}"
+        # 백엔드가 UUID 형식을 기대하므로 UUID5로 변환 (같은 입력에 대해 항상 같은 UUID 생성)
+        patch_request_id_str = f"{job.source_set_id}:{chapter_index}:{scene_index}"
+        # UUID5 namespace (고정된 namespace 사용)
+        namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')  # DNS namespace 재사용
+        patch_request_id = str(uuid.uuid5(namespace, patch_request_id_str))
 
         patch = ScriptPatch(
             type="SCENE_UPSERT",
@@ -1578,3 +1877,4 @@ def clear_source_set_orchestrator() -> None:
     """SourceSetOrchestrator 싱글톤 초기화 (테스트용)."""
     global _orchestrator
     _orchestrator = None
+

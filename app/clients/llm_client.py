@@ -97,6 +97,7 @@ ALLOWED_EXTERNAL_LLM_HOSTS: Set[str] = {
     host.strip() for host in _env_allowed_hosts.split(",") if host.strip()
 } | {
     "api.openai.com",  # OpenAI API (관리자 대시보드에서 선택 가능)
+    "58.127.241.84",   # 내부 LLM 서버 IP (운영 환경)
 }
 
 def _is_internal_domain(url: str) -> bool:
