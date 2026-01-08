@@ -81,14 +81,17 @@ class PersonalizationClient:
 
     def _get_auth_headers(self) -> dict[str, str]:
         """
-        인증 헤더를 반환합니다.
+        요청 헤더를 반환합니다.
+
+        Note: Authorization 헤더는 보내지 않습니다.
+        API Gateway에서 인증을 우회하도록 설정되어 있기 때문입니다.
 
         Returns:
-            dict[str, str]: 인증 헤더 딕셔너리
+            dict[str, str]: 요청 헤더 딕셔너리
         """
         headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self._api_token:
-            headers["Authorization"] = f"Bearer {self._api_token}"
+        # Authorization 헤더는 보내지 않음 (백엔드 요구사항)
+        # API Gateway에서 permitAll()로 설정되어 있어 인증 불필요
         return headers
 
     async def resolve_facts(
@@ -179,13 +182,24 @@ class PersonalizationClient:
                 topic=topic,
             )
 
-            # 헤더에 X-User-Id 추가
+            # 헤더에 X-User-Id 추가 (필수 헤더)
             headers = self._get_auth_headers()
             headers["X-User-Id"] = user_id
 
+            # 요청 정보 상세 로깅
+            request_body = request_data.model_dump(exclude_none=True)
+            logger.info(
+                f"Personalization request: "
+                f"url={endpoint}, "
+                f"user_id={user_id}, "
+                f"sub_intent_id={sub_intent_id}, "
+                f"headers={list(headers.keys())}, "
+                f"body={request_body}"
+            )
+
             response = await client.post(
                 endpoint,
-                json=request_data.model_dump(exclude_none=True),
+                json=request_body,
                 headers=headers,
                 timeout=self._timeout,
             )
@@ -204,6 +218,24 @@ class PersonalizationClient:
                     ),
                 )
             else:
+                # 401/403 에러는 인증 문제
+                if response.status_code in (401, 403):
+                    logger.warning(
+                        f"Personalization resolve authentication failed: status={response.status_code}, "
+                        f"has_api_token={bool(self._api_token)}, "
+                        f"endpoint={endpoint}, "
+                        f"body_len={len(response.text)}"
+                    )
+                    return PersonalizationFacts(
+                        sub_intent_id=sub_intent_id,
+                        items=[],
+                        metrics={},
+                        error=PersonalizationError(
+                            type=PersonalizationErrorType.HTTP_ERROR.value,
+                            message=f"인증 오류가 발생했어요. 백엔드 서버 설정을 확인해 주세요. (HTTP {response.status_code})",
+                        ),
+                    )
+                
                 logger.warning(
                     f"Personalization resolve failed: status={response.status_code}, "
                     f"body_len={len(response.text)}"
