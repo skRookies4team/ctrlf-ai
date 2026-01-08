@@ -68,6 +68,9 @@ TARGET_PEOPLE_TERMS: Set[str] = {
     # 특정 그룹
     "미이수자", "수료자", "대상자", "해당자",
     "저성과자", "고성과자", "위험군",
+    # 역할/직책 (다른 사람 지칭 가능)
+    "관리자", "매니저", "팀장", "부장", "과장", "대리",
+    "사장", "임원", "경영진", "CEO", "CTO", "CFO",
 }
 
 # 명단화/추출 행위 동사
@@ -84,6 +87,7 @@ LIST_ACTION_TERMS: Set[str] = {
     "분류", "필터", "골라", "선별", "찾아",
     # 질문형 표현 (암시적 명단 요청)
     "누구", "누가", "어떤", "몇 명", "몇명",
+    "어느", "어디", "뭐야", "뭔지", "무엇",
 }
 
 # 민감 속성 (교육/점수/평가/징계 등 인사성 정보)
@@ -99,6 +103,10 @@ SENSITIVE_ATTRIBUTE_TERMS: Set[str] = {
     "징계", "경고", "주의", "불이익",
     # 기타 민감 정보
     "급여", "연봉", "보너스", "인센티브",
+    # 개인 식별 정보
+    "id", "아이디", "이름", "성명", "주소", "주민번호",
+    "이메일", "전화번호", "연락처", "휴대폰",
+    "직급", "직책", "부서", "입사일", "근속",
 }
 
 # 1인칭 표현 (본인 요청은 허용)
@@ -179,11 +187,66 @@ class PrivacyQueryGate:
 
     def _is_first_person_query(self, query: str) -> bool:
         """1인칭 개인화 요청인지 판단"""
+        # 1인칭 개인정보 조회 패턴을 먼저 체크 (가장 우선순위)
+        # "내 부서", "내 직급", "내 이메일" 등은 1인칭으로 처리
+        # 공백 없이도 매칭되도록 하고, 조사(은/는/이/가/을/를)가 있어도 매칭되도록 함
+        # "내 직급은?", "내 이메일이 궁금해", "내 이메일이 뭐야?" 같은 패턴도 매칭
+        personal_info_keywords = ["부서", "직급", "직책", "이메일", "전화번호", "연락처", "입사일", "근속", "정보", "프로필"]
+        first_person_terms = ["내", "나의", "제", "저의", "본인"]
+        
+        # 간단한 키워드 매칭으로 먼저 체크 (더 확실함)
+        query_lower = query.lower()
+        for first_term in first_person_terms:
+            for keyword in personal_info_keywords:
+                # "내 이메일", "내이메일", "내 이메일이", "내이메일이" 등 다양한 패턴
+                if first_term in query_lower and keyword in query_lower:
+                    # "내"와 키워드가 모두 포함되어 있고, 순서가 맞는지 확인
+                    first_idx = query_lower.find(first_term)
+                    keyword_idx = query_lower.find(keyword)
+                    if first_idx < keyword_idx:  # "내"가 키워드보다 앞에 있어야 함
+                        logger.info(f"[PrivacyGate] 1인칭 개인정보 패턴 매칭 (키워드): first_term={first_term}, keyword={keyword}, query={query[:80]}")
+                        return True
+        
+        # 정규식 패턴으로도 체크 (더 정확한 매칭)
+        for first_term in first_person_terms:
+            for keyword in personal_info_keywords:
+                # "내 직급", "내직급", "내 직급은", "내직급은", "내 이메일이", "내 이메일이 뭐야" 등 다양한 패턴 매칭
+                # 조사(은/는/이/가/을/를)와 질문형 표현(뭐야/뭔지/어떻게/어디)이 있어도 매칭되도록 함
+                # 패턴을 더 유연하게: 조사와 질문형 표현이 선택적이도록
+                patterns = [
+                    rf"{re.escape(first_term)}\s*{re.escape(keyword)}",  # "내 이메일"
+                    rf"{re.escape(first_term)}{re.escape(keyword)}",  # "내이메일"
+                    rf"{re.escape(first_term)}\s*{re.escape(keyword)}[은는이가을를]",  # "내 이메일이"
+                    rf"{re.escape(first_term)}{re.escape(keyword)}[은는이가을를]",  # "내이메일이"
+                    rf"{re.escape(first_term)}\s*{re.escape(keyword)}[은는이가을를]?\s*(뭐야|뭔지|어떻게|어디|궁금|알려|보여|확인|조회)",  # "내 이메일이 뭐야"
+                    rf"{re.escape(first_term)}{re.escape(keyword)}[은는이가을를]?\s*(뭐야|뭔지|어떻게|어디|궁금|알려|보여|확인|조회)",  # "내이메일이 뭐야"
+                ]
+                for pattern in patterns:
+                    if re.search(pattern, query, re.IGNORECASE):
+                        logger.info(f"[PrivacyGate] 1인칭 개인정보 패턴 매칭 (정규식): pattern={pattern}, query={query[:80]}")
+                        return True
+        
+        # 한글 이름 패턴 감지 (2-4글자 한글 이름)
+        # 예: "최기민", "홍길동", "김철수" 등
+        # 주의: "부서", "직급" 같은 단어는 위에서 이미 처리되었으므로 여기서는 실제 이름만 감지
+        korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
+        has_korean_name = bool(re.search(korean_name_pattern, query))
+        
+        # 영문 이름 패턴 감지 (대문자로 시작하는 2-3단어)
+        # 예: "John Smith", "Kim", "Lee" 등
+        english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
+        has_english_name = bool(re.search(english_name_pattern, query))
+        
+        # 이름이 있으면 1인칭이 아님 (다른 사람 질문)
+        if has_korean_name or has_english_name:
+            return False
+
         # 1인칭 표현이 있고, 3인칭/타인 표현이 없으면 개인화 요청
         has_first = bool(self._first_person_pattern.search(query))
         has_third = bool(self._third_person_pattern.search(query))
 
         # "내 팀원" 같은 경우는 타인 요청으로 처리
+        # 하지만 "내 부서", "내 직급" 같은 1인칭 개인정보 조회는 위에서 이미 처리됨
         has_target = bool(self._target_pattern.search(query))
 
         if has_first and not has_third and not has_target:
@@ -216,16 +279,64 @@ class PrivacyQueryGate:
         normalized_query = query.lower().strip()
 
         # 1인칭 개인화 요청 체크 (먼저 확인)
-        result.is_first_person = self._is_first_person_query(normalized_query)
+        # 원본 쿼리와 정규화된 쿼리 모두 체크 (한글 패턴 매칭을 위해)
+        result.is_first_person = self._is_first_person_query(query) or self._is_first_person_query(normalized_query)
+        
+        # 디버깅: 1인칭 체크 결과 로그
+        logger.debug(
+            f"[PrivacyGate] 1인칭 체크 결과: query={query[:80]}, "
+            f"is_first_person={result.is_first_person}, "
+            f"original_result={self._is_first_person_query(query)}, "
+            f"normalized_result={self._is_first_person_query(normalized_query)}"
+        )
+        
+        # 이름이 포함된 질문은 무조건 차단 (다른 사람의 개인정보 요청)
+        # "한규화의", "최기민의" 같은 소유격 표현도 감지
+        korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
+        korean_name_with_possessive = r'[가-힣]{2,4}의'  # "한규화의", "최기민의" 등
+        english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
+        has_korean_name = bool(re.search(korean_name_pattern, query)) or bool(re.search(korean_name_with_possessive, query))
+        has_english_name = bool(re.search(english_name_pattern, query))
+        
+        if (has_korean_name or has_english_name) and not result.is_first_person:
+            # 이름이 있고 1인칭이 아니면 다른 사람의 개인정보 요청
+            # 민감 속성(이메일, 부서, 직급 등)이 포함되어 있는지 확인
+            matched_sensitive = self._find_matches(normalized_query, self._sensitive_pattern)
+            if matched_sensitive:
+                result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                result.blocked = True
+                result.reason = (
+                    f"다른 사람의 개인정보 요청 감지: "
+                    f"이름={has_korean_name or has_english_name}, "
+                    f"민감속성={matched_sensitive}"
+                )
+                result.block_response = PRIVACY_BLOCK_RESPONSE
+                logger.warning(
+                    f"[PrivacyGate] BLOCKED - 다른 사람의 개인정보 요청: "
+                    f"query_preview={query[:80]}..."
+                )
+                return result
+        
         if result.is_first_person:
-            logger.debug(f"[PrivacyGate] 1인칭 개인화 요청으로 허용: {query[:50]}...")
+            logger.info(f"[PrivacyGate] 1인칭 개인화 요청으로 허용: query={query[:80]}, is_first_person={result.is_first_person}")
             result.decision = PrivacyGateDecision.ALLOW
             return result
+        
+        # 1인칭이 아닌 경우에만 키워드 매칭 및 점수 계산 진행
+        logger.debug(f"[PrivacyGate] 1인칭이 아님, 키워드 매칭 진행: query={query[:80]}, is_first_person={result.is_first_person}")
 
         # 키워드 매칭
         result.matched_target_terms = self._find_matches(normalized_query, self._target_pattern)
         result.matched_action_terms = self._find_matches(normalized_query, self._action_pattern)
         result.matched_sensitive_terms = self._find_matches(normalized_query, self._sensitive_pattern)
+        
+        # 디버깅: 1인칭이 아닌데 민감 속성이 포함된 경우 로그
+        if result.matched_sensitive_terms and not result.is_first_person:
+            logger.debug(
+                f"[PrivacyGate] 1인칭이 아닌 민감 속성 감지: "
+                f"query={query[:80]}, is_first_person={result.is_first_person}, "
+                f"sensitive={result.matched_sensitive_terms}"
+            )
 
         # 점수 계산
         if result.matched_target_terms:
