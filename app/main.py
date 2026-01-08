@@ -73,6 +73,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"LLM_MODEL_NAME: {settings.LLM_MODEL_NAME}")
     logger.info(f"RAGFLOW_BASE_URL: {settings.ragflow_base_url}")
 
+    # Milvus 설정 로깅
+    logger.info(f"MILVUS_ENABLED: {settings.MILVUS_ENABLED}")
+    logger.info(f"MILVUS_HOST: {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
+    logger.info(f"MILVUS_COLLECTION_NAME: {settings.MILVUS_COLLECTION_NAME}")
+    logger.info(f"RETRIEVAL_BACKEND: {settings.RETRIEVAL_BACKEND}")
+
     # Phase 49: EDUCATION dataset_id allowlist 로깅 (운영 시 불일치 감지용)
     from app.clients.milvus_client import get_education_dataset_ids
     edu_dataset_ids = get_education_dataset_ids()
