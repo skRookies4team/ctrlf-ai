@@ -7,23 +7,23 @@ from prometheus_client import (
 )
 import time
 
-# 🔹 Router (prefix 없음!)
+# 🔹 Router
 metrics_router = APIRouter()
 
 # ================================
-# Prometheus Metrics 정의
+# Prometheus Metrics
 # ================================
 
 REQUEST_COUNT = Counter(
     "ctrlf_ai_requests_total",
     "Total AI requests",
-    ["route", "method", "status", "domain", "model_name", "rag_used"]
+    ["route", "method", "status", "domain", "model_name", "rag_used"],
 )
 
 REQUEST_LATENCY = Histogram(
     "ctrlf_ai_request_latency_seconds",
     "AI request latency",
-    ["route", "method", "domain", "model_name", "rag_used"]
+    ["route", "method", "domain", "model_name", "rag_used"],
 )
 
 # ================================
@@ -32,9 +32,6 @@ REQUEST_LATENCY = Histogram(
 
 @metrics_router.get("/metrics")
 def metrics():
-    """
-    Prometheus scrape endpoint
-    """
     return Response(
         generate_latest(),
         media_type=CONTENT_TYPE_LATEST,
@@ -49,9 +46,9 @@ async def prometheus_middleware(request: Request, call_next):
     response = await call_next(request)
     elapsed = time.time() - start
 
-    # RequestContextMiddleware에서 이미 세팅돼 있다고 가정
-    domain = str(getattr(request.state, "domain", "UNKNOWN") or "UNKNOWN")
-    model_name = str(getattr(request.state, "model_name", "UNKNOWN") or "UNKNOWN")
+    # 🔑 반드시 request.state 에서만 읽는다
+    domain = getattr(request.state, "domain", "UNKNOWN") or "UNKNOWN"
+    model_name = getattr(request.state, "model_name", "UNKNOWN") or "UNKNOWN"
     rag_used = str(bool(getattr(request.state, "rag_used", False)))
 
     REQUEST_COUNT.labels(

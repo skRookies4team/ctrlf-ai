@@ -1,211 +1,73 @@
 # =============================================================================
-# ctrlf-ai Docker Compose 설정
-# Phase 8: Docker Compose 통합 테스트 환경
-# Phase 9: mock/real 모드 프로필 지원
-# =============================================================================
+# ctrlf-ai Docker Compose 설정 (REAL ONLY)
 #
-# 사용법:
-#   Mock 모드 (기본값, 통합 테스트용):
-#     docker compose --profile mock up -d
-#     pytest -m integration -v
+# ⚠️ NOTE
+# - mock / profile / extends 기반 구조는 초기 통합 테스트용 설계
+# - 현재는 REAL 환경에서 LLMOps / Observability 검증에 집중
+# - mock 관련 서비스는 제거하되, 주석은 설계 이력 보존용으로 유지
 #
-#   Real 모드 (실제 서비스 연동):
-#     export RAGFLOW_BASE_URL_REAL=http://real-ragflow:8080
-#     export LLM_BASE_URL_REAL=http://real-llm:8001
-#     export BACKEND_BASE_URL_REAL=http://real-backend:8080
-#     docker compose --profile real up -d
-#     pytest -m real_integration -v
-#
+# 사용법 (REAL):
+#   export RAGFLOW_BASE_URL_REAL=...
+#   export LLM_BASE_URL_REAL=...
+#   export BACKEND_BASE_URL_REAL=...
+#   docker compose up -d --build
 # =============================================================================
 
 services:
   # =============================================================================
-  # AI Gateway (ctrlf-ai) - 베이스 서비스 (직접 실행 X, extends용)
-  # Mock/Real 프로필에서 상속받아 사용
+  # AI Gateway (REAL)
   # =============================================================================
   ai-gateway:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: ctrlf-ai-gateway
+    ports:
+      - "8000:8000"
     environment:
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
       - LOG_LEVEL=DEBUG
+      - AI_ENV=real
+
+      # Elasticsearch (Logs / Search)
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-      - AI_ENV=${AI_ENV:-mock}
-      - RAGFLOW_BASE_URL_MOCK=http://ragflow:8080
-      - LLM_BASE_URL_MOCK=http://llm-internal:8001
-      - BACKEND_BASE_URL_MOCK=http://backend-mock:8081
-      - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:-}
-      - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:-}
-      - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:-}
-      - PII_BASE_URL=
-      - PII_ENABLED=true
-      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-ctrlf-b2a-x7k9m2p4q8r1}
-      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-ctrlf-r2a-w3e5t7y9u2i4}
-      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-ctrlf-a2b-z6x8c1v3b5n7}
-      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-ctrlf-a2b-h4j6k8l0m2n4}
+
+      # ===============================
+      # REAL External Dependencies
+      # ===============================
+      - MILVUS_ENABLED=true
+      - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
+      - MILVUS_PORT=${MILVUS_PORT:-19540}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
+
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_EMBED_MODEL=text-embedding-3-large
+      - OPENAI_EMBED_DIM=3072
+      - EMBEDDING_DIMENSION=3072
+
+      - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL}
+      - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL}
+      - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL}
+      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
+      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN}
 
     networks:
       - ctrlf-net
 
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
 
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
 
   # =============================================================================
-  # AI Gateway - Mock 프로필 전용
-  # Mock 서비스 의존성이 있는 버전
+  # Elasticsearch
   # =============================================================================
-  ai-gateway-mock:
-    extends:
-      service: ai-gateway
-    container_name: ctrlf-ai-gateway-mock
-    ports:
-      - "8000:8000"
-    profiles:
-      - mock
-    environment:
-      - AI_ENV=mock
-      - MILVUS_ENABLED=true
-      - RAGFLOW_BASE_URL_MOCK=http://ragflow:8080
-      - LLM_BASE_URL_MOCK=http://llm-internal:8001
-      - BACKEND_BASE_URL_MOCK=http://backend-mock:8081
-    depends_on:
-      elasticsearch:      # 👈 공통 종속성을 여기로 이동
-        condition: service_healthy
-      ragflow:
-        condition: service_healthy
-      llm-internal:
-        condition: service_healthy
-      backend-mock:
-        condition: service_healthy
-
-  # =============================================================================
-  # AI Gateway - Real 프로필 전용
-  # 외부 서비스에 직접 연결 (Mock 서비스 의존성 없음)
-  # =============================================================================
-  ai-gateway-real:
-    extends:
-      service: ai-gateway
-    container_name: ctrlf-ai-gateway-real
-    ports:
-      - "8000:8000"
-    profiles:
-      - real
-    environment:
-      - AI_ENV=real
-      # Milvus 설정
-      - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
-      - MILVUS_HOST=${MILVUS_HOST:-localhost}
-      - MILVUS_PORT=${MILVUS_PORT:-19540}
-      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
-      - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
-      # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
-      - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
-      # Real URL은 반드시 외부에서 환경변수로 설정해야 함
-      - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL:?RAGFLOW_BASE_URL_REAL must be set for real mode}
-      - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL:?LLM_BASE_URL_REAL must be set for real mode}
-      - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL:?BACKEND_BASE_URL_REAL must be set for real mode}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
-      # Phase 57 테스트: anchor_gate 완화
-      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
-      # Phase 58: Quality Gate 설정
-      - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
-      - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
-      - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
-
-      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY:?RAGFLOW_API_KEY must be set for real mode}
-      # BACKEND_INTERNAL_TOKEN은 RAGFlow 서버의 AI_TO_RAGFLOW_TOKEN과 일치해야 함
-      # RAGFlow 서버는 AI_TO_RAGFLOW_TOKEN=${RAGFLOW_API_KEY}로 설정되어 있음
-      # 코드에서 BACKEND_INTERNAL_TOKEN이 없으면 RAGFLOW_API_KEY를 사용하도록 처리됨
-      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
-      # RouterOrchestrator 활성화 (EDU_RESUME_CHECK 등 개인화 라우팅 지원)
-      - ROUTER_ORCHESTRATOR_ENABLED=true
-      # 개인화 모드: mock (백엔드 없이 mock 데이터 사용), auto (백엔드 시도 후 실패시 mock), real (백엔드 필수)
-      - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-mock}
-
-    depends_on:
-      elasticsearch:      # 👈 공통 종속성을 여기로 이동
-        condition: service_healthy
-    # Real 모드에서는 Mock 서비스 의존성 없음일
-
-  # =============================================================================
-  # Mock RAGFlow 서비스 - RAG 검색 API (Mock 프로필 전용)
-  # =============================================================================
-  ragflow:
-    build:
-      context: ./mock_ragflow
-      dockerfile: Dockerfile
-    container_name: ctrlf-mock-ragflow
-    profiles:
-      - mock
-    ports:
-      - "8080:8080"
-    environment:
-      - LOG_LEVEL=DEBUG
-    networks:
-      - ctrlf-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-  # =============================================================================
-  # Mock LLM 서비스 - 내부 LLM HTTP API (Mock 프로필 전용)
-  # =============================================================================
-  llm-internal:
-    build:
-      context: ./mock_llm
-      dockerfile: Dockerfile
-    container_name: ctrlf-mock-llm
-    profiles:
-      - mock
-    ports:
-      - "8001:8001"
-    environment:
-      - LOG_LEVEL=DEBUG
-    networks:
-      - ctrlf-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-  # =============================================================================
-  # Mock Backend 서비스 - AI 로그 수집 API (Mock 프로필 전용)
-  # =============================================================================
-  backend-mock:
-    build:
-      context: ./mock_backend
-      dockerfile: Dockerfile
-    container_name: ctrlf-mock-backend
-    profiles:
-      - mock
-    ports:
-      - "8081:8081"
-    environment:
-      - LOG_LEVEL=DEBUG
-    networks:
-      - ctrlf-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
     container_name: ctrlf-elasticsearch
@@ -219,25 +81,10 @@ services:
       - ctrlf-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9200"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.3
-    container_name: ctrlf-kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
-      - SERVER_NAME=ctrlf-kibana
-      - SERVER_HOST=0.0.0.0
-    ports:
-      - "5601:5601"
-    networks:
-      - ctrlf-net
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-
+  # =============================================================================
+  # Prometheus (Metrics)
+  # =============================================================================
   prometheus:
     image: prom/prometheus:latest
     container_name: ctrlf-prometheus
@@ -248,19 +95,37 @@ services:
     networks:
       - ctrlf-net
 
+  # =============================================================================
+  # Grafana (Dashboard)
+  # =============================================================================
   grafana:
     image: grafana/grafana:latest
     container_name: ctrlf-grafana
     ports:
       - "3000:3000"
-    networks:
-      - ctrlf-net
     depends_on:
       - prometheus
+    networks:
+      - ctrlf-net
 
+  # =============================================================================
+  # Kibana (Log Visualization)
+  # =============================================================================
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: ctrlf-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - ctrlf-net
 
 # =============================================================================
-# 네트워크 설정
+# Network
 # =============================================================================
 networks:
   ctrlf-net:

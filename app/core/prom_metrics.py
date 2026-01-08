@@ -4,7 +4,7 @@ from prometheus_client import Counter, Histogram
 # =========================
 # 1) Chat Pipeline Metrics
 # =========================
-
+#커밋용 주석 추가
 # 라우팅 결정 카운트 (왜 HR로 가냐 같은 거 추적)
 CHAT_ROUTE_DECISION_TOTAL = Counter(
     "ctrlf_ai_route_decision_total",
