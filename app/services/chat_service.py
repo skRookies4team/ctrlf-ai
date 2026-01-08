@@ -132,7 +132,7 @@ from app.services.chat.response_factory import (
     create_system_help_response,
     create_unknown_route_response,
 )
-from app.services.chat.rag_handler import RagHandler
+from app.services.chat.rag_handler import RagHandler, RagRetrievalResult
 from app.services.chat.backend_handler import BackendHandler
 from app.services.chat.message_builder import (
     MessageBuilder,
@@ -987,10 +987,55 @@ class ChatService:
             rag_search_attempted = True
             rag_start = time.perf_counter()
             # Phase AB: model 필드 직접 사용 (방식 B)
-            sources, rag_search_failed, retriever_used = await self._perform_rag_search_with_fallback(
+            # Phase 58: RagRetrievalResult로 Quality Gate 결과 포함
+            rag_result: RagRetrievalResult = await self._perform_rag_search_with_fallback(
                 masked_query, domain, req, model=ab_model
             )
+            sources = rag_result.sources
+            rag_search_failed = rag_result.failed
+            # retriever_used는 enum 또는 string일 수 있음
+            if rag_result.retriever_used:
+                retriever_used = (
+                    rag_result.retriever_used.value
+                    if hasattr(rag_result.retriever_used, 'value')
+                    else str(rag_result.retriever_used)
+                )
+            else:
+                retriever_used = None
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
+
+            # Phase 58: Quality Gate REJECT 처리
+            # insufficient_evidence=True이면 LLM 생성 없이 명확화 응답 반환
+            if rag_result.insufficient_evidence and rag_result.clarify_message:
+                logger.info(
+                    f"[QualityGate] REJECT: insufficient_evidence=True, "
+                    f"grade={rag_result.quality_grade}, action={rag_result.quality_action}, "
+                    f"min_l2={rag_result.min_l2_distance:.3f}"
+                )
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                return ChatResponse(
+                    answer=rag_result.clarify_message,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    model="quality-gate",
+                    sources=[],
+                    meta=ChatAnswerMeta(
+                        user_role=intent_result.user_role.value,
+                        used_model="quality-gate",
+                        llm_provider="none",
+                        route=route.value,
+                        intent=intent.value,
+                        domain=domain,
+                        masked=pii_input.has_pii,
+                        has_pii_input=pii_input.has_pii,
+                        has_pii_output=False,
+                        rag_used=True,
+                        rag_source_count=0,
+                        retriever_used=retriever_used,
+                        latency_ms=latency_ms,
+                        rag_latency_ms=rag_latency_ms,
+                    ),
+                )
 
             # Telemetry: RAG 메트릭 수집
             if sources:
@@ -1011,6 +1056,7 @@ class ChatService:
 
             # Phase 12: 병렬 호출에서 각각의 실패를 독립적으로 처리
             # Phase AB: model 필드 직접 사용 (방식 B)
+            # Phase 58: RagRetrievalResult로 Quality Gate 결과 포함
             rag_start = time.perf_counter()
             rag_task = self._perform_rag_search_with_fallback(
                 masked_query, domain, req, model=ab_model
@@ -1023,11 +1069,54 @@ class ChatService:
                 department=req.department,
             )
 
-            (sources, rag_search_failed, retriever_used), backend_context = await asyncio.gather(
+            rag_result, backend_context = await asyncio.gather(
                 rag_task, backend_task
             )
+            sources = rag_result.sources
+            rag_search_failed = rag_result.failed
+            # retriever_used는 enum 또는 string일 수 있음
+            if rag_result.retriever_used:
+                retriever_used = (
+                    rag_result.retriever_used.value
+                    if hasattr(rag_result.retriever_used, 'value')
+                    else str(rag_result.retriever_used)
+                )
+            else:
+                retriever_used = None
             rag_latency_ms = int((time.perf_counter() - rag_start) * 1000)
             backend_data_fetched = bool(backend_context.strip())
+
+            # Phase 58: Quality Gate REJECT 처리
+            # MIXED 경로에서도 insufficient_evidence=True이면 명확화 응답 반환
+            if rag_result.insufficient_evidence and rag_result.clarify_message:
+                logger.info(
+                    f"[QualityGate] REJECT in MIXED route: insufficient_evidence=True, "
+                    f"grade={rag_result.quality_grade}, action={rag_result.quality_action}"
+                )
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                return ChatResponse(
+                    answer=rag_result.clarify_message,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    model="quality-gate",
+                    sources=[],
+                    meta=ChatAnswerMeta(
+                        user_role=intent_result.user_role.value,
+                        used_model="quality-gate",
+                        llm_provider="none",
+                        route=route.value,
+                        intent=intent.value,
+                        domain=domain,
+                        masked=pii_input.has_pii,
+                        has_pii_input=pii_input.has_pii,
+                        has_pii_output=False,
+                        rag_used=True,
+                        rag_source_count=0,
+                        retriever_used=retriever_used,
+                        latency_ms=latency_ms,
+                        rag_latency_ms=rag_latency_ms,
+                    ),
+                )
 
             logger.info(
                 f"MIXED_BACKEND_RAG: RAG sources={len(sources)}, rag_failed={rag_search_failed}, "
