@@ -97,6 +97,7 @@ ALLOWED_EXTERNAL_LLM_HOSTS: Set[str] = {
     host.strip() for host in _env_allowed_hosts.split(",") if host.strip()
 } | {
     "api.openai.com",  # OpenAI API (관리자 대시보드에서 선택 가능)
+    "58.127.241.84",   # 내부 LLM 서버 IP (운영 환경)
 }
 
 def _is_internal_domain(url: str) -> bool:
@@ -174,11 +175,8 @@ class LLMClient:
             client: httpx.AsyncClient 인스턴스. None이면 공용 클라이언트 사용.
             timeout: HTTP 요청 타임아웃 (초). 기본 30초.
 
-        Note:
-            Phase 9: AI_ENV 환경변수에 따라 mock/real URL이 자동 선택됩니다.
         """
         settings = get_settings()
-        # Phase 9: llm_base_url 프로퍼티 사용 (mock/real 모드 자동 선택)
         self._base_url = base_url if base_url is not None else settings.llm_base_url
         self._client = client or get_async_http_client()
         self._timeout = timeout

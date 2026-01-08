@@ -10,6 +10,7 @@ LLM을 사용하여 facts에 있는 값만 사용해 답변을 구성합니다.
 - period_start/end, updated_at이 있으면 답변에 자연스럽게 포함한다.
 """
 
+import re
 from typing import Optional
 
 from app.clients.llm_client import LLMClient
@@ -22,6 +23,137 @@ from app.models.personalization import (
 )
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# 이메일/전화번호 부분 마스킹 유틸리티
+# =============================================================================
+
+
+def mask_email_partially(email: str) -> str:
+    """이메일 주소를 부분 마스킹합니다.
+    
+    예시:
+    - hong.gildong@company.com → hong****@company.com
+    - abcd@example.com → abcd****@example.com
+    - ab@example.com → a*@example.com
+    
+    Args:
+        email: 원본 이메일 주소
+    
+    Returns:
+        부분 마스킹된 이메일 주소
+    """
+    if not email or "@" not in email:
+        return email
+    
+    try:
+        local_part, domain = email.rsplit("@", 1)
+        
+        # 로컬 부분 마스킹
+        # 예: hangyeon72112@gmail.com → han**********@gmail.com (앞 3자리 + 나머지 모두 *)
+        if len(local_part) <= 1:
+            masked_local = "*"
+        elif len(local_part) <= 2:
+            masked_local = f"{local_part[0]}*"
+        elif len(local_part) <= 3:
+            # 3글자 이하: 앞 2자리 + *
+            masked_local = f"{local_part[:2]}*"
+        elif len(local_part) <= 4:
+            # 4글자: 앞 2자리 + **
+            masked_local = f"{local_part[:2]}**"
+        else:
+            # 5글자 이상: 앞 3자리 + 나머지 모두 *로 마스킹
+            remaining_length = len(local_part) - 3
+            masked_local = f"{local_part[:3]}{'*' * remaining_length}"
+        
+        return f"{masked_local}@{domain}"
+    except Exception:
+        return email
+
+
+def mask_phone_partially(phone: str) -> str:
+    """전화번호를 부분 마스킹합니다.
+    
+    예시:
+    - 010-1234-5678 → 010-****-5678
+    - 01012345678 → 010****5678
+    - 02-1234-5678 → 02-****-5678
+    
+    Args:
+        phone: 원본 전화번호
+    
+    Returns:
+        부분 마스킹된 전화번호
+    """
+    if not phone:
+        return phone
+    
+    # 숫자만 추출
+    digits = re.sub(r'[^\d]', '', phone)
+    
+    if len(digits) < 8:
+        # 너무 짧으면 완전 마스킹
+        return "***-****-****"
+    
+    # 한국 전화번호 형식: 010-1234-5678 (3-4-4) 또는 02-1234-5678 (2-4-4)
+    if len(digits) == 11:
+        # 휴대폰: 010-1234-5678
+        return f"{digits[:3]}-****-{digits[7:]}"
+    elif len(digits) == 10:
+        # 지역번호: 02-1234-5678
+        if digits.startswith("02"):
+            return f"{digits[:2]}-****-{digits[6:]}"
+        else:
+            return f"{digits[:3]}-***-{digits[6:]}"
+    else:
+        # 기타 형식: 앞 3자리만 보여주고 나머지 마스킹
+        return f"{digits[:3]}{'*' * (len(digits) - 3)}"
+
+
+def mask_emails_in_text(text: str) -> str:
+    """텍스트 내의 모든 이메일 주소를 부분 마스킹합니다."""
+    if not text:
+        return text
+    
+    email_pattern = r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'
+    
+    def replace_email(match):
+        return mask_email_partially(match.group(0))
+    
+    return re.sub(email_pattern, replace_email, text)
+
+
+def mask_phones_in_text(text: str) -> str:
+    """텍스트 내의 모든 전화번호를 부분 마스킹합니다."""
+    if not text:
+        return text
+    
+    # 한국 전화번호 패턴 (다양한 형식 지원)
+    phone_patterns = [
+        r'\b01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}\b',  # 휴대폰
+        r'\b0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}\b',    # 지역번호
+    ]
+    
+    result = text
+    for pattern in phone_patterns:
+        def replace_phone(match):
+            return mask_phone_partially(match.group(0))
+        result = re.sub(pattern, replace_phone, result)
+    
+    return result
+
+
+def is_empty_value(value: any) -> bool:
+    """값이 비어있거나 무의미한지 확인합니다."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        value_lower = value.lower().strip()
+        return not value_lower or value_lower in ['없음', 'none', 'null', 'n/a', 'na', '']
+    if isinstance(value, (int, float)):
+        return value == 0
+    return False
 
 
 # =============================================================================
@@ -116,9 +248,20 @@ class AnswerGenerator:
         if not facts.metrics and not facts.items:
             return "조회된 데이터가 없어요."
 
+        # Q16 (인사 정보 조회)는 LLM을 건너뛰고 바로 fallback 사용
+        # 이유: LLM이 개인정보 제공을 거부하는 일반 답변을 생성할 수 있음
+        # 백엔드에서 이미 포맷된 데이터를 받으므로 fallback으로 충분
+        if context.sub_intent_id == "Q16":
+            logger.debug("Q16: Using template-based fallback (skipping LLM)")
+            return self._generate_fallback(context)
+
         # LLM으로 답변 생성
         try:
             answer = await self._generate_with_llm(context)
+            # LLM이 차단되어 FALLBACK_MESSAGE가 반환된 경우 감지
+            if answer == "LLM service is not configured or unavailable. This is a fallback response. Please configure LLM_BASE_URL or check the LLM service status.":
+                logger.warning("LLM blocked or unavailable, using template-based fallback")
+                return self._generate_fallback(context)
             return answer
         except Exception as e:
             logger.warning(f"Answer generation failed, using fallback: {e}")
@@ -183,6 +326,21 @@ class AnswerGenerator:
         """
         facts = context.facts
         sub_intent_id = context.sub_intent_id
+        user_question = (context.user_question or "").lower()
+
+        # Q16: 민감한 개인정보 질문 체크
+        if sub_intent_id == "Q16":
+            # 이메일/전화번호는 부분 마스킹하여 제공 가능
+            email_phone_keywords = ['이메일', 'email', '전화번호', '휴대폰', '연락처', 'phone']
+            # 주민번호, 나이 등은 여전히 차단
+            blocked_keywords = ['주민번호', '주민등록번호', 'ssn', '나이', '생년월일']
+            
+            if any(keyword in user_question for keyword in blocked_keywords):
+                return (
+                    "개인정보나 민감정보(주민번호/나이 등)는 보안상의 이유로 "
+                    "제공할 수 없어요. 본인 정보는 사내 HR 포털이나 인사팀에 문의해 주세요."
+                )
+            # 이메일/전화번호 질문은 백엔드 응답 확인 후 부분 마스킹하여 제공 (차단하지 않음)
 
         # 인텐트별 기본 폴백 메시지
         fallback_templates = {
@@ -673,6 +831,280 @@ class AnswerGenerator:
 
         lines.append(f"\n잔여 포인트: {remaining:,}원")
         return "\n".join(lines)
+
+    def _format_q16_fallback(self, facts: PersonalizationFacts, user_question: str = "") -> str:
+        """Q16 (내 인사 정보 조회) 폴백.
+        
+        주의: 이메일, 전화번호, 주민번호 같은 민감한 개인정보는 제공하지 않습니다.
+        민감 정보 체크는 _generate_fallback에서 이미 수행됩니다.
+        
+        백엔드에서 extra 필드에 요약 정보를 제공하는 경우 우선 사용합니다.
+        사용자 질문을 분석하여 요청된 정보만 반환합니다.
+        """
+        # 사용자 질문 분석: 어떤 정보를 요청했는지 확인
+        user_question_lower = user_question.lower() if user_question else ""
+        requested_fields = set()
+        
+        # 질문에서 요청된 필드 감지
+        if any(kw in user_question_lower for kw in ['직급', '직책', 'position', 'job_title']):
+            requested_fields.add('position')
+        if any(kw in user_question_lower for kw in ['부서', 'department', 'dept']):
+            requested_fields.add('department')
+        if any(kw in user_question_lower for kw in ['이메일', 'email', '메일']):
+            requested_fields.add('email')
+        if any(kw in user_question_lower for kw in ['전화번호', '전화', '휴대폰', '연락처', 'phone', 'mobile']):
+            requested_fields.add('phone')
+        if any(kw in user_question_lower for kw in ['입사일', '입사', 'hire_date', 'hire']):
+            requested_fields.add('hire_date')
+        if any(kw in user_question_lower for kw in ['근속', 'years_of_service', 'service']):
+            requested_fields.add('years_of_service')
+        
+        # 요청된 필드가 없으면 모든 정보 반환 (기존 동작)
+        show_all = len(requested_fields) == 0
+        
+        # 1) extra 필드에서 요약 정보 확인 (백엔드가 제공한 자연어 요약 우선 사용)
+        extra = facts.extra or {}
+        summary = extra.get("summary") or extra.get("formatted_answer") or extra.get("answer")
+        
+        if summary and isinstance(summary, str) and summary.strip():
+            # 백엔드가 제공한 요약 정보가 있으면 우선 사용
+            # 이메일/전화번호 부분 마스킹 적용
+            masked_summary = mask_emails_in_text(summary.strip())
+            masked_summary = mask_phones_in_text(masked_summary)
+            
+            # 요청된 필드만 필터링 (요청이 있는 경우)
+            if not show_all:
+                filtered_lines = []
+                summary_lines = masked_summary.split('\n')
+                for line in summary_lines:
+                    line_lower = line.lower()
+                    if any(
+                        (field == 'position' and ('직급' in line_lower or '직책' in line_lower)) or
+                        (field == 'department' and '부서' in line_lower) or
+                        (field == 'email' and ('이메일' in line_lower or 'email' in line_lower)) or
+                        (field == 'phone' and ('전화' in line_lower or 'phone' in line_lower or '연락처' in line_lower)) or
+                        (field == 'hire_date' and '입사일' in line_lower) or
+                        (field == 'years_of_service' and '근속' in line_lower)
+                        for field in requested_fields
+                    ):
+                        filtered_lines.append(line)
+                
+                if filtered_lines:
+                    return '\n'.join(filtered_lines)
+                # 필터링 결과가 없으면 원본 반환 (백엔드 요약이 우선)
+            
+            return masked_summary
+        
+        # 2) extra 필드에 요약이 없으면 기존 방식으로 포맷팅
+        items = facts.items
+        metrics = facts.metrics
+        
+        # metrics에서 정보 추출
+        employee_id = metrics.get("employee_id", "")
+        name = metrics.get("name", "")
+        department = metrics.get("department", "")
+        position = metrics.get("position", "")  # 직급
+        job_title = metrics.get("job_title", "")  # 직책
+        hire_date = metrics.get("hire_date", "")
+        years_of_service = metrics.get("years_of_service", 0)
+        months_of_service = metrics.get("months_of_service", 0)
+        
+        lines = []
+        
+        # 직급/직책 정보 (요청되었거나 모든 정보 표시 시)
+        if (show_all or 'position' in requested_fields):
+            if position and not is_empty_value(position):
+                lines.append(f"직급: {position}")
+            if job_title and not is_empty_value(job_title):
+                lines.append(f"직책: {job_title}")
+        
+        # 부서 정보 (요청되었거나 모든 정보 표시 시)
+        if (show_all or 'department' in requested_fields):
+            if department and not is_empty_value(department):
+                lines.append(f"부서: {department}")
+        
+        # 입사일 정보 (요청되었거나 모든 정보 표시 시)
+        if (show_all or 'hire_date' in requested_fields):
+            if hire_date and not is_empty_value(hire_date):
+                try:
+                    # YYYY-MM-DD 형식을 YYYY년 MM월 DD일로 변환
+                    parts = hire_date.split("-")
+                    if len(parts) == 3:
+                        formatted_date = f"{parts[0]}년 {int(parts[1])}월 {int(parts[2])}일"
+                        lines.append(f"입사일: {formatted_date}")
+                except Exception:
+                    lines.append(f"입사일: {hire_date}")
+        
+        # 근속연수 (요청되었거나 모든 정보 표시 시)
+        if (show_all or 'years_of_service' in requested_fields):
+            if years_of_service > 0 or months_of_service > 0:
+                service_years = years_of_service or 0
+                service_months = months_of_service or 0
+                if service_years > 0 and service_months > 0:
+                    lines.append(f"근속연수: {service_years}년 {service_months}개월")
+                elif service_years > 0:
+                    lines.append(f"근속연수: {service_years}년")
+                elif service_months > 0:
+                    lines.append(f"근속연수: {service_months}개월")
+        
+        # metrics에서 이메일/전화번호 확인 (요청되었거나 모든 정보 표시 시, 부분 마스킹하여 제공)
+        email_found = False
+        phone_found = False
+        
+        if (show_all or 'email' in requested_fields):
+            # 우선순위: metrics.email → extra.email → items에서 찾기
+            email = metrics.get("email", "")
+            if not email or is_empty_value(email):
+                # metrics에 없으면 extra.email 확인
+                email = extra.get("email", "")
+            
+            if email and not is_empty_value(email):
+                masked_email = mask_email_partially(str(email))
+                lines.append(f"이메일: {masked_email}")
+                email_found = True
+            elif 'email' in requested_fields:
+                # metrics와 extra에 없으면 items에서 찾기
+                if items:
+                    for item in items:
+                        label = item.get("label", "")
+                        value = item.get("value", "")
+                        if ('이메일' in label.lower() or 'email' in label.lower()) and value and not is_empty_value(value):
+                            masked_email = mask_email_partially(str(value))
+                            lines.append(f"이메일: {masked_email}")
+                            email_found = True
+                            break
+                if not email_found:
+                    # items에서도 찾지 못했으면 안내 메시지
+                    lines.append("이메일 정보를 조회할 수 없어요.")
+        
+        if (show_all or 'phone' in requested_fields):
+            # 우선순위: metrics.phone → extra.phone → items에서 찾기
+            phone = metrics.get("phone", "") or metrics.get("phone_number", "") or metrics.get("mobile", "")
+            if not phone or is_empty_value(phone):
+                # metrics에 없으면 extra.phone 확인
+                phone = extra.get("phone", "") or extra.get("phone_number", "") or extra.get("mobile", "")
+            
+            if phone and not is_empty_value(phone):
+                masked_phone = mask_phone_partially(str(phone))
+                lines.append(f"전화번호: {masked_phone}")
+                phone_found = True
+            elif 'phone' in requested_fields:
+                # metrics와 extra에 없으면 items에서 찾기
+                if items:
+                    for item in items:
+                        label = item.get("label", "")
+                        value = item.get("value", "")
+                        if ('전화' in label.lower() or 'phone' in label.lower() or '연락처' in label.lower() or '휴대폰' in label.lower()) and value and not is_empty_value(value):
+                            masked_phone = mask_phone_partially(str(value))
+                            lines.append(f"전화번호: {masked_phone}")
+                            phone_found = True
+                            break
+                if not phone_found:
+                    # items에서도 찾지 못했으면 안내 메시지
+                    lines.append("전화번호 정보를 조회할 수 없어요.")
+        
+        # items에서 추가 정보 추출 (요청된 필드만 표시)
+        if items:
+            for item in items:
+                label = item.get("label", "")
+                value = item.get("value", "")
+                
+                # 빈 값 제외
+                if is_empty_value(value):
+                    continue
+                
+                # 주민번호 등은 제외
+                if any(sensitive in label.lower() for sensitive in ['주민']):
+                    continue
+                
+                # 이름은 제외 (요청하지 않은 경우)
+                if label in ['이름', '성명', 'name'] and 'name' not in requested_fields and not show_all:
+                    continue
+                
+                # 이미 표시한 정보 제외
+                if label in ['직급', '직책', '부서', '입사일', '근속연수', '이메일', '전화번호']:
+                    continue
+                
+                # 이메일/전화번호는 위에서 이미 처리했으므로 제외
+                if ('이메일' in label.lower() or 'email' in label.lower()) and email_found:
+                    continue
+                if ('전화' in label.lower() or 'phone' in label.lower() or '연락처' in label.lower() or '휴대폰' in label.lower()) and phone_found:
+                    continue
+                
+                # 요청된 필드만 표시 (show_all이 아닌 경우)
+                if not show_all:
+                    # items의 label이 요청된 필드와 매칭되는지 확인
+                    label_lower = label.lower()
+                    should_include = False
+                    
+                    if 'position' in requested_fields and ('직급' in label_lower or '직책' in label_lower):
+                        should_include = True
+                    elif 'department' in requested_fields and '부서' in label_lower:
+                        should_include = True
+                    elif 'email' in requested_fields and ('이메일' in label_lower or 'email' in label_lower):
+                        should_include = True
+                    elif 'phone' in requested_fields and ('전화' in label_lower or 'phone' in label_lower or '연락처' in label_lower):
+                        should_include = True
+                    elif 'hire_date' in requested_fields and '입사일' in label_lower:
+                        should_include = True
+                    elif 'years_of_service' in requested_fields and '근속' in label_lower:
+                        should_include = True
+                    
+                    if not should_include:
+                        continue
+                
+                # 이메일/전화번호인 경우 부분 마스킹
+                if '이메일' in label.lower() or 'email' in label.lower():
+                    masked_value = mask_email_partially(str(value))
+                    lines.append(f"{label}: {masked_value}")
+                elif '전화' in label.lower() or 'phone' in label.lower() or '연락처' in label.lower() or '휴대폰' in label.lower():
+                    masked_value = mask_phone_partially(str(value))
+                    lines.append(f"{label}: {masked_value}")
+                elif label and value:
+                    lines.append(f"{label}: {value}")
+        
+        if lines:
+            return "\n".join(lines)
+        
+        # 정보가 없으면 기본 메시지
+        return "인사 정보를 조회할 수 없어요. 사내 HR 포털이나 인사팀에 문의해 주세요."
+
+    def _format_q17_fallback(self, facts: PersonalizationFacts) -> str:
+        """Q17 (내 팀/부서 정보 조회) 폴백."""
+        metrics = facts.metrics
+        items = facts.items
+        
+        team_name = metrics.get("team_name", "")
+        department = metrics.get("department", "")
+        team_leader = metrics.get("team_leader", "")
+        team_size = metrics.get("team_size", 0)
+        department_size = metrics.get("department_size", 0)
+        
+        lines = []
+        
+        if team_name:
+            lines.append(f"팀명: {team_name}")
+        if department:
+            lines.append(f"부서: {department}")
+        if team_leader:
+            lines.append(f"팀장: {team_leader}")
+        if team_size > 0:
+            lines.append(f"팀 인원: {team_size}명")
+        if department_size > 0:
+            lines.append(f"부서 인원: {department_size}명")
+        
+        # items에서 추가 정보 추출
+        if items:
+            for item in items:
+                label = item.get("label", "")
+                value = item.get("value", "")
+                if label and value:
+                    lines.append(f"{label}: {value}")
+        
+        if lines:
+            return "\n".join(lines)
+        
+        return "팀/부서 정보를 조회할 수 없어요."
 
     def _format_q18_fallback(self, facts: PersonalizationFacts) -> str:
         """Q18 (보안 교육 이수 현황) 폴백."""

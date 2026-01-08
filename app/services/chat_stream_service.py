@@ -45,6 +45,11 @@ from app.services.forbidden_query_filter import (
     ForbiddenCheckResult,
     get_forbidden_query_filter,
 )
+from app.services.chat_service import ChatService
+from app.services.router_orchestrator import RouterOrchestrator
+from app.models.chat import ChatRequest
+from app.models.router_types import Tier0Intent
+from app.services.personalization_mapper import to_personalization_q
 
 logger = get_logger(__name__)
 
@@ -171,6 +176,8 @@ class ChatStreamService:
         self,
         tracker: Optional[InFlightTracker] = None,
         client: Optional[httpx.AsyncClient] = None,
+        chat_service: Optional[ChatService] = None,
+        router_orchestrator: Optional[RouterOrchestrator] = None,
     ) -> None:
         self._tracker = tracker or get_in_flight_tracker()
         self._client = client or get_async_http_client()
@@ -186,6 +193,10 @@ class ChatStreamService:
             )
         else:
             self._forbidden_filter = None
+
+        # 개인화 처리를 위한 서비스 초기화
+        self._chat_service = chat_service or ChatService()
+        self._router_orchestrator = router_orchestrator or RouterOrchestrator()
 
     async def stream_chat(
         self,
@@ -343,7 +354,134 @@ class ChatStreamService:
             )
             yield meta_event.to_ndjson()
 
-            # 3. LLM 스트리밍 호출
+            # =================================================================
+            # 3-1. 개인화 요청 체크 (ChatService로 처리)
+            # =================================================================
+            if user_query:
+                try:
+                    # RouterOrchestrator로 개인화 요청인지 확인
+                    orchestration_result = await self._router_orchestrator.route(
+                        user_query=user_query,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                    )
+                    
+                    # BACKEND_STATUS이고 sub_intent_id가 있으면 개인화 요청 가능성 체크
+                    if (orchestration_result.router_result.tier0_intent == Tier0Intent.BACKEND_STATUS
+                        and orchestration_result.router_result.sub_intent_id):
+                        sub_intent_id = orchestration_result.router_result.sub_intent_id
+                        personalization_q = to_personalization_q(sub_intent_id, user_query)
+                        
+                        if personalization_q:
+                            # 개인화 요청이면 ChatService로 처리하고 스트리밍 형식으로 변환
+                            logger.info(
+                                f"[Stream] Personalization request detected: "
+                                f"sub_intent_id={sub_intent_id} -> Q={personalization_q}"
+                            )
+                            
+                            try:
+                                # ChatRequest 생성
+                                chat_request = ChatRequest(
+                                    session_id=request.session_id,
+                                    user_id=request.user_id,
+                                    user_role=request.user_role,
+                                    department=request.department,
+                                    domain=request.domain,
+                                    channel=request.channel,
+                                    messages=request.messages,
+                                    llm_model=request.llm_model,  # LLM 프로바이더 선택
+                                    model=None,  # A/B 테스트 임베딩 모델은 기본값 사용
+                                )
+                                
+                                # ChatService로 개인화 응답 생성
+                                chat_response = await self._chat_service.handle_chat(chat_request)
+                                
+                                # 응답을 스트리밍 형식으로 변환
+                                answer_text = chat_response.answer
+                                
+                                # 응답이 비어있으면 에러 메시지 사용
+                                if not answer_text or len(answer_text.strip()) == 0:
+                                    logger.warning("[Stream] Personalization response is empty")
+                                    answer_text = "개인화 정보를 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+                                
+                                if not ttfb_recorded:
+                                    metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
+                                    ttfb_recorded = True
+                                
+                                # 답변을 문자 단위로 스트리밍
+                                for char in answer_text:
+                                    token_event = StreamTokenEvent(text=char)
+                                    yield token_event.to_ndjson()
+                                    accumulated_response += char
+                                    await asyncio.sleep(0.005)  # 자연스러운 스트리밍을 위한 딜레이
+                                
+                                metrics.total_tokens = len(answer_text)
+                                metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                                metrics.completed = True
+                                
+                                # DONE 이벤트 전송
+                                done_event = StreamDoneEvent(
+                                    finish_reason="stop",
+                                    elapsed_ms=metrics.total_elapsed_ms,
+                                    ttfb_ms=metrics.ttfb_ms,
+                                    total_tokens=metrics.total_tokens,
+                                )
+                                yield done_event.to_ndjson()
+                                self._tracker.complete_request(request_id, accumulated_response)
+                                
+                                # 메트릭 로깅
+                                self._log_metrics(metrics)
+                                
+                                # 텔레메트리 이벤트 발행
+                                self._emit_telemetry_event(
+                                    request=request,
+                                    metrics=metrics,
+                                    error_code=None,
+                                )
+                                telemetry_emitted = True
+                                return
+                                
+                            except Exception as e:
+                                # ChatService 호출 중 에러 발생
+                                logger.error(f"[Stream] Personalization ChatService call failed: {e}", exc_info=True)
+                                # 에러 메시지를 스트리밍
+                                error_text = "개인화 정보를 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+                                if not ttfb_recorded:
+                                    metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
+                                    ttfb_recorded = True
+                                
+                                for char in error_text:
+                                    token_event = StreamTokenEvent(text=char)
+                                    yield token_event.to_ndjson()
+                                    accumulated_response += char
+                                    await asyncio.sleep(0.005)
+                                
+                                metrics.total_tokens = len(error_text)
+                                metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                                metrics.completed = True
+                                
+                                done_event = StreamDoneEvent(
+                                    finish_reason="stop",
+                                    elapsed_ms=metrics.total_elapsed_ms,
+                                    ttfb_ms=metrics.ttfb_ms,
+                                    total_tokens=metrics.total_tokens,
+                                )
+                                yield done_event.to_ndjson()
+                                self._tracker.complete_request(request_id, accumulated_response)
+                                self._log_metrics(metrics)
+                                self._emit_telemetry_event(
+                                    request=request,
+                                    metrics=metrics,
+                                    error_code=None,
+                                )
+                                telemetry_emitted = True
+                                return
+                            
+                except Exception as e:
+                    # 개인화 체크 중 에러가 발생하면 로그만 남기고 일반 LLM 스트리밍으로 fallback
+                    logger.warning(f"[Stream] Personalization check failed, falling back to LLM: {e}", exc_info=True)
+
+            # 3. LLM 스트리밍 호출 (개인화 요청이 아닌 경우)
             if not self._settings.llm_base_url:
                 # LLM 미설정 시 fallback
                 logger.warning("LLM not configured, sending fallback response")

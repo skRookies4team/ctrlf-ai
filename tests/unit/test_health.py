@@ -25,25 +25,18 @@ def disable_service_urls():
     Readiness 테스트를 위해 서비스 URL을 비활성화합니다.
 
     실제 서비스에 연결하지 않도록 모든 URL을 빈 문자열로 설정합니다.
-    직접 URL과 Mock URL 모두 비활성화합니다.
     """
     # 원본 값 저장
-    originals = {
-        "RAGFLOW_BASE_URL": os.environ.get("RAGFLOW_BASE_URL"),
-        "RAGFLOW_BASE_URL_MOCK": os.environ.get("RAGFLOW_BASE_URL_MOCK"),
-        "LLM_BASE_URL": os.environ.get("LLM_BASE_URL"),
-        "LLM_BASE_URL_MOCK": os.environ.get("LLM_BASE_URL_MOCK"),
-        "BACKEND_BASE_URL": os.environ.get("BACKEND_BASE_URL"),
-        "BACKEND_BASE_URL_MOCK": os.environ.get("BACKEND_BASE_URL_MOCK"),
-    }
+    url_keys = [
+        "RAGFLOW_BASE_URL", "RAGFLOW_BASE_URL_REAL",
+        "LLM_BASE_URL", "LLM_BASE_URL_REAL",
+        "BACKEND_BASE_URL", "BACKEND_BASE_URL_REAL",
+    ]
+    originals = {key: os.environ.get(key) for key in url_keys}
 
     # 모든 URL 비활성화
-    os.environ["RAGFLOW_BASE_URL"] = ""
-    os.environ["RAGFLOW_BASE_URL_MOCK"] = ""
-    os.environ["LLM_BASE_URL"] = ""
-    os.environ["LLM_BASE_URL_MOCK"] = ""
-    os.environ["BACKEND_BASE_URL"] = ""
-    os.environ["BACKEND_BASE_URL_MOCK"] = ""
+    for key in url_keys:
+        os.environ[key] = ""
     clear_settings_cache()
 
     yield

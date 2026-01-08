@@ -37,10 +37,15 @@ from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.telemetry.middleware import RequestContextMiddleware
+from app.metrics.prometheus import prometheus_middleware
 from app.telemetry.publisher import (
     TelemetryPublisher,
     get_telemetry_publisher,
     set_telemetry_publisher,
+)
+from app.metrics.prometheus import (
+    prometheus_middleware,
+    metrics_router,
 )
 
 # 설정 및 로거 초기화
@@ -68,10 +73,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(settings)
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info(f"Environment: {settings.APP_ENV}")
-    logger.info(f"AI_ENV: {settings.AI_ENV}")
     logger.info(f"LLM_BASE_URL: {settings.llm_base_url}")
     logger.info(f"LLM_MODEL_NAME: {settings.LLM_MODEL_NAME}")
     logger.info(f"RAGFLOW_BASE_URL: {settings.ragflow_base_url}")
+
+    # Milvus 설정 로깅
+    logger.info(f"MILVUS_ENABLED: {settings.MILVUS_ENABLED}")
+    logger.info(f"MILVUS_HOST: {settings.MILVUS_HOST}:{settings.MILVUS_PORT}")
+    logger.info(f"MILVUS_COLLECTION_NAME: {settings.MILVUS_COLLECTION_NAME}")
+    logger.info(f"RETRIEVAL_BACKEND: {settings.RETRIEVAL_BACKEND}")
 
     # Phase 49: EDUCATION dataset_id allowlist 로깅 (운영 시 불일치 감지용)
     from app.clients.milvus_client import get_education_dataset_ids
@@ -187,6 +197,8 @@ app.add_middleware(
 # Request Context 미들웨어 (Telemetry 헤더 전파)
 # X-Trace-Id, X-User-Id, X-Dept-Id, X-Conversation-Id, X-Turn-Id 헤더를 컨텍스트에 저장
 app.add_middleware(RequestContextMiddleware)
+# Prometheus Metrics Middleware
+app.middleware("http")(prometheus_middleware)
 
 # 라우터 등록
 #
@@ -210,6 +222,8 @@ app.add_middleware(RequestContextMiddleware)
 #   app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 #   app.include_router(rag.router, prefix="/api/v1", tags=["RAG"])
 app.include_router(health.router, prefix="", tags=["Health"])
+# Prometheus Metrics Endpoint
+app.include_router(metrics_router, tags=["Metrics"])
 
 # AI API routers
 # - POST /ai/chat/messages: AI chat response generation

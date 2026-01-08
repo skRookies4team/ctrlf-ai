@@ -16,17 +16,12 @@ print()
 
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
 BACKEND_BASE_URL_REAL = os.getenv("BACKEND_BASE_URL_REAL")
-BACKEND_BASE_URL_MOCK = os.getenv("BACKEND_BASE_URL_MOCK", "http://backend-mock:8081")
-AI_ENV = os.getenv("AI_ENV", "mock")
 BACKEND_API_TOKEN = os.getenv("BACKEND_API_TOKEN")
 BACKEND_INTERNAL_TOKEN = os.getenv("BACKEND_INTERNAL_TOKEN")
 
-print(f"AI_ENV: {AI_ENV}")
-print()
 print("환경 변수:")
 print(f"  BACKEND_BASE_URL: {BACKEND_BASE_URL or '(설정되지 않음)'}")
 print(f"  BACKEND_BASE_URL_REAL: {BACKEND_BASE_URL_REAL or '(설정되지 않음)'}")
-print(f"  BACKEND_BASE_URL_MOCK: {BACKEND_BASE_URL_MOCK}")
 print(f"  BACKEND_API_TOKEN: {'설정됨' if BACKEND_API_TOKEN else '(설정되지 않음)'}")
 print(f"  BACKEND_INTERNAL_TOKEN: {'설정됨' if BACKEND_INTERNAL_TOKEN else '(설정되지 않음)'}")
 print()
@@ -35,12 +30,12 @@ print()
 if BACKEND_BASE_URL:
     effective_url = BACKEND_BASE_URL
     source = "BACKEND_BASE_URL (직접 설정)"
-elif AI_ENV == "real":
+elif BACKEND_BASE_URL_REAL:
     effective_url = BACKEND_BASE_URL_REAL
-    source = "BACKEND_BASE_URL_REAL (AI_ENV=real)"
+    source = "BACKEND_BASE_URL_REAL"
 else:
-    effective_url = BACKEND_BASE_URL_MOCK
-    source = "BACKEND_BASE_URL_MOCK (AI_ENV=mock)"
+    effective_url = None
+    source = "(미설정)"
 
 print("=" * 80)
 print("실제 사용될 백엔드 URL")
@@ -53,14 +48,10 @@ if not effective_url:
     print("[ERROR] 백엔드 URL이 설정되지 않았습니다!")
     print()
     print("해결 방법:")
-    if AI_ENV == "real":
-        print("  1. .env 파일에 다음을 추가:")
-        print("     BACKEND_BASE_URL=http://localhost:9003")
-        print("     또는")
-        print("     BACKEND_BASE_URL_REAL=http://localhost:9003")
-    else:
-        print("  1. .env 파일에 다음을 추가:")
-        print("     BACKEND_BASE_URL=http://localhost:9003")
+    print("  1. .env 파일에 다음을 추가:")
+    print("     BACKEND_BASE_URL=http://localhost:9003")
+    print("     또는")
+    print("     BACKEND_BASE_URL_REAL=http://localhost:9003")
     print()
     print("  2. AI Gateway를 재시작하세요")
 else:
@@ -74,4 +65,3 @@ else:
     print("  2. AI Gateway 로그에서 다음 메시지를 확인하세요:")
     print("     - '[AI_LOG] Backend saved' (성공)")
     print("     - '[AI_LOG] Backend save failed' (실패)")
-

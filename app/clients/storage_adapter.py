@@ -635,7 +635,7 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         if not self._backend_base_url:
             raise ValueError(
                 "Backend base URL not configured. "
-                "Set BACKEND_BASE_URL or BACKEND_BASE_URL_MOCK/REAL."
+                "Set BACKEND_BASE_URL or BACKEND_BASE_URL_REAL."
             )
 
     def _get_headers(self) -> dict:

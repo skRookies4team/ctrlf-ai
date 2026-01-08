@@ -160,6 +160,10 @@ class SourceSetDocument(BaseModel):
         alias="sourceUrl",
         description="문서 원본 URL (S3 presigned URL 등)",
     )
+    version: int = Field(
+        ...,
+        description="문서 버전 (멱등성 캐시 키로 사용)",
+    )
     status: DocumentStatus = Field(
         default=DocumentStatus.QUEUED,
         description="문서 상태",

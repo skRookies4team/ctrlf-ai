@@ -67,7 +67,6 @@ async def main():
     print(" Video Script Generation (Domain-based)")
     print("=" * 60)
     print(f"TARGET_DOMAIN: {TARGET_DOMAIN}")
-    print(f"AI_ENV: {settings.AI_ENV}")
     print(f"MILVUS_ENABLED: {settings.MILVUS_ENABLED}")
     print("=" * 60)
 

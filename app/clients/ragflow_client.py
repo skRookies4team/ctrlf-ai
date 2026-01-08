@@ -725,6 +725,10 @@ class RagflowClient:
             f"has_api_key={bool(self._api_key)}, has_internal_token={bool(self._internal_token)}"
         )
 
+        logger.info(
+            f"[RAGFlow API] GET documents: url={url}, dataset_id={dataset_id}, doc_id={doc_id}"
+        )
+
         try:
             if self._external_client:
                 response = await self._external_client.get(
@@ -740,7 +744,10 @@ class RagflowClient:
                     timeout=self._timeout,
                 )
 
-            # 권한 오류 발생 시 Authorization Bearer로 재시도
+            logger.info(
+                f"[RAGFlow API] Response: status_code={response.status_code}, dataset_id={dataset_id}"
+            )
+
             if response.status_code == 200:
                 result = response.json()
                 
@@ -803,7 +810,7 @@ class RagflowClient:
                         return None
                 
                 data = result.get("data", [])
-                
+
                 # data가 dict인 경우 (예: {"docs": [...]})
                 if isinstance(data, dict):
                     documents = data.get("docs", data.get("data", []))
@@ -813,13 +820,19 @@ class RagflowClient:
                     logger.debug(f"Data is list: {len(documents)} items")
                 else:
                     logger.warning(
-                        f"Unexpected data type: {type(data)}, value={data}, "
+                        f"[RAGFlow API] Unexpected data type: {type(data)}, dataset_id={dataset_id}, value={data}, "
                         f"result={result}"
                     )
                     return None
 
                 # docId로 문서 찾기
-                logger.debug(f"Searching for doc_id={doc_id} in {len(documents)} documents")
+                logger.info(f"[RAGFlow API] Searching for doc_id={doc_id} in {len(documents)} documents (dataset_id={dataset_id})")
+
+                if len(documents) == 0:
+                    logger.warning(
+                        f"[RAGFlow API] No documents in dataset! dataset_id={dataset_id}, "
+                        f"Check if dataset exists and has documents in RAGFlow UI"
+                    )
                 # 디버그: 처음 몇 개 문서의 구조 확인
                 if documents:
                     sample_doc = documents[0] if isinstance(documents[0], dict) else {}

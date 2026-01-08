@@ -10,6 +10,13 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any, Dict, List
+import sys
+from pathlib import Path
+
+# 프로젝트 루트 추가
+ROOT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+
 
 from app.clients.milvus_client import get_milvus_client
 from app.services.video_script_generation_service import (

@@ -68,6 +68,8 @@ class HeyGenClient:
             poll_interval: 폴링 간격 (초)
             poll_timeout: 폴링 최대 대기 시간 (초)
         """
+        if not api_key:
+            raise ValueError("HeyGen API key is required")
         self.api_key = api_key
         self.timeout = timeout
         self.poll_interval = poll_interval
@@ -80,6 +82,9 @@ class HeyGenClient:
             "Content-Type": "application/json",
         }
 
+    # ------------------------------------------------------------
+    # Video Generate
+    # ------------------------------------------------------------
     async def generate_video(self, payload: Dict[str, Any]) -> str:
         """
         영상 생성 Job을 생성합니다.

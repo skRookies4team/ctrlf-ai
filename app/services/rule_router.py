@@ -243,6 +243,12 @@ HR_PERSONAL_KEYWORDS = frozenset([
     # 일반 개인정보 조회 패턴
     "내 정보", "나의 정보", "내 현황", "나의 현황",
     "내가 얼마", "내 잔여", "나 몇 개",
+    # 인사 정보 조회 패턴 (Q16)
+    "직급", "직책", "내 직급", "나의 직급", "내 직책", "나의 직책",
+    "부서", "내 부서", "나의 부서",
+    "인사 정보", "인사정보", "프로필", "사원정보", "사원 정보",
+    "입사일", "입사 일", "입사 언제", "언제 입사", "사원번호", "사원 번호",
+    "이메일", "내 이메일", "나의 이메일", "연락처", "전화번호", "내 전화번호", "나의 전화번호",
 ])
 
 # 연차/휴가 규정 키워드 (POLICY_QA - 규정 설명 요청)
@@ -849,6 +855,9 @@ class RuleRouter:
         # Phase 50: 퀴즈 미완료 조회도 명확한 개인화 질문
         if self._contains_any_normalized(query_normalized, QUIZ_PENDING_KEYWORDS_NORM):
             return False  # 명확히 퀴즈 미완료 조회 질문
+        # Phase 59: EDU_PANEL_OPEN 키워드는 명확한 UI 액션 요청
+        if self._contains_any_normalized(query_normalized, EDU_PANEL_KEYWORDS_NORM):
+            return False  # 명확히 교육 패널 열기 요청
 
         # 교육 키워드 + 애매한 동사 조합 체크 (원본 텍스트로 체크)
         has_edu_keyword = self._contains_any(query_lower, EDU_AMBIGUOUS_KEYWORDS)

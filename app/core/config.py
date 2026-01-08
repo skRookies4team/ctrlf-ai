@@ -4,15 +4,10 @@
 pydantic-settings를 사용하여 환경변수 및 .env 파일에서 설정 값을 로드합니다.
 싱글턴 패턴으로 설정 인스턴스를 캐싱하여 애플리케이션 전체에서 재사용합니다.
 
-Phase 9 업데이트:
-- AI_ENV 환경변수로 mock/real 모드 전환 지원
-- mock 모드: Docker Compose 내 Mock 서비스 사용
-- real 모드: 실제 RAGFlow/LLM/Backend 서비스 연결
-
-실제 환경변수 이름:
-- RAGFLOW_BASE_URL (mock/real 공통) 또는 RAGFLOW_BASE_URL_MOCK/RAGFLOW_BASE_URL_REAL
-- LLM_BASE_URL (mock/real 공통) 또는 LLM_BASE_URL_MOCK/LLM_BASE_URL_REAL
-- BACKEND_BASE_URL (mock/real 공통) 또는 BACKEND_BASE_URL_MOCK/BACKEND_BASE_URL_REAL
+환경변수 이름:
+- RAGFLOW_BASE_URL 또는 RAGFLOW_BASE_URL_REAL
+- LLM_BASE_URL 또는 LLM_BASE_URL_REAL
+- BACKEND_BASE_URL 또는 BACKEND_BASE_URL_REAL
 """
 
 from functools import lru_cache
@@ -35,10 +30,6 @@ class Settings(BaseSettings):
 
     환경변수 또는 .env 파일에서 값을 읽어옵니다.
     기본값이 없는 필드는 반드시 환경변수로 제공해야 합니다.
-
-    Phase 9: mock/real 모드 전환
-    - AI_ENV=mock: Mock 서비스 사용 (Docker Compose 통합 테스트용)
-    - AI_ENV=real: 실제 서비스 사용 (프로덕션/스테이징용)
     """
 
     # 앱 기본 정보
@@ -50,26 +41,16 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # "json" (ELK용) 또는 "text" (개발용)
 
-    # =========================================================================
-    # Phase 9: AI 환경 모드 설정 (mock / real)
-    # =========================================================================
-    AI_ENV: str = "mock"  # "mock" or "real"
-
-    # Mock 모드 URL (Docker Compose 내부 네트워크 주소)
-    RAGFLOW_BASE_URL_MOCK: str = "http://ragflow:8080"
-    LLM_BASE_URL_MOCK: str = "http://llm-internal:8001"
-    BACKEND_BASE_URL_MOCK: str = "http://backend-mock:8081"
+    # Elasticsearch URL
     ELASTICSEARCH_URL: str = "http://elasticsearch:9200"
 
     # Real 모드 URL (실제 서비스 주소, 배포 시 설정)
-    # TODO: 실제 서비스 URL이 확정되면 여기에 설정
     RAGFLOW_BASE_URL_REAL: Optional[str] = None
     LLM_BASE_URL_REAL: Optional[str] = None
     BACKEND_BASE_URL_REAL: Optional[str] = None
 
     # =========================================================================
-    # 외부 서비스 URL (기존 호환성 유지)
-    # 직접 설정 시 AI_ENV 모드보다 우선됨
+    # 외부 서비스 URL (직접 설정 시 *_REAL 환경변수보다 우선됨)
     # =========================================================================
     # ctrlf-ragflow 서비스 URL
     RAGFLOW_BASE_URL: Optional[HttpUrl] = None
@@ -702,7 +683,7 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
-    # Phase 9: mock/real 모드에 따른 URL 자동 선택 프로퍼티
+    # 서비스 URL 프로퍼티
     # =========================================================================
 
     @property
@@ -712,24 +693,14 @@ class Settings(BaseSettings):
 
         우선순위:
         1. RAGFLOW_BASE_URL이 직접 설정된 경우 그 값 사용
-        2. AI_ENV=real이면 RAGFLOW_BASE_URL_REAL 사용
-        3. AI_ENV=mock이면 RAGFLOW_BASE_URL_MOCK 사용
+        2. RAGFLOW_BASE_URL_REAL 사용
 
         Returns:
             str: RAGFlow 서비스 URL, 미설정 시 None
         """
         if self.RAGFLOW_BASE_URL:
             return str(self.RAGFLOW_BASE_URL)
-
-        if self.AI_ENV == "real":
-            if not self.RAGFLOW_BASE_URL_REAL:
-                return None  # real 모드인데 URL 미설정
-            return self.RAGFLOW_BASE_URL_REAL
-
-        # mock 모드: 빈 문자열이면 None 반환 (테스트 환경 지원)
-        if not self.RAGFLOW_BASE_URL_MOCK:
-            return None
-        return self.RAGFLOW_BASE_URL_MOCK
+        return self.RAGFLOW_BASE_URL_REAL
 
     @property
     def llm_base_url(self) -> Optional[str]:
@@ -738,24 +709,14 @@ class Settings(BaseSettings):
 
         우선순위:
         1. LLM_BASE_URL이 직접 설정된 경우 그 값 사용
-        2. AI_ENV=real이면 LLM_BASE_URL_REAL 사용
-        3. AI_ENV=mock이면 LLM_BASE_URL_MOCK 사용
+        2. LLM_BASE_URL_REAL 사용
 
         Returns:
             str: LLM 서비스 URL, 미설정 시 None
         """
         if self.LLM_BASE_URL:
             return str(self.LLM_BASE_URL)
-
-        if self.AI_ENV == "real":
-            if not self.LLM_BASE_URL_REAL:
-                return None
-            return self.LLM_BASE_URL_REAL
-
-        # mock 모드: 빈 문자열이면 None 반환 (테스트 환경 지원)
-        if not self.LLM_BASE_URL_MOCK:
-            return None
-        return self.LLM_BASE_URL_MOCK
+        return self.LLM_BASE_URL_REAL
 
     @property
     def embedding_base_url(self) -> Optional[str]:
@@ -780,24 +741,16 @@ class Settings(BaseSettings):
 
         우선순위:
         1. BACKEND_BASE_URL이 직접 설정된 경우 그 값 사용
-        2. AI_ENV=real이면 BACKEND_BASE_URL_REAL 사용
-        3. AI_ENV=mock이면 BACKEND_BASE_URL_MOCK 사용
+        2. BACKEND_BASE_URL_REAL 사용
 
         Returns:
             str: Backend 서비스 URL, 미설정 시 None
         """
         if self.BACKEND_BASE_URL:
             return str(self.BACKEND_BASE_URL).rstrip("/")
-
-        if self.AI_ENV == "real":
-            if not self.BACKEND_BASE_URL_REAL:
-                return None
+        if self.BACKEND_BASE_URL_REAL:
             return self.BACKEND_BASE_URL_REAL.rstrip("/")
-
-        # mock 모드: 빈 문자열이면 None 반환 (테스트 환경 지원)
-        if not self.BACKEND_BASE_URL_MOCK:
-            return None
-        return self.BACKEND_BASE_URL_MOCK.rstrip("/")
+        return None
 
     @property
     def infra_base_url(self) -> Optional[str]:
@@ -811,16 +764,6 @@ class Settings(BaseSettings):
             return str(self.INFRA_BASE_URL).rstrip("/")
         return None
 
-    @property
-    def is_mock_mode(self) -> bool:
-        """Mock 모드인지 확인합니다."""
-        return self.AI_ENV == "mock"
-
-    @property
-    def is_real_mode(self) -> bool:
-        """Real 모드인지 확인합니다."""
-        return self.AI_ENV == "real"
-    
     @property
     def elasticsearch_url(self) -> str:
         return self.ELASTICSEARCH_URL

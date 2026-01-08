@@ -29,7 +29,6 @@ else:
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # 환경변수 설정
-os.environ.setdefault("AI_ENV", "mock")
 os.environ["TTS_PROVIDER"] = "gtts"
 
 from dataclasses import dataclass
