@@ -169,6 +169,10 @@ class IngestCallbackMeta(BaseModel):
     traceId: str
     requestId: str
     domain: Optional[str] = None  # 문서 도메인 (POLICY, EDUCATION 등)
+    source_set_id: Optional[str] = Field(None, alias="sourceSetId", description="소스셋 ID (교육 파이프라인용)")
+    
+    class Config:
+        populate_by_name = True  # alias와 필드명 모두 허용
 
 
 class IngestCallbackStats(BaseModel):
@@ -686,11 +690,87 @@ async def ingest_callback(
     else:
         logger.warning("AI_CALLBACK_TOKEN not configured, skipping auth")
 
+    # source_set_id 추출 (여러 경로 시도)
+    source_set_id = (
+        request.meta.source_set_id 
+        or getattr(request.meta, "sourceSetId", None)
+        or (request.meta.model_dump().get("sourceSetId") if hasattr(request.meta, "model_dump") else None)
+    )
+    
+    # traceId에서 source_set_id 추출 (fallback: trace-{source_set_id} 형식)
+    if not source_set_id and request.meta.traceId:
+        trace_id = request.meta.traceId
+        if trace_id.startswith("trace-"):
+            potential_source_set_id = trace_id[6:]  # "trace-" 제거
+            # UUID 형식인지 확인 (간단한 체크)
+            if len(potential_source_set_id) == 36 and potential_source_set_id.count("-") == 4:
+                source_set_id = potential_source_set_id
+                logger.info(
+                    f"Extracted source_set_id from traceId: trace_id={trace_id}, "
+                    f"source_set_id={source_set_id}"
+                )
+    
     logger.info(
         f"Received RAGFlow ingest callback: doc_id={request.docId}, "
         f"version={request.version}, status={request.status}, "
-        f"ingest_id={request.ingestId}, trace_id={request.meta.traceId}"
+        f"ingest_id={request.ingestId}, trace_id={request.meta.traceId}, "
+        f"source_set_id={source_set_id}"
     )
+    
+    # 디버깅: meta 객체 전체 확인
+    logger.debug(
+        f"RAGFLOW callback meta: {request.meta.model_dump() if hasattr(request.meta, 'model_dump') else 'N/A'}, "
+        f"source_set_id type={type(source_set_id)}, "
+        f"source_set_id value={repr(source_set_id)}"
+    )
+
+    # 교육 파이프라인 콜백 처리 (source_set_id가 있는 경우)
+    if source_set_id:
+        try:
+            from app.services.edu_pipeline_service import get_edu_pipeline_service
+            
+            edu_pipeline_service = get_edu_pipeline_service()
+            logger.info(
+                f"Notifying education pipeline callback: source_set_id={source_set_id}, "
+                f"status={request.status}, ingest_id={request.ingestId}"
+            )
+            
+            # RAGFLOW 콜백 meta에서 추가 정보 추출
+            meta_dict = request.meta.model_dump() if hasattr(request.meta, "model_dump") else {}
+            video_id = (
+                meta_dict.get("videoId") 
+                or meta_dict.get("video_id")
+                or None
+            )
+            education_id = (
+                meta_dict.get("educationId")
+                or meta_dict.get("education_id")
+                or None
+            )
+            
+            # 교육 파이프라인 콜백 처리
+            await edu_pipeline_service.handle_ragflow_callback(
+                source_set_id=source_set_id,
+                status=request.status,
+                progress=100 if request.status == "COMPLETED" else 0,
+                fail_reason=request.failReason,
+                milvus_collection=None,  # RAGFLOW가 제공하지 않음
+                milvus_partition=None,
+                video_id=video_id,
+                education_id=education_id,
+                metadata=meta_dict,  # 전체 meta를 metadata로 전달
+            )
+            logger.info(
+                f"Education pipeline callback notified successfully: source_set_id={source_set_id}, "
+                f"status={request.status}"
+            )
+        except Exception as e:
+            # 교육 파이프라인 콜백 실패해도 계속 진행 (로깅만)
+            logger.error(
+                f"Failed to notify education pipeline callback: source_set_id={source_set_id}, "
+                f"error={e}, trace_id={request.meta.traceId}",
+                exc_info=True
+            )
 
     # SourceSetOrchestrator에 콜백 알림 (polling 대신 콜백 대기 방식)
     try:

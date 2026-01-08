@@ -250,6 +250,15 @@ app.include_router(ws_render_progress.router, prefix="/ws", tags=["WebSocket"])
 # - GET /internal/ai/source-sets/{sourceSetId}/status: 처리 상태 조회
 app.include_router(source_sets.router, tags=["SourceSet Orchestration"])
 
+# Education Pipeline API (Backend → AI)
+# - POST /internal/ai/pipeline/script/start: 스크립트 생성 시작
+# - GET /internal/ai/pipeline/status: Job 상태 조회
+# - POST /internal/ai/pipeline/callbacks/ragflow: RAGFLOW 콜백 수신
+# - POST /internal/ai/pipeline/video/start: 영상 생성 시작
+from app.api.v1 import edu_pipeline
+
+app.include_router(edu_pipeline.router, tags=["Education Pipeline"])
+
 # Milvus 기반 스크립트 생성 API (Backend → AI)
 # - POST /internal/ai/scripts/generate-from-milvus: 도메인 기반 스크립트 생성
 from app.api.v1 import scripts_milvus

@@ -155,12 +155,20 @@ class RagSearchResult:
     @classmethod
     def from_chunk(cls, chunk: Dict[str, Any]) -> "RagSearchResult":
         title = chunk.get("document_name") or chunk.get("doc_name") or chunk.get("title")
+        
+        # page_num 처리: None, 빈 문자열, 0 등을 안전하게 처리
         page = chunk.get("page_num") or chunk.get("page")
-        if page is not None:
+        if page is not None and page != "":
             try:
-                page = int(page)
+                page_int = int(page)
+                # 음수나 0도 유효한 페이지 번호일 수 있지만, 일반적으로는 양수
+                # None으로 처리하지 않고 그대로 사용 (0도 유효할 수 있음)
+                page = page_int
             except (TypeError, ValueError):
                 page = None
+        else:
+            page = None
+        
         score = chunk.get("similarity") or chunk.get("score") or 0.0
         try:
             score = float(score)

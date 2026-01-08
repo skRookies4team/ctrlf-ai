@@ -158,7 +158,6 @@ class RAGFlowIngestClient:
             "version": version,
             "fileUrl": file_url,
             "replace": True,
-            "department": department,  # 부서 코드 (Milvus department 컬럼에 저장됨)
             "meta": {
                 "ragDocumentPk": rag_document_pk,
                 "domain": domain,
@@ -166,11 +165,16 @@ class RAGFlowIngestClient:
                 "requestId": request_id,
             },
         }
+        
+        # department가 None이 아니면 payload에 추가
+        if department:
+            payload["department"] = department
 
         logger.info(
             f"Sending RAGFlow ingest request: doc_id={doc_id}, version={version}, "
-            f"dataset_id={dataset_id}, trace_id={trace_id}"
+            f"dataset_id={dataset_id}, trace_id={trace_id}, department={department}"
         )
+        logger.debug(f"RAGFlow ingest payload: {payload}")
 
         try:
             if self._external_client:
@@ -247,8 +251,24 @@ class RAGFlowIngestClient:
                     error_code="RAGFLOW_BAD_REQUEST",
                 )
             elif response.status_code >= 500:
+                # 500 오류 시 상세 로깅
+                error_body = response.text[:500] if response.text else "No response body"
+                try:
+                    error_json = response.json()
+                    error_msg = error_json.get("message", error_json.get("error", str(error_json)))
+                    logger.error(
+                        f"RAGFlow server error (500+): status={response.status_code}, "
+                        f"message={error_msg}, doc_id={doc_id}, "
+                        f"payload={payload}"
+                    )
+                except Exception:
+                    logger.error(
+                        f"RAGFlow server error (500+): status={response.status_code}, "
+                        f"body={error_body}, doc_id={doc_id}, "
+                        f"payload={payload}"
+                    )
                 raise RAGFlowUnavailableError(
-                    f"RAGFlow server error: {response.status_code}"
+                    f"RAGFlow server error: {response.status_code}, {error_body[:200]}"
                 )
             else:
                 raise RAGFlowIngestError(
