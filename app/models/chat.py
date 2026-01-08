@@ -40,17 +40,18 @@ class ChatAction(BaseModel):
 
     Attributes:
         type: 액션 타입 (PLAY_VIDEO, OPEN_EDU_PANEL, OPEN_QUIZ)
-        education_id: 교육 ID (영상 재생 시 필수)
+        education_id: 교육 ID (영상 재생, 퀴즈 시작 시 필수)
         video_id: 영상 ID (영상 재생 시 필수)
         resume_position_seconds: 이어보기 시작 위치(초)
         education_title: 교육 제목 (UI 표시용)
         video_title: 영상 제목 (UI 표시용)
         progress_percent: 현재 진도율(%)
+        quiz_id: 퀴즈 시도 ID (퀴즈 시작 시 선택)
     """
 
     type: ChatActionType = Field(..., description="액션 타입")
     education_id: Optional[str] = Field(
-        default=None, description="교육 ID (영상 재생 시 필수)"
+        default=None, description="교육 ID (영상 재생, 퀴즈 시작 시 필수)"
     )
     video_id: Optional[str] = Field(
         default=None, description="영상 ID (영상 재생 시 필수)"
@@ -66,6 +67,10 @@ class ChatAction(BaseModel):
     )
     progress_percent: Optional[float] = Field(
         default=None, description="현재 진도율(%)"
+    )
+    # OPEN_QUIZ 액션용 필드
+    quiz_id: Optional[str] = Field(
+        default=None, description="퀴즈 시도 ID (퀴즈 시작 시 선택)"
     )
 
 

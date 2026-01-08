@@ -50,29 +50,13 @@ class TestPersonalizationModels:
         assert PersonalizationSubIntentId.Q20.value == "Q20"
 
     def test_priority_sub_intents(self):
-        """우선순위 인텐트 16개 확인.
+        """우선순위 인텐트 20개 확인.
 
-        Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8, Q9, Q10, Q11, Q12, Q14, Q15, Q18, Q19가 우선순위.
+        Q1~Q20 모두 우선순위 인텐트로 포함됨 (Phase 55+ 업데이트).
         """
-        assert len(PRIORITY_SUB_INTENTS) == 16
-        assert "Q1" in PRIORITY_SUB_INTENTS
-        assert "Q2" in PRIORITY_SUB_INTENTS
-        assert "Q3" in PRIORITY_SUB_INTENTS
-        assert "Q4" in PRIORITY_SUB_INTENTS
-        assert "Q5" in PRIORITY_SUB_INTENTS
-        assert "Q6" in PRIORITY_SUB_INTENTS
-        assert "Q7" in PRIORITY_SUB_INTENTS
-        assert "Q8" in PRIORITY_SUB_INTENTS
-        assert "Q9" in PRIORITY_SUB_INTENTS
-        assert "Q10" in PRIORITY_SUB_INTENTS
-        assert "Q11" in PRIORITY_SUB_INTENTS
-        assert "Q12" in PRIORITY_SUB_INTENTS
-        assert "Q14" in PRIORITY_SUB_INTENTS
-        assert "Q15" in PRIORITY_SUB_INTENTS
-        assert "Q18" in PRIORITY_SUB_INTENTS
-        assert "Q19" in PRIORITY_SUB_INTENTS
-        # Q20은 우선순위 목록에 미포함 (선택 구현)
-        assert "Q20" not in PRIORITY_SUB_INTENTS
+        assert len(PRIORITY_SUB_INTENTS) == 20
+        for i in range(1, 21):
+            assert f"Q{i}" in PRIORITY_SUB_INTENTS, f"Q{i} should be in PRIORITY_SUB_INTENTS"
 
     def test_default_period_for_intent(self):
         """인텐트별 기본 period 확인."""
@@ -223,7 +207,11 @@ class TestPersonalizationClient:
 
     @pytest.mark.asyncio
     async def test_resolve_facts_not_implemented(self):
-        """구현되지 않은 인텐트 테스트."""
+        """구현되지 않은 인텐트 테스트.
+
+        Phase 55+ 업데이트: Q1~Q20 모두 구현됨.
+        Q21 같은 존재하지 않는 인텐트로 테스트.
+        """
         from app.clients.personalization_client import PersonalizationClient
 
         with patch("app.clients.personalization_client.settings") as mock_settings:
@@ -232,8 +220,8 @@ class TestPersonalizationClient:
             mock_settings.PERSONALIZATION_MODE = "mock"
 
             client = PersonalizationClient(base_url=None)
-            # Q13은 우선순위가 아님 (급여 명세서 요약)
-            facts = await client.resolve_facts("Q13", user_id="test_user")
+            # Q21은 존재하지 않는 인텐트
+            facts = await client.resolve_facts("Q21", user_id="test_user")
 
             assert facts.error is not None
             assert facts.error.type == "NOT_IMPLEMENTED"

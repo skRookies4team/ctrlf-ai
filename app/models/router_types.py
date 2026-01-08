@@ -155,6 +155,9 @@ class SubIntentId(str, Enum):
     # 개인화 조회 - HR 도메인 (Q20)
     HR_TODO_CHECK = "HR_TODO_CHECK"
 
+    # UI 패널 열기 액션 (조회성이므로 확인 불필요)
+    EDU_PANEL_OPEN = "EDU_PANEL_OPEN"  # 교육 패널 열기
+
 
 # 치명 액션 목록 (requires_confirmation=true 대상)
 CRITICAL_ACTION_SUB_INTENTS = frozenset([
