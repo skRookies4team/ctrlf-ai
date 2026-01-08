@@ -1,5 +1,5 @@
 """
-RAG Quality Log - Phase 57
+RAG Quality Log - Phase 57/58
 
 RAG 파이프라인 품질 지표 구조화 로깅
 
@@ -7,10 +7,15 @@ RAG 파이프라인 품질 지표 구조화 로깅
 - 단일 스키마로 Query Expansion, RRF, 최종 결과 추적
 - Elasticsearch/Kibana 분석 가능한 구조
 - phase 태그로 버전별 비교 가능
+
+Phase 58: Quality Gate
+- L2 Distance 기반 응답 품질 제어
+- REJECT/PROCEED_WITH_WARNING/PROCEED 3단계 판정
 """
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
+from enum import Enum
 from typing import List, Optional, Dict, Any
 
 from app.core.logging import get_logger
@@ -317,3 +322,159 @@ def build_rag_quality_log(
         log.quality_rrf_benefit = log.rrf_common_doc_count > 0
 
     return log
+
+
+# =============================================================================
+# Phase 58: Quality Gate - L2 Distance 기반 응답 품질 제어
+# =============================================================================
+
+class QualityGrade(str, Enum):
+    """품질 등급"""
+    OK = "OK"                     # 정상 품질
+    LOW = "LOW"                   # 저품질 (경고)
+    INSUFFICIENT = "INSUFFICIENT" # 불충분 (거부)
+
+
+class QualityAction(str, Enum):
+    """품질 판정 액션"""
+    PROCEED = "PROCEED"                         # 정상 진행
+    PROCEED_WITH_WARNING = "PROCEED_WITH_WARNING"  # 경고 포함 진행
+    REJECT = "REJECT"                           # 거부 (LLM 생성 스킵)
+
+
+@dataclass
+class QualityGateDecision:
+    """Quality Gate 판정 결과"""
+    grade: QualityGrade
+    action: QualityAction
+    min_l2_distance: float
+    avg_l2_distance: float = 0.0
+    source_count: int = 0
+    warning_message: Optional[str] = None
+    reject_reason: Optional[str] = None
+
+
+def evaluate_sources_quality(
+    sources: List,
+    warn_threshold: float = 1.0,
+    reject_threshold: float = 1.5,
+) -> QualityGateDecision:
+    """
+    검색 결과의 품질을 평가합니다.
+
+    Args:
+        sources: ChatSource 리스트
+        warn_threshold: 경고 임계값 (min_l2 > warn_threshold → LOW)
+        reject_threshold: 거부 임계값 (min_l2 > reject_threshold → INSUFFICIENT)
+
+    Returns:
+        QualityGateDecision: 품질 판정 결과
+    """
+    if not sources:
+        return QualityGateDecision(
+            grade=QualityGrade.INSUFFICIENT,
+            action=QualityAction.REJECT,
+            min_l2_distance=float('inf'),
+            source_count=0,
+            reject_reason="검색 결과가 없습니다.",
+        )
+
+    # L2 거리 계산
+    distances = [s.score for s in sources if hasattr(s, 'score') and s.score is not None]
+    if not distances:
+        return QualityGateDecision(
+            grade=QualityGrade.OK,
+            action=QualityAction.PROCEED,
+            min_l2_distance=0.0,
+            source_count=len(sources),
+        )
+
+    min_distance = min(distances)
+    avg_distance = sum(distances) / len(distances)
+
+    # 거부 임계값 초과
+    if min_distance > reject_threshold:
+        return QualityGateDecision(
+            grade=QualityGrade.INSUFFICIENT,
+            action=QualityAction.REJECT,
+            min_l2_distance=min_distance,
+            avg_l2_distance=avg_distance,
+            source_count=len(sources),
+            reject_reason=f"검색 결과의 관련도가 낮습니다 (min_l2={min_distance:.3f} > {reject_threshold})",
+        )
+
+    # 경고 임계값 초과
+    if min_distance > warn_threshold:
+        return QualityGateDecision(
+            grade=QualityGrade.LOW,
+            action=QualityAction.PROCEED_WITH_WARNING,
+            min_l2_distance=min_distance,
+            avg_l2_distance=avg_distance,
+            source_count=len(sources),
+            warning_message=f"검색 결과의 관련도가 다소 낮을 수 있습니다.",
+        )
+
+    # 정상
+    return QualityGateDecision(
+        grade=QualityGrade.OK,
+        action=QualityAction.PROCEED,
+        min_l2_distance=min_distance,
+        avg_l2_distance=avg_distance,
+        source_count=len(sources),
+    )
+
+
+def log_quality_gate_decision(
+    decision: QualityGateDecision,
+    query: str,
+    domain: str,
+) -> None:
+    """Quality Gate 판정 결과를 로깅합니다."""
+    query_preview = query[:50] if query else ""
+
+    if decision.action == QualityAction.REJECT:
+        logger.warning(
+            f"[QualityGate] REJECT | "
+            f"grade={decision.grade.value} | "
+            f"min_l2={decision.min_l2_distance:.3f} | "
+            f"sources={decision.source_count} | "
+            f"domain={domain} | "
+            f"query={query_preview}..."
+        )
+    elif decision.action == QualityAction.PROCEED_WITH_WARNING:
+        logger.info(
+            f"[QualityGate] WARN | "
+            f"grade={decision.grade.value} | "
+            f"min_l2={decision.min_l2_distance:.3f} | "
+            f"sources={decision.source_count} | "
+            f"domain={domain}"
+        )
+    else:
+        logger.debug(
+            f"[QualityGate] OK | "
+            f"min_l2={decision.min_l2_distance:.3f} | "
+            f"sources={decision.source_count}"
+        )
+
+
+def build_clarification_response(
+    decision: QualityGateDecision,
+    query: str,
+    domain: str,
+) -> str:
+    """
+    REJECT 판정 시 사용자에게 보여줄 명확화 응답을 생성합니다.
+
+    Args:
+        decision: Quality Gate 판정 결과
+        query: 원본 쿼리
+        domain: 도메인
+
+    Returns:
+        str: 명확화 응답 메시지
+    """
+    return (
+        "죄송합니다. 질문과 관련된 정보를 충분히 찾지 못했습니다.\n\n"
+        "더 정확한 답변을 드리기 위해 질문을 조금 더 구체적으로 해주시겠어요?\n"
+        "예를 들어, 특정 제도명이나 상황을 포함해 주시면 도움이 됩니다."
+    )
