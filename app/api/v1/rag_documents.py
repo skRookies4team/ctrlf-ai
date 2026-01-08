@@ -75,6 +75,34 @@ DOMAIN_DATASET_MAPPING = {
 # =============================================================================
 
 
+def format_uuid(uuid_str: str) -> str:
+    """UUID 문자열을 하이픈이 있는 표준 형식으로 변환합니다.
+    
+    하이픈 없는 형식 (32자): a7aedf70ec8411f08c69f6c265103247
+    하이픈 있는 형식 (36자): a7aedf70-ec84-11f0-8c69-f6c265103247
+    
+    Args:
+        uuid_str: UUID 문자열 (하이픈 있거나 없거나)
+        
+    Returns:
+        str: 하이픈이 있는 표준 UUID 형식
+    """
+    if not uuid_str:
+        return uuid_str
+    
+    # 이미 하이픈이 있으면 그대로 반환
+    if '-' in uuid_str:
+        return uuid_str
+    
+    # 하이픈이 없는 32자리 문자열인 경우만 변환
+    if len(uuid_str) == 32:
+        # xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx 형식으로 변환
+        return f"{uuid_str[:8]}-{uuid_str[8:12]}-{uuid_str[12:16]}-{uuid_str[16:20]}-{uuid_str[20:]}"
+    
+    # 그 외의 경우는 그대로 반환
+    return uuid_str
+
+
 def extract_filename_from_url(url: str) -> str:
     """Presigned URL에서 파일명을 추출합니다.
 
@@ -163,6 +191,8 @@ class IngestCallbackMeta(BaseModel):
     traceId: str
     requestId: str
     domain: Optional[str] = None  # 문서 도메인 (POLICY, EDUCATION 등)
+    source_set_id: Optional[str] = Field(None, alias="source_set_id")  # 소스셋 ID (SourceSet 처리 시 사용)
+    spring_document_id: Optional[str] = Field(None, alias="spring_document_id")  # Spring 문서 ID
 
 
 class IngestCallbackStats(BaseModel):
@@ -665,8 +695,64 @@ async def ingest_callback(
     logger.info(
         f"Received RAGFlow ingest callback: doc_id={request.docId}, "
         f"version={request.version}, status={request.status}, "
-        f"ingest_id={request.ingestId}, trace_id={request.meta.traceId}"
+        f"ingest_id={request.ingestId}, trace_id={request.meta.traceId}, "
+        f"source_set_id={request.meta.source_set_id}, spring_document_id={request.meta.spring_document_id}"
     )
+
+    # SourceSet 처리 중인 경우: source_set_orchestrator에 문서 완료 알림
+    if request.meta.source_set_id:
+        logger.info(
+            f"SourceSet callback detected: source_set_id={request.meta.source_set_id}, "
+            f"status={request.status}, spring_document_id={request.meta.spring_document_id}"
+        )
+    else:
+        logger.warning(
+            f"No source_set_id in callback meta: doc_id={request.docId}, "
+            f"meta={request.meta.model_dump() if hasattr(request.meta, 'model_dump') else request.meta.dict() if hasattr(request.meta, 'dict') else request.meta}"
+        )
+    
+    if request.meta.source_set_id and request.status == "COMPLETED":
+        try:
+            from app.services.source_set_orchestrator import get_source_set_orchestrator
+            
+            orchestrator = get_source_set_orchestrator()
+            # 문서 완료를 알려서 스크립트 생성 및 백엔드 콜백 진행
+            await orchestrator.notify_document_completed(
+                source_set_id=request.meta.source_set_id,
+                document_id=request.meta.spring_document_id or request.docId,
+                ragflow_doc_id=request.docId,
+                status=request.status,
+            )
+            logger.info(
+                f"Notified source_set_orchestrator: source_set_id={request.meta.source_set_id}, "
+                f"document_id={request.meta.spring_document_id}, status={request.status}"
+            )
+        except Exception as e:
+            # SourceSet 알림 실패해도 Backend 상태 업데이트는 진행
+            logger.warning(
+                f"Failed to notify source_set_orchestrator: source_set_id={request.meta.source_set_id}, "
+                f"error={e}, trace_id={request.meta.traceId}"
+            )
+    elif request.meta.source_set_id and request.status == "FAILED":
+        try:
+            from app.services.source_set_orchestrator import get_source_set_orchestrator
+            
+            orchestrator = get_source_set_orchestrator()
+            await orchestrator.notify_document_completed(
+                source_set_id=request.meta.source_set_id,
+                document_id=request.meta.spring_document_id or request.docId,
+                ragflow_doc_id=request.docId,
+                status="FAILED",
+            )
+            logger.info(
+                f"Notified source_set_orchestrator (FAILED): source_set_id={request.meta.source_set_id}, "
+                f"document_id={request.meta.spring_document_id}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to notify source_set_orchestrator (FAILED): source_set_id={request.meta.source_set_id}, "
+                f"error={e}, trace_id={request.meta.traceId}"
+            )
 
     # 캐시에 완료 상태 저장 (멱등성: 다음 동일 요청 시 200 + COMPLETED 반환)
     _mark_request_completed(request.docId, request.version, request.status)
@@ -711,33 +797,47 @@ async def ingest_callback(
             )
 
     # Backend 상태 업데이트
-    try:
-        backend_client = get_backend_client()
-        await backend_client.update_rag_document_status(
-            rag_document_pk=request.meta.ragDocumentPk,
-            status=request.status,
-            document_id=request.docId,
-            version=request.version,
-            processed_at=request.processedAt,
-            fail_reason=request.failReason,
-            content=content,
-        )
-        logger.info(
-            f"Backend status updated: rag_document_pk={request.meta.ragDocumentPk}, "
-            f"status={request.status}, content_included={content is not None}, "
-            f"trace_id={request.meta.traceId}"
-        )
-    except RAGDocumentStatusUpdateError as e:
-        # Backend 호출 실패해도 200 반환 (에러 로그만)
-        logger.error(
-            f"Failed to update backend status: rag_document_pk={request.meta.ragDocumentPk}, "
-            f"error={e}, trace_id={request.meta.traceId}"
-        )
-    except Exception as e:
-        logger.error(
-            f"Unexpected error updating backend status: "
+    # SourceSet 플로우에서는 백엔드에 RAG document 엔티티가 생성되지 않으므로
+    # status 업데이트를 건너뜀 (source_set_orchestrator가 이미 처리 완료)
+    if not request.meta.source_set_id:
+        # 일반 RAG document ingest 플로우에서만 상태 업데이트
+        try:
+            backend_client = get_backend_client()
+            # UUID 형식 변환 (하이픈 없는 형식을 하이픈 있는 형식으로)
+            formatted_rag_document_pk = format_uuid(request.meta.ragDocumentPk)
+            await backend_client.update_rag_document_status(
+                rag_document_pk=formatted_rag_document_pk,
+                status=request.status,
+                document_id=request.docId,
+                version=request.version,
+                processed_at=request.processedAt,
+                fail_reason=request.failReason,
+                content=content,
+            )
+            logger.info(
+                f"Backend status updated: rag_document_pk={request.meta.ragDocumentPk}, "
+                f"status={request.status}, content_included={content is not None}, "
+                f"trace_id={request.meta.traceId}"
+            )
+        except RAGDocumentStatusUpdateError as e:
+            # Backend 호출 실패해도 200 반환 (에러 로그만)
+            logger.error(
+                f"Failed to update backend status: rag_document_pk={request.meta.ragDocumentPk}, "
+                f"error={e}, trace_id={request.meta.traceId}"
+            )
+        except Exception as e:
+            logger.error(
+                f"Unexpected error updating backend status: "
+                f"rag_document_pk={request.meta.ragDocumentPk}, "
+                f"error={e}, trace_id={request.meta.traceId}"
+            )
+    else:
+        # SourceSet 플로우: source_set_orchestrator가 이미 처리했으므로 건너뜀
+        logger.debug(
+            f"Skipping RAG document status update for SourceSet: "
+            f"source_set_id={request.meta.source_set_id}, "
             f"rag_document_pk={request.meta.ragDocumentPk}, "
-            f"error={e}, trace_id={request.meta.traceId}"
+            f"trace_id={request.meta.traceId}"
         )
 
     return IngestCallbackResponse(received=True)
