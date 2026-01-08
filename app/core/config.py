@@ -314,6 +314,18 @@ class Settings(BaseSettings):
     RRF_K_PARAMETER: int = 60
 
     # =========================================================================
+    # Phase 58: Quality Gate (L2 Distance 기반 응답 품질 제어)
+    # =========================================================================
+    # Quality Gate 활성화 (True: L2 거리 기반 3단계 판정)
+    RAG_QUALITY_DISTANCE_GATE_ENABLED: bool = True
+
+    # 경고 임계값 (min_l2 > warn → PROCEED_WITH_WARNING)
+    RAG_QUALITY_L2_WARN: float = 1.4
+
+    # 거부 임계값 (min_l2 > reject → REJECT, LLM 생성 스킵)
+    RAG_QUALITY_L2_REJECT: float = 1.6
+
+    # =========================================================================
     # Phase 55: 환각(Hallucination) 방지 강화 설정
     # =========================================================================
     # RAG 0건 시 LLM 호출 스킵 (고정 템플릿만 반환)
