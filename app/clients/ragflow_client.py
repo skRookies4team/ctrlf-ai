@@ -660,6 +660,10 @@ class RagflowClient:
         url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
         headers = self._get_headers()
 
+        logger.info(
+            f"[RAGFlow API] GET documents: url={url}, dataset_id={dataset_id}, doc_id={doc_id}"
+        )
+
         try:
             if self._external_client:
                 response = await self._external_client.get(
@@ -675,20 +679,31 @@ class RagflowClient:
                     timeout=self._timeout,
                 )
 
+            logger.info(
+                f"[RAGFlow API] Response: status_code={response.status_code}, dataset_id={dataset_id}"
+            )
+
             if response.status_code == 200:
                 result = response.json()
                 data = result.get("data", [])
-                
+
                 # data가 dict인 경우 (예: {"docs": [...]})
                 if isinstance(data, dict):
                     documents = data.get("docs", data.get("data", []))
                 elif isinstance(data, list):
                     documents = data
                 else:
+                    logger.warning(f"[RAGFlow API] Unexpected data type: {type(data)}, dataset_id={dataset_id}")
                     return None
 
                 # docId로 문서 찾기
-                logger.debug(f"Searching for doc_id={doc_id} in {len(documents)} documents")
+                logger.info(f"[RAGFlow API] Searching for doc_id={doc_id} in {len(documents)} documents (dataset_id={dataset_id})")
+
+                if len(documents) == 0:
+                    logger.warning(
+                        f"[RAGFlow API] No documents in dataset! dataset_id={dataset_id}, "
+                        f"Check if dataset exists and has documents in RAGFlow UI"
+                    )
                 # 디버그: 처음 몇 개 문서의 구조 확인
                 if documents:
                     sample_doc = documents[0] if isinstance(documents[0], dict) else {}

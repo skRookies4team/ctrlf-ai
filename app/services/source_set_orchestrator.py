@@ -525,7 +525,8 @@ class SourceSetOrchestrator:
 
                 logger.info(
                     f"Starting polling for document: doc_id={doc.document_id}, "
-                    f"poll_interval={poll_interval}s, timeout={max_wait_time}s"
+                    f"ragflow_doc_id={ragflow_doc_id}, dataset_id={dataset_id}, "
+                    f"domain={doc.domain}, poll_interval={poll_interval}s, timeout={max_wait_time}s"
                 )
 
                 ragflow_internal_id = None  # RAGFlow 내부 UUID (polling에서 발견 시 설정)
