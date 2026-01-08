@@ -520,12 +520,7 @@ class SourceSetOrchestrator:
 
                 logger.info(f"Document ingest accepted: doc_id={doc.document_id}, ingest_id={ingest_id}")
 
-                # 2. Ingest 완료 대기 - 10분 대기 후 polling 시작
-                logger.info(
-                    f"Waiting {initial_delay}s before polling: doc_id={doc.document_id}"
-                )
-                await asyncio.sleep(initial_delay)
-
+                # 2. 바로 폴링 시작 (대기 없음)
                 start_time = asyncio.get_event_loop().time()
 
                 logger.info(
