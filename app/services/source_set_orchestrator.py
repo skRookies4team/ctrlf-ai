@@ -473,7 +473,8 @@ class SourceSetOrchestrator:
             max_wait_time = settings.RAGFLOW_POLL_TIMEOUT_SEC
             poll_interval = settings.RAGFLOW_POLL_INTERVAL_SEC
 
-            ragflow_doc_id = None
+            ragflow_doc_id = None  # 파일명.확장자 (retry 루프에서 설정)
+            ragflow_internal_id = None  # RAGFlow 내부 UUID (polling에서 발견 시 설정)
             final_status = None
             chunk_count = 0
             last_fail_reason = None
@@ -485,12 +486,17 @@ class SourceSetOrchestrator:
                         f"doc_id={doc.document_id}"
                     )
 
-                logger.info(f"Ingesting document to RAGFlow: doc_id={doc.document_id}")
+                # source_url에서 파일명 추출하여 doc_id로 사용 (Spring UUID 대신)
+                ragflow_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
+                logger.info(
+                    f"Ingesting document to RAGFlow: ragflow_doc_id={ragflow_doc_id}, "
+                    f"spring_doc_id={doc.document_id}"
+                )
 
                 # 재시도 로직이 내장된 래퍼 사용 (네트워크 타임아웃/오류에도 1회 재시도)
                 ingest_result = await self._ragflow_client.ingest_document_with_retry(
                     dataset_id=dataset_id,
-                    doc_id=doc.document_id,
+                    doc_id=ragflow_doc_id,  # 파일명.확장자 형태
                     file_url=doc.source_url,
                     version=1,  # RAGFlow API 필수 파라미터
                     meta={
@@ -499,6 +505,7 @@ class SourceSetOrchestrator:
                         "requestId": job.request_id if job else None,  # RAGFlow API 필수
                         "domain": doc.domain,
                         "source_set_id": job.source_set_id if job else None,
+                        "spring_document_id": doc.document_id,  # 원본 Spring UUID 보존
                     },
                 )
 
@@ -523,7 +530,7 @@ class SourceSetOrchestrator:
                     f"poll_interval={poll_interval}s, timeout={max_wait_time}s"
                 )
 
-                ragflow_doc_id = None
+                ragflow_internal_id = None  # RAGFlow 내부 UUID (polling에서 발견 시 설정)
                 final_status = None
                 chunk_count = 0
                 poll_count = 0
@@ -539,43 +546,43 @@ class SourceSetOrchestrator:
                         f"elapsed={elapsed:.1f}s"
                     )
 
-                    # 문서 리스트에서 docId로 문서 찾기
+                    # 문서 리스트에서 docId(파일명)로 문서 찾기
                     found_doc = await self._ragflow_client.find_document_by_doc_id(
                         dataset_id=dataset_id,
-                        doc_id=doc.document_id,
+                        doc_id=ragflow_doc_id,  # 파일명.확장자 형태
                     )
 
                     if found_doc:
-                        ragflow_doc_id = found_doc.get("id")
-                        if ragflow_doc_id:
+                        ragflow_internal_id = found_doc.get("id")  # RAGFlow 내부 UUID
+                        if ragflow_internal_id:
                             # 문서 상태 확인
                             try:
                                 doc_status = await self._ragflow_client.get_document_status(
                                     dataset_id=dataset_id,
-                                    document_id=ragflow_doc_id,
+                                    document_id=ragflow_internal_id,
                                 )
                                 final_status = doc_status.get("run")
                                 chunk_count = doc_status.get("chunk_count", 0)
 
                                 logger.info(
-                                    f"Document status check: doc_id={doc.document_id}, "
-                                    f"ragflow_id={ragflow_doc_id}, status={final_status}, "
+                                    f"Document status check: doc_id={ragflow_doc_id}, "
+                                    f"ragflow_internal_id={ragflow_internal_id}, status={final_status}, "
                                     f"chunks={chunk_count}"
                                 )
 
                                 if final_status == "DONE":
-                                    logger.info(f"Document ingest completed: doc_id={doc.document_id}, ragflow_id={ragflow_doc_id}")
+                                    logger.info(f"Document ingest completed: doc_id={ragflow_doc_id}, ragflow_internal_id={ragflow_internal_id}")
                                     break
                                 elif final_status == "FAIL":
-                                    logger.error(f"Document ingest failed: doc_id={doc.document_id}")
+                                    logger.error(f"Document ingest failed: doc_id={ragflow_doc_id}")
                                     last_fail_reason = "RAGFlow ingest failed"
                                     is_fail = True
                                     break  # polling 루프 탈출 후 재시도
                             except Exception as e:
-                                logger.warning(f"Error checking document status: doc_id={doc.document_id}, error={e}")
+                                logger.warning(f"Error checking document status: doc_id={ragflow_doc_id}, error={e}")
                                 continue
                         else:
-                            logger.debug(f"Document found but no ID: doc_id={doc.document_id}")
+                            logger.debug(f"Document found but no ID: doc_id={ragflow_doc_id}")
                     else:
                         logger.debug(f"Document not found yet: doc_id={doc.document_id}, attempt={poll_count}")
 
@@ -595,11 +602,11 @@ class SourceSetOrchestrator:
                     fail_reason=fail_reason,
                 )
 
-            # 3. 청크 조회
-            logger.info(f"Fetching chunks: doc_id={doc.document_id}, count={chunk_count}")
+            # 3. 청크 조회 (RAGFlow 내부 UUID 사용)
+            logger.info(f"Fetching chunks: doc_id={ragflow_doc_id}, ragflow_internal_id={ragflow_internal_id}, count={chunk_count}")
             chunks = await self._fetch_all_chunks(
                 dataset_id=dataset_id,
-                document_id=ragflow_doc_id,
+                document_id=ragflow_internal_id,  # RAGFlow 내부 UUID
                 page_size=settings.RAGFLOW_CHUNK_PAGE_SIZE,
             )
 
