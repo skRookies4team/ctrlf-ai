@@ -69,11 +69,6 @@ services:
       - ROUTER_ORCHESTRATOR_ENABLED=true
       # 개인화 모드: auto (백엔드 시도 후 실패시 fallback), real (백엔드 필수)
       - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
-      # Quality Gate 설정
-      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
-      - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
-      - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
-      - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
     networks:
       - ctrlf-net
     depends_on:
