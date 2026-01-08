@@ -493,7 +493,7 @@ class SourceSetOrchestrator:
                     ragflow_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
                 logger.info(
                     f"Ingesting document to RAGFlow: ragflow_doc_id={ragflow_doc_id}, "
-                    f"title={doc.title}, spring_doc_id={doc.document_id}"
+                    f"title={doc.title}, version={doc.version}, spring_doc_id={doc.document_id}"
                 )
 
                 # 재시도 로직이 내장된 래퍼 사용 (네트워크 타임아웃/오류에도 1회 재시도)
@@ -501,7 +501,7 @@ class SourceSetOrchestrator:
                     dataset_id=dataset_id,
                     doc_id=ragflow_doc_id,  # 파일명.확장자 형태
                     file_url=doc.source_url,
-                    version=1,  # RAGFlow API 필수 파라미터
+                    version=doc.version,  # 백엔드에서 전달받은 버전 (멱등성 캐시 키)
                     meta={
                         "ragDocumentPk": doc.document_id,  # RAGFlow API 필수
                         "traceId": job.trace_id if job else None,  # RAGFlow API 필수
