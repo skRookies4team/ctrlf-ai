@@ -162,6 +162,7 @@ class IngestCallbackMeta(BaseModel):
     ragDocumentPk: str
     traceId: str
     requestId: str
+    domain: Optional[str] = None  # 문서 도메인 (POLICY, EDUCATION 등)
 
 
 class IngestCallbackStats(BaseModel):
@@ -675,19 +676,32 @@ async def ingest_callback(
     if request.status == "COMPLETED":
         try:
             milvus_client = get_milvus_client()
+
+            # domain에 맞는 dataset_id 결정
+            # meta.domain이 있으면 그대로 사용 (RAGFlow dataset_id와 동일)
+            # 없으면 기본값 "사내규정" 사용 (하위 호환성)
+            dataset_id = request.meta.domain if request.meta.domain else "사내규정"
+
+            logger.debug(
+                f"Retrieving document content: doc_id={request.docId}, "
+                f"domain={request.meta.domain}, dataset_id={dataset_id}, "
+                f"trace_id={request.meta.traceId}"
+            )
+
             content = await milvus_client.get_full_document_text(
                 doc_id=request.docId,
-                dataset_id="사내규정",  # POLICY 도메인
+                dataset_id=dataset_id,
             )
             if content:
                 logger.info(
                     f"Retrieved document content from Milvus: doc_id={request.docId}, "
-                    f"content_length={len(content)}, trace_id={request.meta.traceId}"
+                    f"dataset_id={dataset_id}, content_length={len(content)}, "
+                    f"trace_id={request.meta.traceId}"
                 )
             else:
                 logger.warning(
                     f"No content found in Milvus for doc_id={request.docId}, "
-                    f"trace_id={request.meta.traceId}"
+                    f"dataset_id={dataset_id}, trace_id={request.meta.traceId}"
                 )
         except Exception as e:
             # Milvus 조회 실패해도 Backend 상태 업데이트는 진행
