@@ -2635,10 +2635,17 @@ class ChatService:
             ChatResponse 또는 None (실패 시)
         """
         try:
-            # RAG 검색으로 컨텍스트 확보
-            sources, rag_failed, retriever_used = await self._perform_rag_search_with_fallback(
+            # RAG 검색으로 컨텍스트 확보 (RagRetrievalResult 객체 반환)
+            rag_result: RagRetrievalResult = await self._perform_rag_search_with_fallback(
                 user_query, domain, req, model=None
             )
+            sources = rag_result.sources
+            rag_failed = rag_result.failed
+            retriever_used = (
+                rag_result.retriever_used.value
+                if hasattr(rag_result.retriever_used, 'value')
+                else str(rag_result.retriever_used)
+            ) if rag_result.retriever_used else None
 
             # LLM 메시지 구성
             messages = self._build_llm_messages(
