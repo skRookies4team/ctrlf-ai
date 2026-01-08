@@ -492,8 +492,11 @@ class SourceSetOrchestrator:
                     dataset_id=dataset_id,
                     doc_id=doc.document_id,
                     file_url=doc.source_url,
-                    version=None,  # 필요시 추가
+                    version=1,  # RAGFlow API 필수 파라미터
                     meta={
+                        "ragDocumentPk": doc.document_id,  # RAGFlow API 필수
+                        "traceId": job.trace_id if job else None,  # RAGFlow API 필수
+                        "requestId": job.request_id if job else None,  # RAGFlow API 필수
                         "domain": doc.domain,
                         "source_set_id": job.source_set_id if job else None,
                     },

@@ -384,8 +384,9 @@ class RagflowClient:
         url = f"{self._base_url}/api/v1/datasets/{dataset_id}/documents"
         
         logger.info(
-            f"Uploading document to RAGFlow: dataset_id={dataset_id}, "
-            f"file_name={file_name}, file_url={file_url[:100]}..."
+            f"=== RAGFlow 문서 업로드 시작 ===\n"
+            f"dataset_id={dataset_id}, file_name={file_name}, "
+            f"file_url={file_url[:100]}..."
         )
 
         try:
@@ -393,12 +394,13 @@ class RagflowClient:
             client = get_async_http_client() if not self._external_client else self._external_client
             
             # 1. 파일 다운로드
-            logger.debug(f"Downloading file from URL: {file_url[:100]}...")
+            logger.info(f"파일 다운로드 시작: file_url={file_url[:100]}...")
             file_response = await client.get(file_url, timeout=self._timeout, follow_redirects=True)
             file_response.raise_for_status()
             file_content = file_response.content
+            file_size = len(file_content)
             
-            logger.debug(f"File downloaded: size={len(file_content)} bytes")
+            logger.info(f"파일 다운로드 완료: size={file_size} bytes")
             
             # 2. MIME 타입 결정
             mime_type = "application/pdf"  # 기본값
@@ -421,7 +423,18 @@ class RagflowClient:
                 logger.error(f"RAGFLOW_API_KEY is not set! api_key={self._api_key[:10] if self._api_key else None}...")
                 raise RagflowConnectionError("RAGFLOW_API_KEY not configured")
             
-            logger.debug(f"Upload headers: Authorization={'Bearer ' + self._api_key[:10] + '...' if self._api_key else 'MISSING'}")
+            # 요청 정보 로깅
+            masked_api_key = (
+                f"{self._api_key[:4]}****{self._api_key[-4:]}"
+                if self._api_key and len(self._api_key) > 8
+                else ("****" if self._api_key else "NOT_SET")
+            )
+            logger.info(f"=== RAGFlow 업로드 요청 ===")
+            logger.info(f"URL: POST {url}")
+            logger.info(f"Authorization: Bearer {masked_api_key}")
+            logger.info(f"Content-Type: multipart/form-data")
+            logger.info(f"파일 정보: name={file_name}, size={file_size} bytes, mime_type={mime_type}")
+            logger.info(f"데이터셋 ID: {dataset_id}")
             
             files = {
                 "file": (file_name, file_content, mime_type)  # 파일명, 내용, MIME 타입
@@ -441,6 +454,17 @@ class RagflowClient:
                     headers=headers,
                     timeout=self._timeout,
                 )
+            
+            # 응답 로깅
+            logger.info(f"=== RAGFlow 업로드 응답 ===")
+            logger.info(f"Status Code: {response.status_code}")
+            try:
+                response_json = response.json()
+                response_body_str = json.dumps(response_json, ensure_ascii=False, indent=2)
+                logger.info(f"Response Body (JSON):\n{response_body_str}")
+            except Exception:
+                response_text = response.text[:500] if response.text else "No response body"
+                logger.info(f"Response Body (Text): {response_text}")
 
             if response.status_code in (200, 201):
                 result = response.json()
@@ -448,10 +472,15 @@ class RagflowClient:
                 # RAGFlow 에러 응답 체크 (HTTP 200이어도 code/message로 에러 표시)
                 if result.get("code") != 0 or result.get("data") is False:
                     error_msg = result.get("message", "Unknown error")
-                    logger.error(
-                        f"RAGFlow upload error: code={result.get('code')}, "
-                        f"message={error_msg}, response={result}"
-                    )
+                    logger.error(f"=== RAGFlow 업로드 실패 (응답 코드) ===")
+                    logger.error(f"Status Code: {response.status_code}")
+                    logger.error(f"Error Code: {result.get('code')}")
+                    logger.error(f"Error Message: {error_msg}")
+                    try:
+                        error_body_str = json.dumps(result, ensure_ascii=False, indent=2)
+                        logger.error(f"Response Body (JSON):\n{error_body_str}")
+                    except Exception:
+                        logger.error(f"Response Body: {result}")
                     raise RagflowDocumentError(f"RAGFlow error: {error_msg}")
                 
                 doc_data = result.get("data", result)
@@ -460,40 +489,77 @@ class RagflowClient:
                 if isinstance(doc_data, list):
                     if len(doc_data) > 0:
                         doc_data = doc_data[0]
-                        logger.debug(f"RAGFlow returned list, using first element: {len(result.get('data', []))} items")
+                        logger.info(f"RAGFlow가 리스트 반환, 첫 번째 요소 사용: items_count={len(result.get('data', []))}")
                     else:
-                        logger.error(f"Invalid RAGFlow response: data is empty list")
+                        logger.error(f"=== RAGFlow 업로드 실패 (빈 리스트) ===")
+                        logger.error(f"Status Code: {response.status_code}")
+                        logger.error(f"Response Body: {result}")
                         raise RagflowDocumentError(
                             "Upload succeeded but no document info returned"
                         )
                 
                 # doc_data가 dict가 아니거나 id가 없으면 에러
                 if not isinstance(doc_data, dict) or not doc_data.get("id"):
-                    logger.error(f"Invalid RAGFlow response: data={doc_data}, type={type(doc_data)}")
+                    logger.error(f"=== RAGFlow 업로드 실패 (잘못된 응답 형식) ===")
+                    logger.error(f"Status Code: {response.status_code}")
+                    logger.error(f"Response Data Type: {type(doc_data)}")
+                    logger.error(f"Response Data: {doc_data}")
+                    try:
+                        full_response_str = json.dumps(result, ensure_ascii=False, indent=2)
+                        logger.error(f"Full Response Body (JSON):\n{full_response_str}")
+                    except Exception:
+                        logger.error(f"Full Response Body: {result}")
                     raise RagflowDocumentError(
                         "Upload succeeded but no document info returned"
                     )
                 
-                logger.info(f"Document uploaded: doc_id={doc_data.get('id')}")
+                logger.info(f"=== RAGFlow 업로드 성공 ===")
+                logger.info(f"Document ID: {doc_data.get('id')}")
+                logger.info(f"Document Name: {doc_data.get('name', file_name)}")
+                try:
+                    success_response_str = json.dumps(doc_data, ensure_ascii=False, indent=2)
+                    logger.info(f"Document Data (JSON):\n{success_response_str}")
+                except Exception:
+                    logger.info(f"Document Data: {doc_data}")
                 return doc_data
 
-            error_msg = response.text[:200]
-            logger.error(f"Upload failed: status={response.status_code}, {error_msg}")
-            raise RagflowDocumentError(f"Upload failed: {error_msg}")
+            # HTTP 상태 코드가 200/201이 아닌 경우
+            logger.error(f"=== RAGFlow 업로드 실패 (HTTP 오류) ===")
+            logger.error(f"Status Code: {response.status_code}")
+            error_msg = response.text[:500] if response.text else "No error message"
+            logger.error(f"Error Message: {error_msg}")
+            try:
+                error_json = response.json()
+                error_body_str = json.dumps(error_json, ensure_ascii=False, indent=2)
+                logger.error(f"Response Body (JSON):\n{error_body_str}")
+            except Exception:
+                logger.error(f"Response Body (Text): {error_msg}")
+            raise RagflowDocumentError(f"Upload failed: status={response.status_code}, {error_msg}")
 
         except RagflowError:
             raise
         except httpx.TimeoutException as e:
             upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
-            logger.error(f"Upload timeout: {upstream_error.message}")
+            logger.error(f"=== RAGFlow 업로드 실패 (타임아웃) ===")
+            logger.error(f"URL: POST {url}")
+            logger.error(f"Timeout: {self._timeout}s")
+            logger.error(f"Error: {upstream_error.message}")
             raise RagflowConnectionError(f"Upload timeout after {self._timeout}s") from upstream_error
         except httpx.RequestError as e:
             upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
-            logger.error(f"Upload network error: {upstream_error.message}")
+            logger.error(f"=== RAGFlow 업로드 실패 (네트워크 오류) ===")
+            logger.error(f"URL: POST {url}")
+            logger.error(f"Error Type: {type(e).__name__}")
+            logger.error(f"Error Message: {upstream_error.message}")
+            logger.error(f"Full Error: {str(e)[:500]}")
             raise RagflowConnectionError(f"Network error: {str(e)[:200]}") from upstream_error
         except Exception as e:
             upstream_error = ragflow_error_to_upstream_error(e, self._timeout)
-            logger.error(f"Upload unexpected error: {upstream_error.message}")
+            logger.error(f"=== RAGFlow 업로드 실패 (예상치 못한 오류) ===")
+            logger.error(f"URL: POST {url}")
+            logger.error(f"Error Type: {type(e).__name__}")
+            logger.error(f"Error Message: {upstream_error.message}")
+            logger.error(f"Full Error: {str(e)[:500]}")
             raise RagflowDocumentError(f"Unexpected error: {str(e)[:200]}") from upstream_error
 
     async def trigger_parsing(
