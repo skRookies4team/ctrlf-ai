@@ -238,6 +238,27 @@ services:
       elasticsearch:
         condition: service_healthy
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ctrlf-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus:/etc/prometheus
+    networks:
+      - ctrlf-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ctrlf-grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - ctrlf-net
+    depends_on:
+      - prometheus
+
+
 # =============================================================================
 # 네트워크 설정
 # =============================================================================

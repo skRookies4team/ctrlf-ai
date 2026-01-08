@@ -37,10 +37,15 @@ from app.clients.http_client import close_async_http_client
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.telemetry.middleware import RequestContextMiddleware
+from app.metrics.prometheus import prometheus_middleware
 from app.telemetry.publisher import (
     TelemetryPublisher,
     get_telemetry_publisher,
     set_telemetry_publisher,
+)
+from app.metrics.prometheus import (
+    prometheus_middleware,
+    metrics_router,
 )
 
 # 설정 및 로거 초기화
@@ -193,6 +198,8 @@ app.add_middleware(
 # Request Context 미들웨어 (Telemetry 헤더 전파)
 # X-Trace-Id, X-User-Id, X-Dept-Id, X-Conversation-Id, X-Turn-Id 헤더를 컨텍스트에 저장
 app.add_middleware(RequestContextMiddleware)
+# Prometheus Metrics Middleware
+app.middleware("http")(prometheus_middleware)
 
 # 라우터 등록
 #
@@ -216,6 +223,8 @@ app.add_middleware(RequestContextMiddleware)
 #   app.include_router(chat.router, prefix="/api/v1", tags=["Chat"])
 #   app.include_router(rag.router, prefix="/api/v1", tags=["RAG"])
 app.include_router(health.router, prefix="", tags=["Health"])
+# Prometheus Metrics Endpoint
+app.include_router(metrics_router, tags=["Metrics"])
 
 # AI API routers
 # - POST /ai/chat/messages: AI chat response generation

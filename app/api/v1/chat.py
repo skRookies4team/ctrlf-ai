@@ -14,6 +14,7 @@ Phase 42 (A안 확정):
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import BackgroundTasks
+from fastapi import Request
 
 from app.models.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
@@ -74,51 +75,27 @@ def get_chat_service() -> ChatService:
         503: {"description": "RAG 검색 서비스 사용 불가 (RAGFlow 장애)"},
     },
 )
+
 async def create_chat_message(
     req: ChatRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
-    """
-    Generate AI response for a chat request.
-
-    This endpoint is called by the backend to generate AI responses
-    for user queries. It processes the conversation history and
-    returns an answer with relevant source documents.
-
-    **Request Body:**
-    - `session_id`: Chat session identifier
-    - `user_id`: User identifier (employee ID, etc.)
-    - `user_role`: User's role (EMPLOYEE, MANAGER, ADMIN)
-    - `department`: User's department (optional)
-    - `domain`: Query domain for routing (optional)
-    - `channel`: Request channel (WEB, MOBILE)
-    - `messages`: Conversation history
-
-    **Response:**
-    - `answer`: Generated AI response text
-    - `sources`: List of reference documents used
-    - `meta`: Response metadata (model, route, etc.)
-
-    **Phase 42 (A안 확정):**
-    - RAGFlow 장애 시 503 Service Unavailable 반환
-    - fallback 없음 (RAGFlow 단일 검색 엔진)
-
-    Args:
-        req: Chat request with user info and conversation history
-        service: Injected ChatService instance
-
-    Returns:
-        ChatResponse with answer, sources, and metadata
-
-    Raises:
-        HTTPException 503: RAGFlow 장애 시
-    """
     try:
-        return await service.handle_chat(
+        response = await service.handle_chat(
             req=req,
             background_tasks=background_tasks,
         )
+
+        # metrics / state용 정보 세팅
+        if response.meta:
+            request.state.domain = response.meta.domain
+            request.state.model_name = response.meta.used_model
+            request.state.rag_used = bool(response.meta.rag_used)
+
+        return response
+
     except RagSearchUnavailableError as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
