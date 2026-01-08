@@ -68,6 +68,8 @@ from fastapi import BackgroundTasks
 from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
+from app.strategy.auto_strategy import decide_strategy
+from app.strategy.auto_strategy import decide_strategy
 from app.core.metrics import (
     LOG_TAG_LLM_ERROR,
     LOG_TAG_LLM_FALLBACK,
@@ -900,6 +902,42 @@ class ChatService:
                 tool=route.value,
                 reason=f"rule-based: IntentService",
             )
+            
+        # ============================================================
+        # 🔥 Phase LLM-Ops: Dynamic Strategy Decision (AUTO TUNING)
+        # ============================================================
+
+        strategy = await decide_strategy(domain=domain)
+
+        # 1️⃣ RAG 사용 여부 override
+        if not strategy["use_rag"]:
+            # RAG 강제 차단 (전역 컨텍스트)
+            set_retrieval_blocked(
+                blocked=True,
+                reason=f"AUTO_RULE:{strategy['reason']}"
+            )
+            
+        if strategy["disable_rag"]:
+            set_retrieval_blocked(
+                blocked=True,
+                reason=f"AUTO_RULE:{strategy['reason']}"
+            )
+
+        # AUTO STRATEGY 이후에 다시 반영
+        if strategy.get("model"):
+            req.llm_model = strategy["model"]
+            llm_provider = strategy["model"]  
+            
+        meta.auto_strategy_applied = True
+        meta.auto_strategy_reason = strategy["reason"]
+
+        logger.info(
+            f"[AUTO_STRATEGY] domain={domain}, "
+            f"use_rag={strategy['use_rag']}, "
+            f"model={strategy['model']}, "
+            f"reason={strategy['reason']}"
+        )
+
 
         # =====================================================================
         # 멀티턴 맥락 유지: Step 1-4 - 컨텍스트 처리
@@ -1764,6 +1802,8 @@ class ChatService:
             # Option 3: 실제 사용된 검색 엔진 (운영 디버깅용)
             retriever_used=retriever_used,
             latency_ms=latency_ms,
+            auto_strategy_applied=strategy is not None,
+            auto_strategy_reason=strategy.get("reason") if strategy else None,
             # Phase 12: 에러 정보 및 개별 latency
             error_type=error_type,
             error_message=error_message,
