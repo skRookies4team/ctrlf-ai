@@ -39,6 +39,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 애플리케이션 코드 복사
 COPY app/ ./app/
 
+# Phase 58: Query Expansion 설정 파일 복사
+COPY config/ ./config/
+
 # 소유권 변경 (비루트 유저)
 RUN chown -R appuser:appgroup /app
 
