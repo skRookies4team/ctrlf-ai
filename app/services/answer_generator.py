@@ -35,27 +35,32 @@ ANSWER_GENERATOR_SYSTEM_PROMPT = """당신은 기업 내부 정보보호 AI 어�
 
 1. **facts에 있는 값만 사용**: 답변에는 facts에 있는 수치, 목록, 날짜만 포함합니다.
 2. **추측 금지**: facts에 없는 정보는 절대 추측하거나 생성하지 않습니다.
-3. **기간 포함**: period_start/end가 있으면 "~기준" 형태로 자연스럽게 포함합니다.
-4. **업데이트 시점**: updated_at이 있으면 필요시 "마지막 업데이트: ~" 형태로 언급합니다.
+3. **사용자 이름 포함**: extra.employee_name이 있으면 답변에 "OOO님" 형태로 자연스럽게 포함합니다.
+4. **기간 포함**: period_start/end가 있으면 "~기준" 형태로 자연스럽게 포함합니다.
 5. **간결함**: 불필요한 인사나 부가 설명 없이 핵심 정보만 전달합니다.
 6. **한국어 사용**: 모든 답변은 한국어로 작성합니다.
+7. **자연스러운 문장**: 딱딱한 나열보다는 자연스러운 문장으로 답변합니다.
 
 ## 출력 형식
 
-- 수치가 있으면 명확히 표시 (예: "남은 연차: 7일")
+- 사용자 이름이 있으면 "OOO님은..." 형태로 시작
+- 수치는 문장 속에 자연스럽게 포함 (예: "총 15일 중 8일 사용하셔서 남은 연차는 7일입니다")
 - 목록이 있으면 번호나 글머리로 정리
-- 기간이 있으면 자연스럽게 포함 (예: "2025년 1월 기준으로...")
 
 ## 예시
 
-facts: {"metrics": {"remaining_days": 7}, "period_start": "2025-01-01"}
-답변: "2025년 1월 기준, 남은 연차는 7일입니다."
+facts: {"metrics": {"total_days": 15, "used_days": 8, "remaining_days": 7}, "extra": {"employee_name": "홍길동"}}
+답변: "홍길동님은 총 15일 중 8일 사용하셔서 남은 연차는 7일입니다."
 
-facts: {"items": [{"title": "개인정보보호 교육", "deadline": "2025-01-31"}]}
-답변: "이번 달 마감되는 필수 교육이 1건 있어요.
-- 개인정보보호 교육 (마감: 1/31)"
+facts: {"metrics": {"remaining": 2}, "items": [{"title": "개인정보보호 교육"}, {"title": "정보보안 교육"}], "extra": {"employee_name": "김철수"}}
+답변: "김철수님은 현재 미이수 필수 교육이 2건 있습니다.
+- 개인정보보호 교육
+- 정보보안 교육"
 
-사용자의 질문과 facts 데이터를 받으면 위 규칙에 따라 답변만 출력하세요."""
+facts: {"metrics": {"welfare_points": 150000, "meal_allowance": 280000}, "extra": {"employee_name": "이영희"}}
+답변: "이영희님의 복지 포인트 잔액은 150,000원이고, 식대 잔액은 280,000원입니다."
+
+사용자의 질문과 facts 데이터를 받으면 위 규칙에 따라 자연스러운 답변만 출력하세요."""
 
 
 # =============================================================================
@@ -209,12 +214,17 @@ class AnswerGenerator:
     def _format_q1_fallback(self, facts: PersonalizationFacts) -> str:
         """Q1 (미이수 필수 교육) 폴백."""
         remaining = facts.metrics.get("remaining", 0)
+        employee_name = facts.extra.get("employee_name")
+        name_prefix = f"{employee_name}님은 " if employee_name else ""
+
         if remaining == 0:
-            return "미이수 필수 교육이 없어요. 모두 완료하셨네요!"
+            if employee_name:
+                return f"{employee_name}님은 필수 교육을 모두 완료하셨습니다."
+            return "필수 교육을 모두 완료하셨습니다."
 
         items = facts.items
         if items:
-            lines = [f"미이수 필수 교육이 {remaining}건 있어요."]
+            lines = [f"{name_prefix}현재 미이수 필수 교육이 {remaining}건 있습니다."]
             for item in items[:5]:  # 최대 5개
                 title = item.get("title", "")
                 deadline = item.get("deadline", "")
@@ -224,7 +234,7 @@ class AnswerGenerator:
                     lines.append(f"- {title}")
             return "\n".join(lines)
 
-        return f"미이수 필수 교육이 {remaining}건 있어요."
+        return f"{name_prefix}현재 미이수 필수 교육이 {remaining}건 있습니다."
 
     def _format_q2_fallback(self, facts: PersonalizationFacts) -> str:
         """Q2 (특정 토픽 교육 이수 여부) 폴백."""
@@ -280,8 +290,12 @@ class AnswerGenerator:
         my_avg = facts.metrics.get("my_average", 0)
         dept_avg = facts.metrics.get("dept_average", 0)
         company_avg = facts.metrics.get("company_average", 0)
+        employee_name = facts.extra.get("employee_name")
 
-        lines = [f"내 평균 점수: {my_avg}점"]
+        if employee_name:
+            lines = [f"{employee_name}님의 퀴즈 평균 점수는 {my_avg}점입니다."]
+        else:
+            lines = [f"퀴즈 평균 점수는 {my_avg}점입니다."]
         if dept_avg:
             diff = my_avg - dept_avg
             diff_text = f"+{diff:.1f}" if diff > 0 else f"{diff:.1f}"
@@ -366,12 +380,17 @@ class AnswerGenerator:
     def _format_q9_fallback(self, facts: PersonalizationFacts) -> str:
         """Q9 (이번 주 할 일) 폴백."""
         count = facts.metrics.get("todo_count", 0)
+        employee_name = facts.extra.get("employee_name")
+        name_prefix = f"{employee_name}님은 " if employee_name else ""
+
         if count == 0:
-            return "이번 주 해야 할 교육/퀴즈가 없어요."
+            if employee_name:
+                return f"{employee_name}님은 이번 주 해야 할 교육/퀴즈가 없습니다."
+            return "이번 주 해야 할 교육/퀴즈가 없습니다."
 
         items = facts.items
         if items:
-            lines = [f"이번 주 할 일이 {count}건 있어요."]
+            lines = [f"{name_prefix}이번 주 할 일이 {count}건 있습니다."]
             for item in items[:5]:
                 item_type = item.get("type", "")
                 title = item.get("title", "")
@@ -452,10 +471,16 @@ class AnswerGenerator:
         remaining = facts.metrics.get("remaining_days", 0)
         total = facts.metrics.get("total_days", 0)
         used = facts.metrics.get("used_days", 0)
+        employee_name = facts.extra.get("employee_name")
 
-        if total:
-            return f"남은 연차: {remaining}일 (총 {total}일 중 {used}일 사용)"
-        return f"남은 연차: {remaining}일"
+        if employee_name:
+            if total:
+                return f"{employee_name}님은 총 {total}일 중 {used}일 사용하셔서 남은 연차는 {remaining}일입니다."
+            return f"{employee_name}님의 남은 연차는 {remaining}일입니다."
+        else:
+            if total:
+                return f"총 {total}일 중 {used}일 사용하셔서 남은 연차는 {remaining}일입니다."
+            return f"남은 연차는 {remaining}일입니다."
 
     def _format_q12_fallback(self, facts: PersonalizationFacts) -> str:
         """Q12 (연차 사용 이력) 폴백."""
@@ -463,15 +488,23 @@ class AnswerGenerator:
         used = facts.metrics.get("used_days", 0)
         remaining = facts.metrics.get("remaining_days", 0)
         usage_count = facts.metrics.get("usage_count", 0)
+        employee_name = facts.extra.get("employee_name")
 
         items = facts.items
         if not items:
             if used == 0:
-                return "올해 사용한 연차가 없어요."
-            return f"올해 연차 {used}일을 사용했어요. (잔여: {remaining}일)"
+                if employee_name:
+                    return f"{employee_name}님은 올해 사용한 연차가 없습니다."
+                return "올해 사용한 연차가 없습니다."
+            if employee_name:
+                return f"{employee_name}님은 올해 연차 {used}일을 사용하셨습니다. (잔여: {remaining}일)"
+            return f"올해 연차 {used}일을 사용하셨습니다. (잔여: {remaining}일)"
 
         # 사용 이력이 있는 경우
-        lines = [f"올해 연차 사용 이력 ({usage_count}건, 총 {used}일 사용):"]
+        if employee_name:
+            lines = [f"{employee_name}님의 올해 연차 사용 이력입니다. ({usage_count}건, 총 {used}일 사용)"]
+        else:
+            lines = [f"올해 연차 사용 이력입니다. ({usage_count}건, 총 {used}일 사용)"]
 
         for item in items[:10]:  # 최대 10개 표시
             leave_type = item.get("leave_type", "연차")
@@ -515,16 +548,25 @@ class AnswerGenerator:
         """Q14 (복지/식대 포인트) 폴백."""
         welfare = facts.metrics.get("welfare_points", 0)
         meal = facts.metrics.get("meal_allowance", 0)
+        employee_name = facts.extra.get("employee_name")
 
-        lines = ["포인트 잔액:"]
-        if welfare:
-            lines.append(f"- 복지 포인트: {welfare:,}원")
-        if meal:
-            lines.append(f"- 식대: {meal:,}원")
+        # 자연스러운 문장 형태로 응답
+        if employee_name:
+            if welfare and meal:
+                return f"{employee_name}님의 복지 포인트 잔액은 {welfare:,}원이고, 식대 잔액은 {meal:,}원입니다."
+            elif welfare:
+                return f"{employee_name}님의 복지 포인트 잔액은 {welfare:,}원입니다."
+            elif meal:
+                return f"{employee_name}님의 식대 잔액은 {meal:,}원입니다."
+        else:
+            if welfare and meal:
+                return f"복지 포인트 잔액은 {welfare:,}원이고, 식대 잔액은 {meal:,}원입니다."
+            elif welfare:
+                return f"복지 포인트 잔액은 {welfare:,}원입니다."
+            elif meal:
+                return f"식대 잔액은 {meal:,}원입니다."
 
-        if len(lines) > 1:
-            return "\n".join(lines)
-        return "포인트 잔액을 조회할 수 없어요."
+        return "포인트 잔액을 조회할 수 없습니다."
 
     def _format_q15_fallback(self, facts: PersonalizationFacts) -> str:
         """Q15 (복지 포인트 사용 내역) 폴백."""
@@ -655,12 +697,17 @@ class AnswerGenerator:
     def _format_q20_fallback(self, facts: PersonalizationFacts) -> str:
         """Q20 (올해 HR 할 일) 폴백."""
         count = facts.metrics.get("todo_count", 0)
+        employee_name = facts.extra.get("employee_name")
+        name_prefix = f"{employee_name}님은 " if employee_name else ""
+
         if count == 0:
-            return "올해 HR 할 일이 모두 완료되었어요!"
+            if employee_name:
+                return f"{employee_name}님은 올해 HR 할 일을 모두 완료하셨습니다."
+            return "올해 HR 할 일을 모두 완료하셨습니다."
 
         items = facts.items
         if items:
-            lines = [f"올해 미완료 HR 항목이 {count}건 있어요."]
+            lines = [f"{name_prefix}올해 미완료 HR 항목이 {count}건 있습니다."]
             for item in items[:5]:
                 item_type = item.get("type", "")
                 title = item.get("title", "")
@@ -671,4 +718,4 @@ class AnswerGenerator:
                     lines.append(f"- [{item_type}] {title}")
             return "\n".join(lines)
 
-        return f"올해 미완료 HR 항목이 {count}건 있어요."
+        return f"{name_prefix}올해 미완료 HR 항목이 {count}건 있습니다."
