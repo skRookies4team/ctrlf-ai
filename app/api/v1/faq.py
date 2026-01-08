@@ -106,12 +106,13 @@ async def generate_faq_draft(
 
     Args:
         request: FAQ 초안 생성 요청
-            - domain: 도메인 (예: SEC_POLICY, PII_PRIVACY)
+            - domain: 도메인 (ACCOUNT, APPROVAL, HR, PAY, WELFARE, EDUCATION, IT, SECURITY, FACILITY, ETC)
             - cluster_id: FAQ 후보 클러스터 ID
             - canonical_question: 대표 질문
             - sample_questions: 실제 직원 질문 예시들 (선택)
             - top_docs: RAG에서 뽑아온 후보 문서들 (선택)
             - avg_intent_confidence: 평균 의도 신뢰도 (선택, 최소 0.7 필요)
+            - llm_model: LLM 프로바이더 (선택, "exaone" 또는 "openai", 미지정시 기본값)
 
     Returns:
         FaqDraftGenerateResponse: 생성 결과
@@ -121,7 +122,7 @@ async def generate_faq_draft(
     """
     logger.info(
         f"FAQ generate request: domain={request.domain}, "
-        f"cluster_id={request.cluster_id}"
+        f"cluster_id={request.cluster_id}, llm_model={request.llm_model}"
     )
 
     # 의도 신뢰도 검증 (설정에 따라 선택적 검증)
@@ -429,11 +430,12 @@ async def generate_auto_faq(
 
     Args:
         request: 자동 FAQ 생성 요청
-            - domain: 도메인 필터 (선택, null이면 모든 도메인)
+            - domain: 도메인 필터 (ACCOUNT, APPROVAL, HR, PAY, WELFARE, EDUCATION, IT, SECURITY, FACILITY, ETC 중 하나, 선택, null이면 모든 도메인)
             - min_frequency: 최소 질문 빈도 (여러 사용자 간의 질문 횟수)
             - days_back: 조회 기간 일수 (최근 N일간)
             - max_candidates: 최대 후보 수 제한
             - auto_generate_drafts: 자동으로 FAQ 초안 생성 여부
+            - llm_model: LLM 프로바이더 (선택, "exaone" 또는 "openai", 미지정시 기본값)
 
     Returns:
         FaqAutoGenerateResponse: 생성 결과
@@ -449,7 +451,8 @@ async def generate_auto_faq(
         f"Auto FAQ generation request: domain={request.domain}, "
         f"min_frequency={request.min_frequency}, days_back={request.days_back}, "
         f"max_candidates={request.max_candidates}, "
-        f"auto_generate_drafts={request.auto_generate_drafts}"
+        f"auto_generate_drafts={request.auto_generate_drafts}, "
+        f"llm_model={request.llm_model}"
     )
 
     service = get_faq_auto_service()

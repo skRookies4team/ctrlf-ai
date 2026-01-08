@@ -61,7 +61,8 @@ Phase 12 Fallback 전략:
 
 import asyncio
 import time
-from typing import Dict, List, Optional, Tuple
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import BackgroundTasks
 
 from app.core.config import get_settings
@@ -677,6 +678,27 @@ class ChatService:
                 start_time,
                 has_pii=False,
             )
+
+        # =====================================================================
+        # FAQ 매칭 체크: 백엔드 초기 FAQ 질문과 매칭되면 AI로 답변 생성
+        # =====================================================================
+        faq_match_result = await self._check_faq_match(masked_query, req.domain)
+        if faq_match_result:
+            logger.info(
+                f"FAQ matched: question='{faq_match_result['question'][:50]}...', "
+                f"score={faq_match_result['score']:.2f}"
+            )
+            # FAQ 질문과 매칭되면 AI로 답변 생성
+            ai_answer = await self._generate_ai_answer_for_faq(
+                user_query=masked_query,
+                faq_question=faq_match_result['question'],
+                domain=req.domain or "POLICY",
+                start_time=start_time,
+                pii_input=pii_input,
+                req=req,
+            )
+            if ai_answer:
+                return ai_answer
 
         # =====================================================================
         # Privacy Query Gate: 개인정보성 명단 요청 차단
@@ -1782,9 +1804,8 @@ class ChatService:
         ab_embedding_model: Optional[str] = None,
         ab_collection_name: Optional[str] = None,
     ) -> None:
-        logger.warning("[FAQ_LOG] _send_ai_log CALLED")
         """
-        AI 로그를 생성하고 백엔드로 전송합니다 (fire-and-forget).
+        AI 로그를 생성하고 Elasticsearch로 전송합니다 (fire-and-forget).
 
         LOG 단계 PII 마스킹을 적용하여 question_masked, answer_masked를 생성하고
         AILogEntry를 만들어 백엔드로 비동기 전송합니다.
@@ -1840,11 +1861,16 @@ class ChatService:
             )
 
             # 비동기 전송 (fire-and-forget)
+            # Elasticsearch에 저장 (배치 스크립트를 통해 백엔드로 일괄 전송됨)
             await self._ai_log.send_log_async(log_entry)
 
         except Exception as e:
             # 로그 생성/전송 실패는 메인 로직에 영향 주지 않음
-            logger.warning(f"[AI_LOG] Failed to send log (ignored): {e}")
+            logger.error(
+                f"[AI_LOG] ❌ Failed to send log (ignored) | "
+                f"user_id={req.user_id} | session_id={req.session_id} | "
+                f"error={str(e)}"
+            )
 
     def _build_llm_messages(
         self,
@@ -2359,3 +2385,173 @@ class ChatService:
                     error_message=str(e),
                 ),
             )
+
+    # =========================================================================
+    # FAQ 매칭 및 AI 답변 생성
+    # =========================================================================
+
+    async def _check_faq_match(
+        self,
+        user_query: str,
+        domain: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """백엔드 FAQ 목록에서 사용자 질문과 매칭되는 FAQ를 찾습니다.
+        
+        Args:
+            user_query: 사용자 질문 (마스킹 처리됨)
+            domain: 도메인 필터 (선택)
+            
+        Returns:
+            매칭된 FAQ 정보 (question, score) 또는 None
+        """
+        if not self._backend_data_client or not self._backend_data_client.is_configured:
+            return None
+
+        try:
+            # 백엔드에서 FAQ 목록 조회
+            faq_response = await self._backend_data_client.get_faq_list(domain=domain)
+            if not faq_response.success or not faq_response.data:
+                return None
+
+            faqs = faq_response.data.get("faqs", [])
+            if not faqs:
+                return None
+
+            # 사용자 질문과 FAQ 질문들을 비교하여 가장 유사한 것 찾기
+            best_match = None
+            best_score = 0.0
+            similarity_threshold = 0.7  # 유사도 임계값
+
+            user_query_lower = user_query.lower().strip()
+
+            for faq in faqs:
+                faq_question = faq.get("question", "")
+                if not faq_question:
+                    continue
+
+                faq_question_lower = faq_question.lower().strip()
+
+                # 문자열 유사도 계산
+                similarity = SequenceMatcher(None, user_query_lower, faq_question_lower).ratio()
+
+                # 키워드 매칭 보너스
+                user_words = set(user_query_lower.split())
+                faq_words = set(faq_question_lower.split())
+                common_words = user_words & faq_words
+                if common_words:
+                    keyword_bonus = len(common_words) * 0.05
+                    similarity = min(1.0, similarity + keyword_bonus)
+
+                if similarity > best_score:
+                    best_score = similarity
+                    best_match = {
+                        "question": faq_question,
+                        "faq_id": faq.get("id"),
+                        "score": similarity,
+                    }
+
+            # 임계값 이상이면 매칭 성공
+            if best_match and best_score >= similarity_threshold:
+                return best_match
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"FAQ match check failed: {e}")
+            return None
+
+    async def _generate_ai_answer_for_faq(
+        self,
+        user_query: str,
+        faq_question: str,
+        domain: str,
+        start_time: float,
+        pii_input: "PiiService.PiiResult",
+        req: ChatRequest,
+    ) -> Optional[ChatResponse]:
+        """FAQ 질문에 대해 AI로 답변을 생성합니다.
+        
+        Args:
+            user_query: 사용자 질문
+            faq_question: 매칭된 FAQ 질문
+            domain: 도메인
+            start_time: 요청 시작 시간
+            pii_input: PII 마스킹 결과
+            req: ChatRequest
+            
+        Returns:
+            ChatResponse 또는 None (실패 시)
+        """
+        try:
+            # RAG 검색으로 컨텍스트 확보
+            sources, rag_failed, retriever_used = await self._perform_rag_search_with_fallback(
+                user_query, domain, req, model=None
+            )
+
+            # LLM 메시지 구성
+            messages = self._build_llm_messages(
+                user_query=user_query,
+                sources=sources,
+                req=req,
+                rag_attempted=True,
+                domain=domain,
+                intent=IntentType.POLICY_QA,
+                history=req.messages[:-1] if len(req.messages) > 1 else [],
+            )
+
+            # LLM 호출
+            llm_start = time.perf_counter()
+            llm_response = await self._llm.generate_chat_completion(
+                messages=messages,
+                temperature=0.2,
+                max_tokens=1024,
+            )
+            llm_latency_ms = int((time.perf_counter() - llm_start) * 1000)
+
+            # PII 마스킹 (OUTPUT)
+            pii_output = await self._pii.detect_and_mask(
+                text=llm_response,
+                stage=MaskingStage.OUTPUT,
+            )
+            answer_text = pii_output.masked_text
+
+            if pii_output.has_pii:
+                logger.info(f"PII detected in output: {len(pii_output.tags)} entities masked")
+
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+
+            # AI 로그 전송 (백그라운드)
+            self._fire_and_forget(
+                self._send_ai_log(
+                    req=req,
+                    answer=answer_text,
+                    sources=sources,
+                    domain=domain,
+                    intent=IntentType.POLICY_QA,
+                    route=RouteType.RAG_INTERNAL,
+                    pii_input=pii_input,
+                    pii_output=pii_output,
+                )
+            )
+
+            return ChatResponse(
+                answer=answer_text,
+                sources=sources,
+                meta=ChatAnswerMeta(
+                    route=RouteType.RAG_INTERNAL.value,
+                    intent=IntentType.POLICY_QA.value,
+                    domain=domain,
+                    rag_used=True,
+                    rag_source_count=len(sources),
+                    masked=pii_input.has_pii or pii_output.has_pii,
+                    has_pii_input=pii_input.has_pii,
+                    has_pii_output=pii_output.has_pii,
+                    latency_ms=latency_ms,
+                    llm_latency_ms=llm_latency_ms,
+                    rag_latency_ms=None,  # RAG latency는 _perform_rag_search_with_fallback에서 측정
+                ),
+            )
+
+        except Exception as e:
+            logger.error(f"AI answer generation for FAQ failed: {e}")
+            return None

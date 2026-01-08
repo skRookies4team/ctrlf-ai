@@ -23,10 +23,15 @@ from app.models.faq import (
     FaqAutoGenerateRequest,
     FaqAutoGenerateResponse,
     FaqCandidate,
+    FaqDomain,
     FaqDraft,
     FaqDraftGenerateRequest,
 )
-from app.services.faq_service import FaqDraftService, FaqGenerationError
+from app.services.faq_service import (
+    FaqDraftService,
+    FaqGenerationError,
+    classify_faq_domain,
+)
 
 logger = get_logger(__name__)
 
@@ -132,7 +137,9 @@ class FaqAutoGenerateService:
             if request.auto_generate_drafts:
                 for candidate in candidates:
                     try:
-                        draft = await self._generate_draft_from_candidate(candidate)
+                        draft = await self._generate_draft_from_candidate(
+                            candidate, llm_model=request.llm_model
+                        )
                         drafts.append(draft)
                     except Exception as e:
                         logger.warning(
@@ -463,8 +470,20 @@ class FaqAutoGenerateService:
             recency_score = self._calculate_recency_score(cluster_messages)
             total_score = (frequency_score * 0.7) + (recency_score * 0.3)
 
-            # 도메인 추출
-            domain = cluster_messages[0].domain or "UNKNOWN"
+            # 도메인 추출 및 자동 분류
+            provided_domain = cluster_messages[0].domain
+            # 질문 기반으로 도메인 자동 분류
+            classified_domain = classify_faq_domain(
+                question=canonical_question,
+                provided_domain=provided_domain
+            )
+            
+            if provided_domain and provided_domain.upper() != classified_domain:
+                logger.debug(
+                    f"FAQ domain auto-classified in candidate: "
+                    f"{provided_domain} → {classified_domain}, "
+                    f"question='{canonical_question[:50]}...'"
+                )
 
             candidate = FaqCandidate(
                 candidate_id=str(uuid.uuid4()),
@@ -473,7 +492,7 @@ class FaqAutoGenerateService:
                 frequency_score=frequency_score,
                 recency_score=recency_score,
                 total_score=total_score,
-                domain=domain,
+                domain=classified_domain,  # 분류된 도메인 사용
                 sample_questions=sample_questions,
                 user_count=user_count,
             )
@@ -564,25 +583,28 @@ class FaqAutoGenerateService:
             return 0.0
 
     async def _generate_draft_from_candidate(
-        self, candidate: FaqCandidate
+        self, candidate: FaqCandidate, llm_model: Optional[str] = None
     ) -> FaqDraft:
         """
         후보로부터 FAQ 초안을 생성합니다.
 
         Args:
             candidate: FAQ 후보
+            llm_model: LLM 프로바이더 ("exaone" | "openai" | None)
 
         Returns:
             FaqDraft: 생성된 FAQ 초안
         """
         # FaqDraftGenerateRequest 생성
+        # candidate.domain은 이미 classify_faq_domain으로 분류된 값
         generate_request = FaqDraftGenerateRequest(
-            domain=candidate.domain or "POLICY",
+            domain=candidate.domain or FaqDomain.ETC.value,  # ETC를 기본값으로 사용
             cluster_id=candidate.cluster_id,
             canonical_question=candidate.canonical_question,
             sample_questions=candidate.sample_questions,
             top_docs=[],  # 백엔드에서 제공하지 않으면 빈 리스트
             avg_intent_confidence=None,  # 나중에 계산 가능하면 추가
+            llm_model=llm_model,  # LLM 프로바이더 전달
         )
 
         # FAQ 초안 생성

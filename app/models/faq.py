@@ -5,12 +5,49 @@ FAQ 초안 생성 API의 요청/응답 DTO를 정의합니다.
 
 사용 예시:
     from app.models.faq import FaqDraftGenerateRequest, FaqDraftGenerateResponse
+
+FAQ 도메인 목록 (백엔드/프론트와 동기화):
+- ACCOUNT: 계정
+- APPROVAL: 결재
+- HR: 인사
+- PAY: 급여
+- WELFARE: 복지
+- EDUCATION: 교육
+- IT: IT
+- SECURITY: 보안
+- FACILITY: 시설
+- ETC: 기타
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# FAQ 도메인 Enum (백엔드/프론트와 동기화)
+# =============================================================================
+
+
+class FaqDomain(str, Enum):
+    """
+    FAQ 도메인 목록
+    
+    백엔드 초기 데이터 마이그레이션 파일(V15__insert_initial_faq_data.sql) 기준으로 정의됨.
+    """
+
+    ACCOUNT = "ACCOUNT"  # 계정
+    APPROVAL = "APPROVAL"  # 결재
+    HR = "HR"  # 인사
+    PAY = "PAY"  # 급여
+    WELFARE = "WELFARE"  # 복지
+    EDUCATION = "EDUCATION"  # 교육
+    IT = "IT"  # IT
+    SECURITY = "SECURITY"  # 보안
+    FACILITY = "FACILITY"  # 시설
+    ETC = "ETC"  # 기타
 
 
 class FaqSourceDoc(BaseModel):
@@ -37,7 +74,17 @@ class FaqDraftGenerateRequest(BaseModel):
     FAQ 초안 생성 요청
 
     Attributes:
-        domain: 도메인 (예: SEC_POLICY, PII_PRIVACY, TRAINING_QUIZ 등)
+        domain: 도메인 (백엔드/프론트와 동기화된 도메인 목록 사용)
+            - ACCOUNT: 계정
+            - APPROVAL: 결재
+            - HR: 인사
+            - PAY: 급여
+            - WELFARE: 복지
+            - EDUCATION: 교육
+            - IT: IT
+            - SECURITY: 보안
+            - FACILITY: 시설
+            - ETC: 기타
         cluster_id: FAQ 후보 클러스터 ID
         canonical_question: 클러스터를 대표하는 질문
         sample_questions: 실제 직원 질문 예시들
@@ -49,7 +96,7 @@ class FaqDraftGenerateRequest(BaseModel):
     domain: str = Field(
         ...,
         min_length=1,
-        description="도메인 (예: SEC_POLICY, PII_PRIVACY)",
+        description="도메인 (ACCOUNT, APPROVAL, HR, PAY, WELFARE, EDUCATION, IT, SECURITY, FACILITY, ETC 중 하나)",
     )
     cluster_id: str = Field(..., min_length=1, description="FAQ 후보 클러스터 ID")
     canonical_question: str = Field(
@@ -71,6 +118,11 @@ class FaqDraftGenerateRequest(BaseModel):
     model: Optional[Literal["openai", "sroberta"]] = Field(
         None,
         description="A/B 테스트 임베딩 모델: 'openai' 또는 'sroberta'. 기본값: openai",
+    )
+    # LLM 프로바이더 선택 (일반 채팅과 동일)
+    llm_model: Optional[Literal["exaone", "openai"]] = Field(
+        default=None,
+        description="LLM provider: 'exaone' (내부 EXAONE) or 'openai' (GPT). 미지정시 서버 기본값(exaone)",
     )
 
 
@@ -201,7 +253,7 @@ class FaqAutoGenerateRequest(BaseModel):
     """
 
     domain: Optional[str] = Field(
-        None, description="도메인 필터 (예: SECURITY, POLICY, null이면 모든 도메인)"
+        None, description="도메인 필터 (ACCOUNT, APPROVAL, HR, PAY, WELFARE, EDUCATION, IT, SECURITY, FACILITY, ETC 중 하나, null이면 모든 도메인)"
     )
     min_frequency: int = Field(
         default=3, ge=1, description="최소 질문 빈도 (여러 사용자 간의 질문 횟수)"
@@ -214,6 +266,11 @@ class FaqAutoGenerateRequest(BaseModel):
     )
     auto_generate_drafts: bool = Field(
         default=True, description="자동으로 FAQ 초안 생성 여부"
+    )
+    # LLM 프로바이더 선택 (일반 채팅과 동일)
+    llm_model: Optional[Literal["exaone", "openai"]] = Field(
+        default=None,
+        description="LLM provider: 'exaone' (내부 EXAONE) or 'openai' (GPT). 미지정시 서버 기본값(exaone)",
     )
 
 

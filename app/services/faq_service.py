@@ -31,6 +31,7 @@ from app.services.chat.rag_handler import RagHandler, RagSearchUnavailableError
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.faq import (
+    FaqDomain,
     FaqDraft,
     FaqDraftGenerateRequest,
     FaqSourceDoc,
@@ -43,6 +44,99 @@ from app.services.forbidden_query_filter import (
 )
 
 logger = get_logger(__name__)
+
+
+# =============================================================================
+# FAQ 도메인 자동 분류 (질문 기반)
+# =============================================================================
+
+# FAQ 도메인별 키워드 매핑
+FAQ_DOMAIN_KEYWORDS: Dict[str, frozenset] = {
+    FaqDomain.ACCOUNT.value: frozenset([
+        "계정", "아이디", "id", "로그인", "비밀번호", "패스워드", "password",
+        "계정 잃어버림", "계정 분실", "계정 찾기", "아이디 찾기", "비밀번호 찾기",
+        "계정 복구", "계정 재설정", "로그인 안됨", "로그인 불가", "접속 안됨",
+        "계정 잠금", "계정 잠김", "계정 해제", "인증", "인증번호",
+    ]),
+    FaqDomain.APPROVAL.value: frozenset([
+        "결재", "승인", "전결", "합의", "검토", "재가", "재결",
+        "결재선", "결재 경로", "결재 요청", "결재 진행", "결재 완료",
+        "결재 반려", "결재 취소", "전자결재", "결재 문서",
+    ]),
+    FaqDomain.HR.value: frozenset([
+        "인사", "채용", "입사", "퇴사", "이직", "전보", "부서이동",
+        "인사발령", "승진", "인사평가", "인사고과", "인사이동",
+    ]),
+    FaqDomain.PAY.value: frozenset([
+        "급여", "월급", "연봉", "봉급", "급여명세서", "급여 조회",
+        "세금", "소득세", "지급일", "급여일", "급여 계산",
+    ]),
+    FaqDomain.WELFARE.value: frozenset([
+        "복지", "복지포인트", "식대", "교통비", "복리후생",
+        "건강검진", "보험", "퇴직금", "퇴직연금",
+    ]),
+    FaqDomain.EDUCATION.value: frozenset([
+        "교육", "수강", "이수", "수료", "강의", "학습", "과정",
+        "4대교육", "법정교육", "직무교육", "교육 이수", "교육 현황",
+    ]),
+    FaqDomain.IT.value: frozenset([
+        "it", "시스템", "프로그램", "소프트웨어", "하드웨어",
+        "컴퓨터", "서버", "네트워크", "인터넷", "와이파이", "wifi",
+        "프린터", "복사기", "장비", "기기", "디바이스",
+    ]),
+    FaqDomain.SECURITY.value: frozenset([
+        "보안", "usb", "반출", "외부전송", "개인정보유출", "정보유출",
+        "보안사고", "침해", "해킹", "악성코드", "바이러스",
+        "접근권한", "보안정책", "정보보안",
+    ]),
+    FaqDomain.FACILITY.value: frozenset([
+        "시설", "건물", "회의실", "주차", "주차장", "엘리베이터",
+        "화장실", "카페테리아", "식당", "휴게실", "라운지",
+    ]),
+}
+
+
+def classify_faq_domain(question: str, provided_domain: Optional[str] = None) -> str:
+    """
+    질문 내용을 분석하여 FAQ 도메인을 자동 분류합니다.
+    
+    Args:
+        question: 질문 텍스트
+        provided_domain: 백엔드에서 제공한 도메인 (검증/수정 대상)
+    
+    Returns:
+        str: 분류된 FAQ 도메인 (FaqDomain Enum 값)
+    """
+    question_lower = question.lower()
+    
+    # 각 도메인별 키워드 매칭 점수 계산
+    domain_scores: Dict[str, int] = {}
+    for domain, keywords in FAQ_DOMAIN_KEYWORDS.items():
+        score = sum(1 for keyword in keywords if keyword in question_lower)
+        if score > 0:
+            domain_scores[domain] = score
+    
+    # 가장 높은 점수의 도메인 선택
+    if domain_scores:
+        classified_domain = max(domain_scores.items(), key=lambda x: x[1])[0]
+        
+        # 제공된 도메인과 다르면 경고 로그
+        if provided_domain and provided_domain.upper() != classified_domain:
+            logger.warning(
+                f"FAQ domain mismatch detected: "
+                f"provided={provided_domain}, classified={classified_domain}, "
+                f"question='{question[:50]}...'"
+            )
+            # 분류된 도메인을 우선 사용
+            return classified_domain
+        
+        return classified_domain
+    
+    # 키워드 매칭 실패 시 제공된 도메인 사용, 없으면 ETC
+    if provided_domain:
+        return provided_domain.upper()
+    
+    return FaqDomain.ETC.value
 
 
 # =============================================================================
@@ -197,7 +291,25 @@ class FaqDraftService:
         Phase 19-AI-4: PII 강차단
         - 입력에 PII 검출 시: PII_DETECTED 에러
         - 출력에 PII 검출 시: PII_DETECTED_OUTPUT 에러
+        
+        FAQ 도메인 자동 분류:
+        - 질문 내용을 분석하여 올바른 FAQ 도메인을 자동 분류
+        - 백엔드에서 제공한 도메인과 다르면 경고 로그 출력 후 분류된 도메인 사용
         """
+        # FAQ 도메인 자동 분류 (질문 기반)
+        classified_domain = classify_faq_domain(
+            question=req.canonical_question,
+            provided_domain=req.domain
+        )
+        
+        # 분류된 도메인으로 업데이트
+        if classified_domain != req.domain:
+            logger.info(
+                f"FAQ domain auto-classified: {req.domain} → {classified_domain}, "
+                f"question='{req.canonical_question[:50]}...'"
+            )
+            req.domain = classified_domain
+        
         logger.info(
             f"Generating FAQ draft: domain={req.domain}, "
             f"cluster_id={req.cluster_id}, question='{req.canonical_question[:50]}...'"
@@ -216,12 +328,15 @@ class FaqDraftService:
         messages = self._build_llm_messages(req, context_docs, answer_source)
 
         # 3. LLM 호출
+        # llm_provider: 요청에서 받은 LLM 프로바이더 (일반 채팅과 동일)
+        llm_provider = getattr(req, "llm_model", None)
         try:
             llm_response = await self._llm.generate_chat_completion(
                 messages=messages,
                 model=None,
                 temperature=0.3,
                 max_tokens=2048,
+                llm_provider=llm_provider,
             )
             logger.debug(f"LLM response received: len={len(llm_response)}")
 
@@ -240,6 +355,7 @@ class FaqDraftService:
                 model=None,
                 temperature=0.1,  # 안정화
                 max_tokens=2048,
+                llm_provider=llm_provider,
             )
             parsed = self._parse_llm_response(llm_response)
 

@@ -108,10 +108,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "TelemetryPublisher disabled (BACKEND_BASE_URL or BACKEND_INTERNAL_TOKEN not set)"
         )
 
+    # Log Sync Service 초기화 및 시작
+    # Elasticsearch의 ai_log를 주기적으로 Backend로 동기화
+    from app.services.log_sync_service import get_log_sync_service
+
+    log_sync_service = get_log_sync_service()
+    await log_sync_service.start()
+
     try:
         yield  # 애플리케이션 실행
     finally:
         # 종료 시 실행
+        # Log Sync Service 종료
+        from app.services.log_sync_service import get_log_sync_service
+
+        log_sync_service = get_log_sync_service()
+        await log_sync_service.stop()
+
         # Telemetry Publisher 종료
         publisher = get_telemetry_publisher()
         if publisher:
