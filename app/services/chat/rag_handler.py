@@ -34,7 +34,8 @@ Phase 57: 고급 RAG 기법
 """
 
 import re
-from typing import List, Literal, Optional, Tuple
+from dataclasses import dataclass
+from typing import Iterator, List, Literal, Optional, Tuple
 
 
 
@@ -99,11 +100,65 @@ from app.services.chat.rag_quality_log import (
     build_rag_quality_log,
     log_rag_quality,
 )
+from app.services.chat.quality_gate import (
+    QualityAction,
+    evaluate_sources_quality,
+    build_clarification_response,
+    log_quality_gate_decision,
+)
 
 logger = get_logger(__name__)
 
 # retriever_used 타입 정의 (Phase 50: BLOCKED 추가)
 RetrieverUsed = Literal["MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK", "BLOCKED"]
+
+
+# =============================================================================
+# Phase 58: RagRetrievalResult 데이터클래스
+# =============================================================================
+
+@dataclass
+class RagRetrievalResult:
+    """
+    RAG 검색 결과 (Phase 58 확장)
+
+    기존 tuple 반환 (sources, failed, retriever_used)와 역호환되며,
+    Phase 58 품질 게이트 필드를 추가로 제공합니다.
+
+    Attributes:
+        sources: 검색된 ChatSource 리스트
+        failed: 검색 실패 여부 (0건도 False)
+        retriever_used: 사용된 검색기 (MILVUS, RAGFLOW 등)
+        insufficient_evidence: 근거 부족 판정 (True면 LLM 호출 스킵)
+        quality_grade: 품질 등급 (OK, LOW, INSUFFICIENT)
+        quality_action: 권장 액션 (PROCEED, PROCEED_WITH_WARNING, REJECT)
+        min_l2_distance: 최소 L2 거리
+        clarify_message: 명확화 메시지 (INSUFFICIENT 시)
+        warning_message: 경고 메시지 (LOW 시)
+    """
+    sources: List["ChatSource"]
+    failed: bool
+    retriever_used: RetrieverUsed
+
+    # Phase 58: Quality Gate 필드
+    insufficient_evidence: bool = False
+    quality_grade: str = "OK"
+    quality_action: str = "PROCEED"
+    min_l2_distance: float = 0.0
+    clarify_message: Optional[str] = None
+    warning_message: Optional[str] = None
+
+    def __iter__(self) -> Iterator:
+        """
+        기존 tuple unpacking과의 역호환성 지원.
+
+        Usage:
+            sources, failed, retriever = result  # 기존 코드
+            # 또는
+            result.insufficient_evidence  # 새 필드 접근
+        """
+        return iter((self.sources, self.failed, self.retriever_used))
+
 
 # Phase 44: 검색 설정 상수
 DEFAULT_TOP_K = 5
@@ -583,7 +638,7 @@ class RagHandler:
         request_id: Optional[str] = None,
         top_k: Optional[int] = None,
         model: Optional[str] = None,
-    ) -> Tuple[List[ChatSource], bool, RetrieverUsed]:
+    ) -> RagRetrievalResult:
         """
         RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다.
 
@@ -627,7 +682,7 @@ class RagHandler:
                 f"RagHandler: Retrieval blocked by context flag, returning empty sources. "
                 f"reason={reason}"
             )
-            return [], False, "BLOCKED"
+            return RagRetrievalResult(sources=[], failed=False, retriever_used="BLOCKED")
 
         # Phase 44: 검색용 쿼리 정규화 (마스킹 토큰 제거)
         normalized_query = normalize_query_for_search(query)
@@ -670,7 +725,80 @@ class RagHandler:
             )
             # gate_reason은 로깅용으로만 사용 (함수 내에서 이미 로깅됨)
 
-        return sources, failed, retriever
+        # =====================================================================
+        # Phase 58: Quality Gate (L2 Distance 기반 응답 제어)
+        # =====================================================================
+        # SOFT_DEMOTE 이후에도 극단적 저품질 케이스 방지
+        # min_l2 > reject_threshold → INSUFFICIENT → LLM 생성 스킵
+        settings = get_settings()
+        quality_gate_enabled = settings.RAG_QUALITY_DISTANCE_GATE_ENABLED
+
+        if quality_gate_enabled and not failed:
+            quality_decision = evaluate_sources_quality(
+                sources=sources,
+                warn_threshold=settings.RAG_QUALITY_L2_WARN,
+                reject_threshold=settings.RAG_QUALITY_L2_REJECT,
+            )
+
+            # 품질 게이트 판정 로깅
+            log_quality_gate_decision(quality_decision, query, domain)
+
+            # REJECT 판정 시: 근거 부족 → LLM 생성 스킵
+            if quality_decision.action == QualityAction.REJECT:
+                clarify_msg = build_clarification_response(
+                    decision=quality_decision,
+                    query=query,
+                    domain=domain,
+                )
+
+                return RagRetrievalResult(
+                    sources=[],  # 소스 미사용 (환각 방지)
+                    failed=False,
+                    retriever_used=retriever,
+                    insufficient_evidence=True,
+                    quality_grade=quality_decision.grade.value,
+                    quality_action=quality_decision.action.value,
+                    min_l2_distance=quality_decision.min_l2_distance,
+                    clarify_message=clarify_msg,
+                )
+
+            # PROCEED_WITH_WARNING 판정 시: 경고 메시지 첨부
+            if quality_decision.action == QualityAction.PROCEED_WITH_WARNING:
+                return RagRetrievalResult(
+                    sources=sources,
+                    failed=failed,
+                    retriever_used=retriever,
+                    insufficient_evidence=False,
+                    quality_grade=quality_decision.grade.value,
+                    quality_action=quality_decision.action.value,
+                    min_l2_distance=quality_decision.min_l2_distance,
+                    warning_message=quality_decision.warning_message,
+                )
+
+            # OK 판정: 정상 진행
+            return RagRetrievalResult(
+                sources=sources,
+                failed=failed,
+                retriever_used=retriever,
+                insufficient_evidence=False,
+                quality_grade=quality_decision.grade.value,
+                quality_action=quality_decision.action.value,
+                min_l2_distance=quality_decision.min_l2_distance,
+            )
+
+        # Quality Gate 비활성화 또는 검색 실패 시: 기존 동작 유지
+        min_distance = 0.0
+        if sources:
+            distances = [s.score for s in sources if s.score is not None]
+            if distances:
+                min_distance = min(distances)
+
+        return RagRetrievalResult(
+            sources=sources,
+            failed=failed,
+            retriever_used=retriever,
+            min_l2_distance=min_distance,
+        )
 
     async def _search_with_milvus_fallback(
         self,
