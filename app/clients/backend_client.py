@@ -1076,7 +1076,15 @@ class BackendClient:
         url = f"{self._base_url}/internal/source-sets/{source_set_id}/documents"
         headers = self._get_internal_headers()
 
-        logger.info(f"Fetching source-set documents: source_set_id={source_set_id}, url={url}, base_url={self._base_url}")
+        # Log request details
+        request_start_time = time.time()
+        logger.info(
+            f"[REQUEST] Fetching source-set documents\n"
+            f"  Method: GET\n"
+            f"  URL: {url}\n"
+            f"  Source Set ID: {source_set_id}\n"
+            f"  Headers: {list(headers.keys())} (keys only)"
+        )
 
         try:
             if self._external_client:
@@ -1092,6 +1100,27 @@ class BackendClient:
                         headers=headers,
                         timeout=self._timeout,
                     )
+            
+            # Calculate response time
+            request_duration = time.time() - request_start_time
+            
+            # Log response details
+            if response.status_code == 200:
+                logger.info(
+                    f"[RESPONSE] Source-set documents fetch completed\n"
+                    f"  Status Code: {response.status_code}\n"
+                    f"  Duration: {request_duration:.3f}s\n"
+                    f"  URL: {url}"
+                )
+            else:
+                error_message = response.text[:200] if response.text else "No error message"
+                logger.warning(
+                    f"[RESPONSE] Source-set documents fetch failed\n"
+                    f"  Status Code: {response.status_code}\n"
+                    f"  Duration: {request_duration:.3f}s\n"
+                    f"  URL: {url}\n"
+                    f"  Error Message: {error_message}"
+                )
 
             if response.status_code == 401:
                 raise SourceSetDocumentsFetchError(
@@ -1132,9 +1161,16 @@ class BackendClient:
             data = response.json()
             result = SourceSetDocumentsResponse(**data)
 
+            # Extract document IDs and URLs for logging
+            document_ids = [doc.document_id for doc in result.documents]
+            document_urls = [doc.source_url for doc in result.documents]
+            
             logger.info(
-                f"Source-set documents fetched: source_set_id={source_set_id}, "
-                f"count={len(result.documents)}"
+                f"[RESPONSE] Source-set documents fetched successfully\n"
+                f"  Source Set ID: {source_set_id}\n"
+                f"  Document Count: {len(result.documents)}\n"
+                f"  Document IDs: {document_ids}\n"
+                f"  Document URLs: {document_urls}"
             )
 
             return result
@@ -1142,7 +1178,13 @@ class BackendClient:
         except SourceSetDocumentsFetchError:
             raise
         except httpx.TimeoutException as e:
-            logger.error(f"Source-set documents fetch timeout: source_set_id={source_set_id}")
+            request_duration = time.time() - request_start_time
+            logger.error(
+                f"[RESPONSE] Source-set documents fetch timeout\n"
+                f"  Source Set ID: {source_set_id}\n"
+                f"  Duration: {request_duration:.3f}s (timeout: {self._timeout}s)\n"
+                f"  URL: {url}"
+            )
             raise SourceSetDocumentsFetchError(
                 source_set_id=source_set_id,
                 status_code=0,
@@ -1150,7 +1192,14 @@ class BackendClient:
                 error_code="SOURCE_SET_DOCS_TIMEOUT",
             )
         except httpx.RequestError as e:
-            logger.error(f"Source-set documents fetch network error: source_set_id={source_set_id}")
+            request_duration = time.time() - request_start_time
+            logger.error(
+                f"[RESPONSE] Source-set documents fetch network error\n"
+                f"  Source Set ID: {source_set_id}\n"
+                f"  Duration: {request_duration:.3f}s\n"
+                f"  URL: {url}\n"
+                f"  Error: {str(e)[:200]}"
+            )
             raise SourceSetDocumentsFetchError(
                 source_set_id=source_set_id,
                 status_code=0,
@@ -1158,7 +1207,14 @@ class BackendClient:
                 error_code="SOURCE_SET_DOCS_NETWORK_ERROR",
             )
         except Exception as e:
-            logger.error(f"Source-set documents fetch error: source_set_id={source_set_id}, error={e}")
+            request_duration = time.time() - request_start_time
+            logger.error(
+                f"[RESPONSE] Source-set documents fetch unexpected error\n"
+                f"  Source Set ID: {source_set_id}\n"
+                f"  Duration: {request_duration:.3f}s\n"
+                f"  URL: {url}\n"
+                f"  Error: {str(e)[:200]}"
+            )
             raise SourceSetDocumentsFetchError(
                 source_set_id=source_set_id,
                 status_code=0,
