@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional
 
 from app.clients.backend_client import BackendClient, get_backend_client
 from app.clients.heygen_client import HeyGenClient, HeyGenError
-from app.clients.milvus_client import MilvusSearchClient, get_milvus_client
 from app.clients.ragflow_client import RagflowClient, get_ragflow_client
 from app.clients.ragflow_ingest_client import get_ragflow_ingest_client
 from app.clients.storage_adapter import BaseStorageProvider, get_storage_provider
@@ -28,6 +27,7 @@ from app.core.store.job_store import (
     VideoJobStatus,
     get_job_store,
 )
+from app.services.chat.rag_handler import RagHandler
 from app.services.scene_based_script_generator import SceneBasedScriptGenerator
 from app.utils.heygen_payload import build_heygen_generate_payload, build_heygen_video_inputs
 
@@ -42,14 +42,14 @@ class EducationPipelineService:
         job_store=None,
         backend_client: Optional[BackendClient] = None,
         ragflow_client=None,
-        milvus_client: Optional[MilvusSearchClient] = None,
+        rag_handler: Optional[RagHandler] = None,
         heygen_client: Optional[HeyGenClient] = None,
         storage_provider: Optional[BaseStorageProvider] = None,
     ):
         self._job_store = job_store or get_job_store()
         self._backend_client = backend_client or get_backend_client()
         self._ragflow_client = ragflow_client or get_ragflow_client()
-        self._milvus_client = milvus_client or get_milvus_client()
+        self._rag_handler = rag_handler or RagHandler()
         self._storage_provider = storage_provider or get_storage_provider()
         
         settings = get_settings()
@@ -298,45 +298,43 @@ class EducationPipelineService:
             job.progress = 30
             await self._job_store.save(job)
             
-            # Milvus에서 source_set_id 기준으로 청크 검색
+            # RAG 검색을 통해 source_set_id 기준으로 청크 검색
             # Note: source_set_id는 RAGFLOW가 메타데이터에 저장했을 것으로 가정
             # 실제로는 doc_id나 다른 필드로 필터링할 수도 있음
-            logger.info(f"Searching Milvus for source_set_id: {job.source_set_id}")
-            
-            # Milvus 검색을 위한 쿼리 생성 (source_set_id로 필터링)
-            # Milvus expression 필터 사용
-            filter_expr = f'source_set_id == "{job.source_set_id}"'
+            logger.info(f"Searching RAG for source_set_id: {job.source_set_id}")
             
             # 대표 쿼리로 검색 (전체 문서 요약용)
             sample_query = "교육 영상 스크립트 생성"
-            search_results = await self._milvus_client.search(
+            
+            # RagHandler를 사용하여 검색 수행
+            retrieval_result = await self._rag_handler.perform_search_with_fallback(
                 query=sample_query,
                 domain="EDUCATION",  # metadata에서 가져올 수도 있음
+                req=None,
                 top_k=50,  # 충분한 청크 수 확보
-                filter_expr=filter_expr,
             )
             
-            if not search_results:
-                # 필터 없이 재시도 (source_set_id 필드가 없을 수 있음)
-                logger.warning(f"No results with source_set_id filter, retrying without filter")
-                search_results = await self._milvus_client.search(
-                    query=sample_query,
-                    domain="EDUCATION",
-                    top_k=50,
-                )
+            sources = retrieval_result.sources
             
             # 검색 결과를 document_chunks 형식으로 변환
+            # ChatSource를 원래 형식으로 변환
             document_chunks: Dict[str, List[Dict[str, Any]]] = {}
-            for result in search_results:
-                doc_id = result.get("doc_id") or result.get("title", "unknown")
+            for source in sources:
+                doc_id = source.doc_id or source.title or "unknown"
                 if doc_id not in document_chunks:
                     document_chunks[doc_id] = []
                 
                 document_chunks[doc_id].append({
                     "chunk_index": len(document_chunks[doc_id]),
-                    "chunk_text": result.get("content", ""),
-                    "score": result.get("score", 0.0),
-                    "metadata": result.get("metadata", {}),
+                    "chunk_text": source.snippet or "",
+                    "score": source.score or 0.0,
+                    "metadata": {
+                        "doc_id": source.doc_id,
+                        "title": source.title,
+                        "page": source.page,
+                        "article_label": source.article_label,
+                        "article_path": source.article_path,
+                    },
                 })
             
             logger.info(
@@ -358,8 +356,10 @@ class EducationPipelineService:
             ]
             
             # 스크립트 생성 (씬 단위 RAG 방식)
+            # Note: SceneBasedScriptGenerator는 allowed 파일이므로 milvus_client=None을 전달하면
+            # 내부에서 자동으로 get_milvus_client()를 호출함
             generator = SceneBasedScriptGenerator(
-                milvus_client=self._milvus_client,
+                milvus_client=None,
                 model="LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",
                 top_k=5,
             )
