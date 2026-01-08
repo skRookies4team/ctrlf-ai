@@ -982,6 +982,9 @@ class ChatService:
         # Option 3: retriever_used 추적
         retriever_used: Optional[str] = None
 
+        # Phase 58: Quality Gate WARNING 메시지 (PROCEED_WITH_WARNING인 경우)
+        quality_warning_message: Optional[str] = None
+
         if route in rag_only_routes:
             # RAG_INTERNAL: RAG만 사용
             rag_search_attempted = True
@@ -1035,6 +1038,14 @@ class ChatService:
                         latency_ms=latency_ms,
                         rag_latency_ms=rag_latency_ms,
                     ),
+                )
+
+            # Phase 58: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처
+            if rag_result.warning_message:
+                quality_warning_message = rag_result.warning_message
+                logger.info(
+                    f"[QualityGate] WARN captured: grade={rag_result.quality_grade}, "
+                    f"min_l2={rag_result.min_l2_distance:.3f}"
                 )
 
             # Telemetry: RAG 메트릭 수집
@@ -1116,6 +1127,14 @@ class ChatService:
                         latency_ms=latency_ms,
                         rag_latency_ms=rag_latency_ms,
                     ),
+                )
+
+            # Phase 58: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 (MIXED 경로)
+            if rag_result.warning_message:
+                quality_warning_message = rag_result.warning_message
+                logger.info(
+                    f"[QualityGate] WARN captured in MIXED route: grade={rag_result.quality_grade}, "
+                    f"min_l2={rag_result.min_l2_distance:.3f}"
                 )
 
             logger.info(
@@ -1669,6 +1688,11 @@ class ChatService:
             domain=domain,
             intent=intent,
         )
+
+        # Phase 58: Quality Gate WARNING 메시지 추가 (PROCEED_WITH_WARNING)
+        if quality_warning_message:
+            final_answer = f"{final_answer}\n\n---\n⚠️ {quality_warning_message}"
+            logger.info(f"[QualityGate] WARN appended to final_answer")
 
         # =====================================================================
         # 멀티턴 맥락 유지: Step 7 - 상태 갱신 (B: 갱신 규칙)
