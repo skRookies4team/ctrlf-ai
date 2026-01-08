@@ -238,7 +238,23 @@ class PrivacyQueryGate:
         result.score_total = result.score_target + result.score_action + result.score_sensitive
 
         # 차단 판정
-        if result.score_total >= self.block_threshold:
+        # 설계 원칙: 3개 조건(대상+행위+민감속성) 동시 성립 시에만 차단
+        # 대상(사람/직원 집합)이 없으면 개인화 요청으로 간주하여 허용
+        has_target = result.score_target > 0
+        has_action = result.score_action > 0
+        has_sensitive = result.score_sensitive > 0
+
+        # 대상이 없으면 (=타인 지칭 없음) 개인화 요청으로 간주
+        if not has_target:
+            result.decision = PrivacyGateDecision.ALLOW
+            logger.debug(
+                f"[PrivacyGate] ALLOW (no target person) - score={result.score_total}, "
+                f"action={result.matched_action_terms}, "
+                f"sensitive={result.matched_sensitive_terms}, "
+                f"query_preview={query[:50]}..."
+            )
+        elif result.score_total >= self.block_threshold and has_target and has_action and has_sensitive:
+            # 3개 조건 모두 성립 시 차단
             result.decision = PrivacyGateDecision.BLOCK_PII_LIST
             result.blocked = True
             result.reason = (

@@ -849,6 +849,9 @@ class RuleRouter:
         # Phase 50: 퀴즈 미완료 조회도 명확한 개인화 질문
         if self._contains_any_normalized(query_normalized, QUIZ_PENDING_KEYWORDS_NORM):
             return False  # 명확히 퀴즈 미완료 조회 질문
+        # Phase 59: EDU_PANEL_OPEN 키워드는 명확한 UI 액션 요청
+        if self._contains_any_normalized(query_normalized, EDU_PANEL_KEYWORDS_NORM):
+            return False  # 명확히 교육 패널 열기 요청
 
         # 교육 키워드 + 애매한 동사 조합 체크 (원본 텍스트로 체크)
         has_edu_keyword = self._contains_any(query_lower, EDU_AMBIGUOUS_KEYWORDS)
