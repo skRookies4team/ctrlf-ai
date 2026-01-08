@@ -136,6 +136,10 @@ class IngestRequest(BaseModel):
     domain: str = Field(..., description="도메인 (POLICY만 허용)")
     requestId: str = Field(..., description="요청 ID (UUID)")
     traceId: str = Field(..., description="추적 ID")
+    title: Optional[str] = Field(
+        None,
+        description="문서 제목 (파일명.확장자, 예: 보안관리규정.pdf) - RAGFlow doc_id로 사용"
+    )
     department: Optional[str] = Field(
         None,
         description="부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)"
@@ -524,21 +528,29 @@ async def ingest_rag_document(
             trace_id=request.traceId,
         )
 
-    # sourceUrl에서 파일명 추출하여 doc_id로 사용
-    try:
-        extracted_doc_id = extract_filename_from_url(request.sourceUrl)
+    # title 필드를 doc_id로 사용 (title이 없으면 sourceUrl에서 추출 - fallback)
+    if request.title and request.title.strip():
+        doc_id_for_ragflow = request.title.strip()
         logger.info(
-            f"Extracted doc_id from URL: {extracted_doc_id}, "
+            f"Using title as doc_id: {doc_id_for_ragflow}, "
             f"original_document_id={request.documentId}, trace_id={request.traceId}"
         )
-    except ValueError as e:
-        _clear_request_cache(request.documentId, request.version)
-        return _error_response(
-            status_code=400,
-            error="INVALID_SOURCE_URL",
-            message=str(e),
-            trace_id=request.traceId,
-        )
+    else:
+        # fallback: sourceUrl에서 파일명 추출 (S3 UUID 파일명이 될 수 있음)
+        try:
+            doc_id_for_ragflow = extract_filename_from_url(request.sourceUrl)
+            logger.warning(
+                f"title not provided, extracted doc_id from URL: {doc_id_for_ragflow}, "
+                f"original_document_id={request.documentId}, trace_id={request.traceId}"
+            )
+        except ValueError as e:
+            _clear_request_cache(request.documentId, request.version)
+            return _error_response(
+                status_code=400,
+                error="INVALID_SOURCE_URL",
+                message=str(e),
+                trace_id=request.traceId,
+            )
 
     # RAGFlow ingest 호출 (비동기로 백그라운드에서 처리)
     async def call_ragflow():
@@ -546,7 +558,7 @@ async def ingest_rag_document(
             client = get_ragflow_ingest_client()
             await client.ingest(
                 dataset_id=dataset_id,
-                doc_id=extracted_doc_id,
+                doc_id=doc_id_for_ragflow,
                 version=request.version,
                 file_url=request.sourceUrl,
                 rag_document_pk=request.ragDocumentPk,
@@ -556,7 +568,7 @@ async def ingest_rag_document(
                 department=request.department,
             )
             logger.info(
-                f"RAGFlow ingest request sent: doc_id={extracted_doc_id}, "
+                f"RAGFlow ingest request sent: doc_id={doc_id_for_ragflow}, "
                 f"version={request.version}, department={request.department}, "
                 f"trace_id={request.traceId}"
             )
