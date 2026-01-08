@@ -2072,7 +2072,7 @@ class ChatService:
         domain: str,
         req: ChatRequest,
         model: Optional[str] = None,
-    ) -> Tuple[List[ChatSource], bool, str]:
+    ) -> RagRetrievalResult:
         """RAG 검색을 수행하고 실패 여부와 사용된 retriever를 함께 반환합니다 (위임).
 
         Phase AB: model 파라미터로 A/B 테스트 모델 직접 전달
@@ -2084,10 +2084,7 @@ class ChatService:
             model: A/B 테스트 모델 ("openai" | "sroberta")
 
         Returns:
-            Tuple[List[ChatSource], bool, str]:
-                - 검색 결과
-                - 실패 여부
-                - 사용된 retriever (MILVUS, RAGFLOW, RAGFLOW_FALLBACK)
+            RagRetrievalResult: 검색 결과 (sources, failed, retriever_used 등)
         """
         return await self._rag_handler.perform_search_with_fallback(
             query=query,
@@ -2535,12 +2532,12 @@ class ChatService:
         Returns:
             매칭된 FAQ 정보 (question, score) 또는 None
         """
-        if not self._backend_data_client or not self._backend_data_client.is_configured:
+        if not self._backend_data or not self._backend_data.is_configured:
             return None
 
         try:
             # 백엔드에서 FAQ 목록 조회
-            faq_response = await self._backend_data_client.get_faq_list(domain=domain)
+            faq_response = await self._backend_data.get_faq_list(domain=domain)
             if not faq_response.success or not faq_response.data:
                 return None
 
