@@ -486,11 +486,14 @@ class SourceSetOrchestrator:
                         f"doc_id={doc.document_id}"
                     )
 
-                # source_url에서 파일명 추출하여 doc_id로 사용 (Spring UUID 대신)
-                ragflow_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
+                # 백엔드에서 title 필드로 원본 파일명을 전달받음 (S3 URL은 UUID로 저장됨)
+                ragflow_doc_id = doc.title.strip() if doc.title else None
+                if not ragflow_doc_id:
+                    # fallback: source_url에서 추출 (UUID일 가능성 있음)
+                    ragflow_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
                 logger.info(
                     f"Ingesting document to RAGFlow: ragflow_doc_id={ragflow_doc_id}, "
-                    f"spring_doc_id={doc.document_id}"
+                    f"title={doc.title}, spring_doc_id={doc.document_id}"
                 )
 
                 # 재시도 로직이 내장된 래퍼 사용 (네트워크 타임아웃/오류에도 1회 재시도)
@@ -947,12 +950,15 @@ class SourceSetOrchestrator:
         if not self._milvus_client:
             raise MilvusError("Milvus client not initialized")
 
-        # source_url에서 Milvus doc_id (파일명) 추출
-        milvus_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
+        # 백엔드에서 title 필드로 원본 파일명을 전달받음 (S3 URL은 UUID로 저장됨)
+        milvus_doc_id = doc.title.strip() if doc.title else None
+        if not milvus_doc_id:
+            # fallback: source_url에서 추출 (UUID일 가능성 있음)
+            milvus_doc_id = self._extract_milvus_doc_id(doc.source_url, doc.document_id)
 
         logger.info(
             f"Fetching document from Milvus: spring_doc_id={doc.document_id}, "
-            f"milvus_doc_id={milvus_doc_id}"
+            f"title={doc.title}, milvus_doc_id={milvus_doc_id}"
         )
 
         try:
