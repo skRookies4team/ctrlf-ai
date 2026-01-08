@@ -255,10 +255,42 @@ LEAVE_POLICY_KEYWORDS = frozenset([
 ])
 
 # 퀴즈 시작 키워드 (QUIZ_START)
+# OPEN_QUIZ 액션 트리거용 - 자연스러운 표현 포함
 QUIZ_START_KEYWORDS = frozenset([
+    # 기본 시작 패턴
     "퀴즈 시작", "퀴즈 시작해", "퀴즈 시작할", "퀴즈를 시작",
-    "시험 시작", "테스트 시작", "퀴즈 풀",
+    "시험 시작", "테스트 시작",
+    # 풀기 패턴
+    "퀴즈 풀", "퀴즈 풀래", "퀴즈 풀어", "퀴즈 풀고",
+    "시험 풀", "테스트 풀",
+    # 보기/치기 패턴
     "퀴즈 치", "시험 치", "테스트 치",
+    "퀴즈 볼", "퀴즈 볼래", "퀴즈 보고",
+    "시험 볼", "시험 볼래", "시험 보고",
+    # 하기 패턴
+    "퀴즈 해", "퀴즈 해줘", "퀴즈 하고",
+    "퀴즈 할래", "퀴즈 하자",
+    # 응시 패턴
+    "퀴즈 응시", "시험 응시", "테스트 응시",
+])
+
+# 교육 패널 열기 키워드 (EDU_PANEL_OPEN)
+# OPEN_EDU_PANEL 액션 트리거용 - 교육 목록/패널 열기 요청
+# 주의: "교육 조회", "교육 확인"은 EDU_STATUS_KEYWORDS와 겹치므로 제외
+#       예: "미이수 교육 조회"는 교육 현황 조회이지 패널 열기가 아님
+EDU_PANEL_KEYWORDS = frozenset([
+    # 교육 목록/패널 보기 패턴
+    "교육 목록", "교육목록", "교육 리스트", "교육리스트",
+    "교육 보여", "교육 보여줘", "교육 열어", "교육 열어줘",
+    "교육 패널", "교육패널", "교육 화면", "교육화면",
+    # 내 교육 보기 패턴
+    "내 교육 보여", "내 교육 열어", "내 교육 목록",
+    # 수강/학습 목록 패턴
+    "수강 목록", "수강목록", "학습 목록", "학습목록",
+    "강의 목록", "강의목록", "강좌 목록", "강좌목록",
+    # 교육 시작/들으러 가기 패턴
+    "교육 들으러", "교육 보러", "교육 시작",
+    "강의 보러", "강의 들으러",
 ])
 
 # 퀴즈 제출 키워드 (QUIZ_SUBMIT)
@@ -443,6 +475,7 @@ EDU_RESUME_KEYWORDS_NORM = normalize_keyword_set(EDU_RESUME_KEYWORDS)
 HR_PERSONAL_KEYWORDS_NORM = normalize_keyword_set(HR_PERSONAL_KEYWORDS)
 LEAVE_POLICY_KEYWORDS_NORM = normalize_keyword_set(LEAVE_POLICY_KEYWORDS)
 QUIZ_START_KEYWORDS_NORM = normalize_keyword_set(QUIZ_START_KEYWORDS)
+EDU_PANEL_KEYWORDS_NORM = normalize_keyword_set(EDU_PANEL_KEYWORDS)
 QUIZ_SUBMIT_KEYWORDS_NORM = normalize_keyword_set(QUIZ_SUBMIT_KEYWORDS)
 QUIZ_GENERATION_KEYWORDS_NORM = normalize_keyword_set(QUIZ_GENERATION_KEYWORDS)
 QUIZ_PENDING_KEYWORDS_NORM = normalize_keyword_set(QUIZ_PENDING_KEYWORDS)
@@ -873,9 +906,28 @@ class RuleRouter:
 
         Phase 52: 정규화된 텍스트로 매칭 (공백 변형 무시)
         """
+        # EDU_PANEL_OPEN 체크 (정규화된 텍스트 사용)
+        # OPEN_EDU_PANEL 액션으로 프론트엔드에서 교육 패널을 바로 열도록 함
+        if self._contains_any_normalized(query_normalized, EDU_PANEL_KEYWORDS_NORM):
+            debug_info.rule_hits.append("EDU_PANEL_OPEN")
+            debug_info.keywords.extend(
+                [kw for kw in EDU_PANEL_KEYWORDS_NORM if kw in query_normalized]
+            )
+            return RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.EDU,
+                route_type=RouterRouteType.BACKEND_API,
+                sub_intent_id=SubIntentId.EDU_PANEL_OPEN.value,
+                confidence=0.95,
+                requires_confirmation=False,  # confirmation 없이 바로 OPEN_EDU_PANEL 액션 반환
+                debug=debug_info,
+            )
+
         # QUIZ_START 체크 (정규화된 텍스트 사용)
+        # OPEN_QUIZ 액션으로 프론트엔드에서 퀴즈 패널을 바로 열도록 함
+        # confirmation 없이 바로 처리 (퀴즈 패널 내에서 실제 시작 버튼 클릭)
         if self._contains_any_normalized(query_normalized, QUIZ_START_KEYWORDS_NORM):
-            debug_info.rule_hits.append("QUIZ_START")
+            debug_info.rule_hits.append("QUIZ_START_OPEN_PANEL")
             debug_info.keywords.extend(
                 [kw for kw in QUIZ_START_KEYWORDS_NORM if kw in query_normalized]
             )
@@ -885,8 +937,7 @@ class RuleRouter:
                 route_type=RouterRouteType.BACKEND_API,
                 sub_intent_id=SubIntentId.QUIZ_START.value,
                 confidence=0.95,
-                requires_confirmation=True,
-                confirmation_prompt=ConfirmationTemplates.QUIZ_START,
+                requires_confirmation=False,  # confirmation 없이 바로 OPEN_QUIZ 액션 반환
                 debug=debug_info,
             )
 

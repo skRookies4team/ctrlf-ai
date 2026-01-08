@@ -153,10 +153,22 @@ class TestRuleRouterAmbiguousBoundaries:
 
 
 class TestRuleRouterCriticalActions:
-    """치명 액션(퀴즈 3종) 확인 게이트 테스트."""
+    """치명 액션(퀴즈 3종) 확인 게이트 테스트.
 
-    def test_quiz_start_requires_confirmation(self):
-        """QUIZ_START는 requires_confirmation=true."""
+    Phase 60 업데이트:
+    - QUIZ_START는 더 이상 confirmation을 요구하지 않음
+    - OPEN_QUIZ 액션으로 프론트엔드에서 퀴즈 패널을 바로 열고,
+      사용자가 패널 내에서 실제 퀴즈를 선택/시작함
+    """
+
+    def test_quiz_start_opens_panel_directly(self):
+        """QUIZ_START는 confirmation 없이 바로 퀴즈 패널 열기 (Phase 60 변경).
+
+        변경 이유:
+        - 퀴즈 시작은 되돌릴 수 없는 치명적 동작이 아님
+        - 프론트엔드 퀴즈 패널 내에서 실제 시작 버튼을 눌러야 퀴즈 시작
+        - UX 개선: 불필요한 확인 단계 제거
+        """
         router = RuleRouter()
 
         queries = [
@@ -168,9 +180,10 @@ class TestRuleRouterCriticalActions:
 
         for query in queries:
             result = router.route(query)
-            assert result.requires_confirmation is True, f"Query '{query}' should require confirmation"
+            assert result.requires_confirmation is False, f"Query '{query}' should NOT require confirmation (Phase 60)"
             assert result.sub_intent_id == SubIntentId.QUIZ_START.value
-            assert ConfirmationTemplates.QUIZ_START in result.confirmation_prompt
+            # confirmation_prompt는 비어있어야 함
+            assert result.confirmation_prompt == ""
 
     def test_quiz_submit_requires_confirmation(self):
         """QUIZ_SUBMIT은 requires_confirmation=true (퀴즈 문맥 필수).
@@ -461,11 +474,16 @@ class TestRouterOrchestrator:
 
     @pytest.mark.anyio
     async def test_confirmation_response_stored(self):
-        """확인 필요 시 pending action 저장."""
+        """확인 필요 시 pending action 저장.
+
+        Phase 60 변경: QUIZ_START는 더 이상 confirmation 불필요.
+        QUIZ_SUBMIT을 사용하여 confirmation 흐름 테스트.
+        """
         orchestrator = RouterOrchestrator(rule_router=RuleRouter())
 
+        # QUIZ_SUBMIT은 여전히 confirmation 필요 (퀴즈 문맥 포함)
         result = await orchestrator.route(
-            user_query="퀴즈 시작해줘",
+            user_query="퀴즈 제출해줘",
             session_id="test-session-confirm",
         )
 
@@ -473,16 +491,19 @@ class TestRouterOrchestrator:
         assert result.can_execute is False
         assert result.pending_action is not None
         assert result.pending_action.action_type == PendingActionType.CONFIRM
-        assert result.pending_action.sub_intent_id == SubIntentId.QUIZ_START.value
+        assert result.pending_action.sub_intent_id == SubIntentId.QUIZ_SUBMIT.value
 
     @pytest.mark.anyio
     async def test_confirmation_accepted(self):
-        """사용자가 확인하면 실행 가능."""
+        """사용자가 확인하면 실행 가능.
+
+        Phase 60 변경: QUIZ_SUBMIT을 사용하여 테스트.
+        """
         orchestrator = RouterOrchestrator(rule_router=RuleRouter())
 
-        # 먼저 확인 요청
+        # 먼저 확인 요청 (QUIZ_SUBMIT)
         await orchestrator.route(
-            user_query="퀴즈 시작해줘",
+            user_query="퀴즈 제출해줘",
             session_id="test-session-accept",
         )
 
@@ -497,12 +518,15 @@ class TestRouterOrchestrator:
 
     @pytest.mark.anyio
     async def test_confirmation_declined(self):
-        """사용자가 거부하면 취소."""
+        """사용자가 거부하면 취소.
+
+        Phase 60 변경: QUIZ_SUBMIT을 사용하여 테스트.
+        """
         orchestrator = RouterOrchestrator(rule_router=RuleRouter())
 
-        # 먼저 확인 요청
+        # 먼저 확인 요청 (QUIZ_SUBMIT)
         await orchestrator.route(
-            user_query="퀴즈 시작해줘",
+            user_query="퀴즈 제출해줘",
             session_id="test-session-decline",
         )
 
@@ -517,12 +541,15 @@ class TestRouterOrchestrator:
 
     @pytest.mark.anyio
     async def test_pending_response_via_query(self):
-        """대기 상태에서 응답이 오면 처리."""
+        """대기 상태에서 응답이 오면 처리.
+
+        Phase 60 변경: QUIZ_SUBMIT을 사용하여 테스트.
+        """
         orchestrator = RouterOrchestrator(rule_router=RuleRouter())
 
-        # 확인 대기 상태 만들기
+        # 확인 대기 상태 만들기 (QUIZ_SUBMIT)
         await orchestrator.route(
-            user_query="퀴즈 시작해줘",
+            user_query="퀴즈 제출해줘",
             session_id="test-session-pending",
         )
 
@@ -619,15 +646,21 @@ class TestExampleInputs:
         assert result.clarify_question != ""
 
     def test_example_4_quiz_start(self):
-        """예시 4: 퀴즈 시작 (치명 액션)."""
+        """예시 4: 퀴즈 시작 (OPEN_QUIZ 액션으로 패널 바로 열기).
+
+        Phase 60 변경:
+        - QUIZ_START는 더 이상 치명 액션이 아님
+        - confirmation 없이 바로 OPEN_QUIZ 액션으로 패널 열기
+        """
         router = RuleRouter()
         result = router.route("퀴즈 시작해줘")
 
         assert result.tier0_intent == Tier0Intent.BACKEND_STATUS
         assert result.domain == RouterDomain.QUIZ
         assert result.sub_intent_id == SubIntentId.QUIZ_START.value
-        assert result.requires_confirmation is True
-        assert result.confirmation_prompt != ""
+        # Phase 60: confirmation 없이 바로 패널 열기
+        assert result.requires_confirmation is False
+        assert result.confirmation_prompt == ""
 
     def test_example_5_general_chat(self):
         """예시 5: 일반 잡담."""

@@ -1100,7 +1100,49 @@ class ChatService:
                         ),
                     )
 
-            # 2) 개인화 Q 확정 (매퍼 사용)
+            # 2) QUIZ_START 처리: OPEN_QUIZ 액션으로 프론트엔드에서 퀴즈 패널 열기
+            if sub_intent_id == SubIntentId.QUIZ_START.value:
+                logger.info("QUIZ_START detected, returning OPEN_QUIZ action")
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                return ChatResponse(
+                    answer="퀴즈 패널을 열어드릴게요. 원하시는 교육의 퀴즈를 선택해주세요.",
+                    sources=[],
+                    meta=ChatAnswerMeta(
+                        route=RouteType.BACKEND_API.value,
+                        intent=intent.value if intent else "BACKEND_STATUS",
+                        domain=domain,
+                        masked=pii_input.has_pii,
+                        has_pii_input=pii_input.has_pii,
+                        latency_ms=latency_ms,
+                        rag_used=False,
+                        action=ChatAction(
+                            type=ChatActionType.OPEN_QUIZ,
+                        ),
+                    ),
+                )
+
+            # 2-1) EDU_PANEL_OPEN 처리: OPEN_EDU_PANEL 액션으로 프론트엔드에서 교육 패널 열기
+            if sub_intent_id == SubIntentId.EDU_PANEL_OPEN.value:
+                logger.info("EDU_PANEL_OPEN detected, returning OPEN_EDU_PANEL action")
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
+                return ChatResponse(
+                    answer="교육 패널을 열어드릴게요. 수강하실 교육을 선택해주세요.",
+                    sources=[],
+                    meta=ChatAnswerMeta(
+                        route=RouteType.BACKEND_API.value,
+                        intent=intent.value if intent else "BACKEND_STATUS",
+                        domain=domain,
+                        masked=pii_input.has_pii,
+                        has_pii_input=pii_input.has_pii,
+                        latency_ms=latency_ms,
+                        rag_used=False,
+                        action=ChatAction(
+                            type=ChatActionType.OPEN_EDU_PANEL,
+                        ),
+                    ),
+                )
+
+            # 3) 개인화 Q 확정 (매퍼 사용)
             personalization_q = to_personalization_q(sub_intent_id, masked_query)
 
             # 3) 개인화 요청이면: facts 조회 → 답변 생성 → 바로 반환
