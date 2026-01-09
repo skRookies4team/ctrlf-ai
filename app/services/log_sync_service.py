@@ -31,7 +31,11 @@ class LogSyncService:
         
         # 설정값
         self._es_url = str(self._settings.ELASTICSEARCH_URL) if self._settings.ELASTICSEARCH_URL else "http://localhost:9200"
-        self._es_index = self._settings.ELASTICSEARCH_INDEX
+        # chat_log 인덱스만 동기화 (관리자 대시보드용)
+        # 관리자 대시보드는 chat_log 인덱스에서 직접 조회하거나 PostgreSQL infra.ai_log 테이블에서 조회
+        # Elasticsearch의 chat_log를 PostgreSQL로 주기적으로 동기화 (백업)
+        # faq_log는 FAQ 자동 생성에서 Elasticsearch 직접 조회하므로 동기화 불필요
+        self._es_index = "chat_log"  # 백엔드가 관리하는 chat_log 인덱스
         self._backend_url = (
             str(self._settings.BACKEND_INFRA_URL).rstrip("/")
             if self._settings.BACKEND_INFRA_URL
@@ -116,10 +120,11 @@ class LogSyncService:
         """로그 동기화 실행 (수동 호출 가능)."""
         logger.info("=== AI LOG SYNC START ===")
 
-        # 1. Elasticsearch에서 ai_log 조회
+        # 1. Elasticsearch에서 chat_log 조회 (관리자 대시보드용)
+        # 백엔드가 Elasticsearch에서 직접 조회하지만, PostgreSQL에도 백업으로 저장
         try:
             hits = await self._fetch_ai_logs()
-            logger.info(f"Fetched {len(hits)} ai_log records from Elasticsearch")
+            logger.info(f"Fetched {len(hits)} chat_log records from Elasticsearch")
         except Exception as e:
             logger.warning(f"Failed to fetch logs from Elasticsearch: {e}")
             logger.info("=== AI LOG SYNC DONE (skipped) ===")
@@ -157,15 +162,21 @@ class LogSyncService:
         logger.info("=== AI LOG SYNC DONE ===")
 
     async def _fetch_ai_logs(self) -> List[Dict[str, Any]]:
-        """Elasticsearch에서 ai_log 조회."""
+        """Elasticsearch에서 chat_log 조회 (관리자 대시보드용, PostgreSQL 동기화 백업)."""
         query = {
             "size": self._fetch_limit,
-            "sort": [{"@timestamp": {"order": "desc"}}],
+            "sort": [{"createdAt": {"order": "desc", "missing": "_last"}}, {"@timestamp": {"order": "desc"}}],
             "query": {
                 "bool": {
                     "filter": [
-                        {"term": {"log_type": "ai_log"}},
-                        {"range": {"@timestamp": {"gte": f"now-{self._fetch_days}"}}},
+                        {"term": {"role": "user"}},  # 사용자 질문만 조회 (백엔드 chat_log 인덱스 구조에 맞춤)
+                        {
+                            "range": {
+                                "createdAt": {  # 백엔드 chat_log 인덱스 구조에 맞춤
+                                    "gte": f"now-{self._fetch_days}"
+                                }
+                            }
+                        },
                     ]
                 }
             },
@@ -182,11 +193,13 @@ class LogSyncService:
         return hits
 
     def _refine_log(self, hit: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """로그를 Backend DTO 스키마에 맞게 정제."""
+        """로그를 Backend DTO 스키마에 맞게 정제 (백엔드 chat_log 인덱스 구조 반영)."""
         src = hit.get("_source", {})
 
-        created_at = src.get("@timestamp")
-        user_id = src.get("user_id")
+        # 백엔드 chat_log 인덱스 구조에 맞춤: createdAt 우선, @timestamp fallback
+        created_at = src.get("createdAt") or src.get("@timestamp")
+        # 백엔드 chat_log 인덱스 구조에 맞춤: userId 우선, user_id fallback
+        user_id = src.get("userId") or src.get("user_id")
 
         if not created_at or not user_id:
             return None
@@ -196,20 +209,25 @@ class LogSyncService:
             "createdAt": created_at,
             "userId": user_id,
             # 선택
-            "userRole": src.get("user_role"),
+            "userRole": src.get("userRole") or src.get("user_role"),
             "department": src.get("department"),
             "domain": src.get("domain"),
+            "intent": src.get("intent"),  # 프론트 대시보드용: 의도 분류
             "route": src.get("route"),
-            "modelName": src.get("model_name"),
-            "hasPiiInput": src.get("has_pii_input", False),
-            "hasPiiOutput": src.get("has_pii_output", False),
-            "ragUsed": src.get("rag_used", False),
-            "ragSourceCount": src.get("rag_source_count", 0),
-            "latencyMsTotal": src.get("latency_ms"),
-            "errorCode": src.get("error_code"),
+            "modelName": src.get("modelName") or src.get("model_name"),
+            "hasPiiInput": src.get("hasPiiInput") or src.get("has_pii_input", False),
+            "hasPiiOutput": src.get("hasPiiOutput") or src.get("has_pii_output", False),
+            "ragUsed": src.get("ragUsed") or src.get("rag_used", False),
+            "ragSourceCount": src.get("ragSourceCount") or src.get("rag_source_count", 0),
+            "latencyMsTotal": src.get("latencyMs") or src.get("latency_ms"),
+            "errorCode": src.get("errorCode") or src.get("error_code"),
+            "errorMessage": src.get("errorMessage") or src.get("error_message"),  # 프론트 대시보드용: 에러 메시지
+            # 프론트 대시보드용: 질문/답변 내용 (PII 마스킹된 텍스트)
+            "questionMasked": src.get("questionMasked") or src.get("question_masked") or src.get("content"),
+            "answerMasked": src.get("answerMasked") or src.get("answer_masked"),
             # Trace
-            "traceId": src.get("trace_id"),
-            "conversationId": src.get("session_id"),
+            "traceId": src.get("traceId") or src.get("trace_id"),
+            "conversationId": src.get("sessionId") or src.get("session_id"),
             "turnId": src.get("turn_index"),
         }
 

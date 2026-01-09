@@ -740,6 +740,25 @@ class ChatService:
                 rule_id=f"PRIVACY_GATE:{privacy_result.decision.value}",
             )
 
+            # AI 로그 전송 (차단된 요청도 FAQ 로그로 저장)
+            # PrivacyGate 차단 시에도 FAQ 자동 생성을 위해 로그 저장
+            log_coro = self._send_ai_log(
+                req,
+                privacy_result.block_response,  # 차단 응답
+                user_query,  # 원본 질문
+                "PRIVACY_BLOCK",  # intent
+                "UNKNOWN",  # domain
+                "BLOCKED",  # route
+                pii_input.has_pii,
+                False,  # pii_output (차단 응답에는 PII 없음)
+                False,  # rag_used
+                0,  # rag_source_count
+                latency_ms,
+                "privacy-gate",  # model_name
+                None,  # error_code
+                f"PRIVACY_GATE:{privacy_result.decision.value}",  # error_message
+            )
+
             return ChatResponse(
                 answer=privacy_result.block_response,
                 sources=[],
@@ -848,12 +867,62 @@ class ChatService:
 
                 # Handle SYSTEM_HELP route type
                 if orchestration_result.router_result.route_type == RouterRouteType.ROUTE_SYSTEM_HELP:
-                    return self._create_system_help_response(start_time, pii_input.has_pii)
+                    response = self._create_system_help_response(start_time, pii_input.has_pii)
+                    # FAQ 로그 저장을 위해 _send_ai_log 호출
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    log_coro = self._send_ai_log(
+                        req=req,
+                        response_answer=response.answer,
+                        user_query=user_query,
+                        intent=response.meta.intent or "SYSTEM_HELP",
+                        domain=response.meta.domain or "GENERAL",
+                        route=response.meta.route or "SYSTEM_HELP",
+                        has_pii_input=pii_input.has_pii,
+                        has_pii_output=False,  # SYSTEM_HELP 경로에서는 아직 응답이 생성되지 않았으므로 False
+                        rag_used=False,
+                        rag_source_count=0,
+                        latency_ms=latency_ms,
+                        model_name=None,
+                        error_code=None,
+                        error_message=None,
+                        turn_index=0,
+                        used_doc_ids=[],
+                        ab_model=None,
+                        ab_embedding_model=None,
+                        ab_collection_name=None,
+                    )
+                    self._fire_and_forget(log_coro)
+                    return response
 
                 # Handle UNKNOWN route type (only if high confidence, not LLM fallback)
                 if (orchestration_result.router_result.route_type == RouterRouteType.ROUTE_UNKNOWN
                     and orchestration_result.router_result.confidence >= 0.5):
-                    return self._create_unknown_route_response(start_time, pii_input.has_pii)
+                    response = self._create_unknown_route_response(start_time, pii_input.has_pii)
+                    # FAQ 로그 저장을 위해 _send_ai_log 호출
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    log_coro = self._send_ai_log(
+                        req=req,
+                        response_answer=response.answer,
+                        user_query=user_query,
+                        intent=response.meta.intent or "UNKNOWN",
+                        domain=response.meta.domain or "UNKNOWN",
+                        route=response.meta.route or "UNKNOWN",
+                        has_pii_input=pii_input.has_pii,
+                        has_pii_output=False,  # UNKNOWN 경로에서는 아직 응답이 생성되지 않았으므로 False
+                        rag_used=False,
+                        rag_source_count=0,
+                        latency_ms=latency_ms,
+                        model_name=None,
+                        error_code=None,
+                        error_message=None,
+                        turn_index=0,
+                        used_doc_ids=[],
+                        ab_model=None,
+                        ab_embedding_model=None,
+                        ab_collection_name=None,
+                    )
+                    self._fire_and_forget(log_coro)
+                    return response
 
         # Step 3: Intent Classification and Routing
         # Use IntentService for classification (always called for consistency)
