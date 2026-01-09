@@ -21,6 +21,7 @@ from app.models.chat import ChatRequest, ChatMessage
 from app.models.intent import MaskingStage, PiiMaskResult, IntentType, UserRole, RouteType
 from app.services.intent_service import IntentResult
 from app.services.chat_service import ChatService, PII_DETECTOR_UNAVAILABLE_MESSAGE
+from app.services.chat.rag_handler import RagRetrievalResult
 from app.services.pii_service import PiiDetectorUnavailableError
 from app.telemetry.context import RequestContext, set_request_context, reset_request_context
 from app.telemetry.emitters import (
@@ -180,7 +181,7 @@ async def test_pii_output_failure_returns_fallback_not_raw_answer(
     ), patch(
         "app.services.chat_service.ChatService._perform_rag_search_with_fallback",
         new_callable=AsyncMock,
-        return_value=([], False, "RAGFLOW"),
+        return_value=RagRetrievalResult(sources=[], failed=False, retriever_used="RAGFLOW"),
     ):
         service = ChatService()
 
@@ -226,7 +227,7 @@ async def test_pii_output_failure_emits_security_event(
     ), patch(
         "app.services.chat_service.ChatService._perform_rag_search_with_fallback",
         new_callable=AsyncMock,
-        return_value=([], False, "RAGFLOW"),
+        return_value=RagRetrievalResult(sources=[], failed=False, retriever_used="RAGFLOW"),
     ):
         service = ChatService()
 
@@ -276,7 +277,7 @@ async def test_pii_output_failure_emits_chat_turn_event(
     ), patch(
         "app.services.chat_service.ChatService._perform_rag_search_with_fallback",
         new_callable=AsyncMock,
-        return_value=([], False, "RAGFLOW"),
+        return_value=RagRetrievalResult(sources=[], failed=False, retriever_used="RAGFLOW"),
     ):
         service = ChatService()
 
@@ -327,7 +328,7 @@ async def test_pii_output_failure_no_raw_answer_in_events(
     ), patch(
         "app.services.chat_service.ChatService._perform_rag_search_with_fallback",
         new_callable=AsyncMock,
-        return_value=([], False, "RAGFLOW"),
+        return_value=RagRetrievalResult(sources=[], failed=False, retriever_used="RAGFLOW"),
     ):
         service = ChatService()
 
@@ -380,7 +381,7 @@ async def test_sample_pii_output_fail_closed_event_dump(
     ), patch(
         "app.services.chat_service.ChatService._perform_rag_search_with_fallback",
         new_callable=AsyncMock,
-        return_value=([], False, "RAGFLOW"),
+        return_value=RagRetrievalResult(sources=[], failed=False, retriever_used="RAGFLOW"),
     ):
         service = ChatService()
 

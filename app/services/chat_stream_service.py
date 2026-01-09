@@ -399,21 +399,36 @@ class ChatStreamService:
                                 # 응답을 스트리밍 형식으로 변환
                                 answer_text = chat_response.answer
                                 
-                                # 응답이 비어있으면 에러 메시지 사용
+                                # 응답이 비어있으면 기본 메시지 사용
+                                # (ChatService에서 이미 적절한 에러 메시지를 생성했어야 함)
                                 if not answer_text or len(answer_text.strip()) == 0:
-                                    logger.warning("[Stream] Personalization response is empty")
-                                    answer_text = "개인화 정보를 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+                                    logger.warning("[Stream] Personalization response is empty, using fallback")
+                                    answer_text = "조회된 정보가 없어요."
                                 
                                 if not ttfb_recorded:
                                     metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
                                     ttfb_recorded = True
                                 
-                                # 답변을 문자 단위로 스트리밍
-                                for char in answer_text:
-                                    token_event = StreamTokenEvent(text=char)
-                                    yield token_event.to_ndjson()
-                                    accumulated_response += char
-                                    await asyncio.sleep(0.005)  # 자연스러운 스트리밍을 위한 딜레이
+                                # 답변을 단어 단위로 스트리밍 (더 자연스러운 스트리밍 효과)
+                                # 공백을 기준으로 단어 분리, 단어 단위로 스트리밍
+                                words = answer_text.split()
+                                for i, word in enumerate(words):
+                                    # 단어 앞에 공백 추가 (첫 단어 제외)
+                                    if i > 0:
+                                        token_event = StreamTokenEvent(text=" ")
+                                        yield token_event.to_ndjson()
+                                        accumulated_response += " "
+                                        await asyncio.sleep(0.01)
+                                    
+                                    # 단어를 문자 단위로 스트리밍
+                                    for char in word:
+                                        token_event = StreamTokenEvent(text=char)
+                                        yield token_event.to_ndjson()
+                                        accumulated_response += char
+                                        await asyncio.sleep(0.03)  # 문자 단위 스트리밍 속도 조정
+                                    
+                                    # 단어 끝에 약간의 딜레이 (더 자연스러운 느낌)
+                                    await asyncio.sleep(0.05)
                                 
                                 metrics.total_tokens = len(answer_text)
                                 metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
@@ -442,19 +457,34 @@ class ChatStreamService:
                                 return
                                 
                             except Exception as e:
-                                # ChatService 호출 중 에러 발생
-                                logger.error(f"[Stream] Personalization ChatService call failed: {e}", exc_info=True)
-                                # 에러 메시지를 스트리밍
-                                error_text = "개인화 정보를 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+                                # ChatService 호출 중 예기치 않은 예외 발생
+                                # (ChatService 내부에서 이미 에러 처리를 했어야 하는데 예외가 발생한 경우)
+                                logger.error(f"[Stream] Unexpected error during Personalization ChatService call: {e}", exc_info=True)
+                                
+                                # 최후의 수단으로 최소한의 에러 메시지 사용
+                                # (ChatService 내부에서 AnswerGenerator를 통해 적절한 메시지를 생성하도록 수정했으므로
+                                #  이 경로로 오는 경우는 거의 없어야 함)
+                                error_text = "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
                                 if not ttfb_recorded:
                                     metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
                                     ttfb_recorded = True
                                 
-                                for char in error_text:
-                                    token_event = StreamTokenEvent(text=char)
-                                    yield token_event.to_ndjson()
-                                    accumulated_response += char
-                                    await asyncio.sleep(0.005)
+                                # 에러 메시지도 단어 단위로 스트리밍
+                                words = error_text.split()
+                                for i, word in enumerate(words):
+                                    if i > 0:
+                                        token_event = StreamTokenEvent(text=" ")
+                                        yield token_event.to_ndjson()
+                                        accumulated_response += " "
+                                        await asyncio.sleep(0.01)
+                                    
+                                    for char in word:
+                                        token_event = StreamTokenEvent(text=char)
+                                        yield token_event.to_ndjson()
+                                        accumulated_response += char
+                                        await asyncio.sleep(0.03)
+                                    
+                                    await asyncio.sleep(0.05)
                                 
                                 metrics.total_tokens = len(error_text)
                                 metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
