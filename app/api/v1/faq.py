@@ -447,11 +447,21 @@ async def generate_auto_faq(
             - drafts: 생성된 FAQ 초안 목록
             - error_message: 에러 메시지 (실패 시)
     """
+    # auto_generate_drafts가 None이면 True로 설정 (자동 생성 버튼이면 초안까지 생성)
+    # 백엔드가 null을 false로 변환해서 보낼 수 있으므로, None 또는 False 모두 True로 처리
+    original_value = request.auto_generate_drafts
+    if request.auto_generate_drafts is None or request.auto_generate_drafts is False:
+        request.auto_generate_drafts = True
+        logger.info(
+            f"auto_generate_drafts was {original_value}, setting to True "
+            f"(관리자 대시보드 자동 생성 버튼이면 초안까지 생성)"
+        )
+    
     logger.info(
         f"Auto FAQ generation request: domain={request.domain}, "
         f"min_frequency={request.min_frequency}, days_back={request.days_back}, "
         f"max_candidates={request.max_candidates}, "
-        f"auto_generate_drafts={request.auto_generate_drafts}, "
+        f"auto_generate_drafts={request.auto_generate_drafts} (original={original_value}), "
         f"llm_model={request.llm_model}"
     )
 
@@ -461,10 +471,11 @@ async def generate_auto_faq(
         response = await service.generate_auto_faq(request)
 
         logger.info(
-            f"Auto FAQ generation completed: status={response.status}, "
+            f"[FAQ_API] 자동 FAQ 생성 완료: status={response.status}, "
             f"candidates_found={response.candidates_found}, "
             f"drafts_generated={response.drafts_generated}, "
-            f"drafts_failed={response.drafts_failed}"
+            f"drafts_failed={response.drafts_failed}, "
+            f"error_message={response.error_message[:100] if response.error_message else None}"
         )
 
         return response
