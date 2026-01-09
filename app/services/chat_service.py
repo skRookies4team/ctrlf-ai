@@ -69,6 +69,7 @@ from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
 from app.strategy.auto_strategy import decide_strategy
+from app.strategy.auto_strategy import decide_strategy
 from app.core.metrics import (
     LOG_TAG_LLM_ERROR,
     LOG_TAG_LLM_FALLBACK,
@@ -910,13 +911,8 @@ class ChatService:
         # ============================================================
         # 🔥 Phase LLM-Ops: Dynamic Strategy Decision (AUTO TUNING)
         # ============================================================
-        raw_strategy = await decide_strategy(domain=domain)
 
-        strategy = {
-            "use_rag": raw_strategy.get("use_rag", True) if raw_strategy else True,
-            "model": raw_strategy.get("model") if raw_strategy else None,
-            "reason": raw_strategy.get("reason", "AUTO_STRATEGY_FALLBACK") if raw_strategy else "AUTO_STRATEGY_FALLBACK",
-        }
+        strategy = await decide_strategy(domain=domain)
 
         # 1️⃣ RAG 사용 여부 override
         # use_rag가 있으면 사용, 없으면 disable_rag의 반대값 사용
@@ -928,12 +924,22 @@ class ChatService:
                 blocked=True,
                 reason=f"AUTO_RULE:{strategy.get('reason', 'UNKNOWN')}"
             )
+            
+        if strategy.get("disable_rag", False):
+            set_retrieval_blocked(
+                blocked=True,
+                reason=f"AUTO_RULE:{strategy.get('reason', 'UNKNOWN')}"
+            )
 
         # AUTO STRATEGY 이후에 다시 반영
         if strategy.get("model"):
             req.llm_model = strategy["model"]
             llm_provider = strategy["model"]  
-            
+
+        # strategy 정보 저장 (나중에 meta 생성 시 사용)
+        # 이 변수들은 나중에 ChatAnswerMeta 생성 시 사용됨
+        auto_strategy_applied = True
+        auto_strategy_reason = strategy.get("reason", "UNKNOWN")
 
         logger.info(
             f"[AUTO_STRATEGY] domain={domain}, "
