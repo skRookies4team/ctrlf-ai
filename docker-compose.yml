@@ -5,12 +5,18 @@
 # 사용법:
 #   docker compose up -d
 #
-# 필수 환경변수 설정:
-#   export RAGFLOW_BASE_URL_REAL=http://ragflow-server:8080
-#   export LLM_BASE_URL_REAL=http://llm-server:8001
-#   export BACKEND_BASE_URL_REAL=http://backend-server:8080
-#   export RAGFLOW_API_KEY=your-api-key
-#   export OPENAI_API_KEY=your-openai-key
+# 필수 환경변수 설정 (.env 파일 또는 export):
+#   RAGFLOW_BASE_URL_REAL=http://ragflow-server:8080
+#   LLM_BASE_URL_REAL=http://llm-server:8001
+#   BACKEND_BASE_URL_REAL=http://backend-server:8080
+#   RAGFLOW_API_KEY=your-api-key
+#   OPENAI_API_KEY=your-openai-key
+#
+# 보안 토큰 (프로덕션 필수):
+#   BACKEND_INTERNAL_TOKEN=your-internal-token
+#   AI_CALLBACK_TOKEN=your-callback-token
+#   BACKEND_SERVICE_TOKEN=your-service-token
+#   BACKEND_API_TOKEN=your-api-token
 #
 # =============================================================================
 
@@ -26,44 +32,72 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # -----------------------------------------------------------------
+      # 앱 기본 설정
+      # -----------------------------------------------------------------
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
       - LOG_LEVEL=DEBUG
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-      # Milvus 설정
+
+      # -----------------------------------------------------------------
+      # Milvus 벡터 DB 설정
+      # -----------------------------------------------------------------
       - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
       - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
       - MILVUS_PORT=${MILVUS_PORT:-19540}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
       - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
+
+      # -----------------------------------------------------------------
       # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
+      # -----------------------------------------------------------------
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
       - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
+
+      # -----------------------------------------------------------------
       # 외부 서비스 URL
+      # -----------------------------------------------------------------
       - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL}
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
-      # 인증 토큰
+
+      # -----------------------------------------------------------------
+      # 인증 토큰 (보안: 기본값 없음, 반드시 .env에서 설정)
+      # -----------------------------------------------------------------
       - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
-      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-ctrlf-r2a-w3e5t7y9u2i4}
-      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-ctrlf-a2b-z6x8c1v3b5n7}
-      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-ctrlf-a2b-h4j6k8l0m2n4}
-      # PII 설정
+      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-}
+      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-}
+      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-}
+
+      # -----------------------------------------------------------------
+      # PII 마스킹 설정
+      # -----------------------------------------------------------------
       - PII_BASE_URL=
-      - PII_ENABLED=true
-      # RouterOrchestrator 활성화
-      - ROUTER_ORCHESTRATOR_ENABLED=true
+      - PII_ENABLED=${PII_ENABLED:-true}
+
+      # -----------------------------------------------------------------
+      # Router 설정 (config.py 기본값과 일치)
+      # -----------------------------------------------------------------
+      - ROUTER_ORCHESTRATOR_ENABLED=${ROUTER_ORCHESTRATOR_ENABLED:-false}
+
+      # -----------------------------------------------------------------
       # 개인화 모드: auto (백엔드 시도 후 실패시 fallback), real (백엔드 필수)
+      # -----------------------------------------------------------------
       - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
-      # Quality Gate 설정
-      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
+
+      # -----------------------------------------------------------------
+      # Quality Gate 설정 (config.py 기본값과 일치)
+      # -----------------------------------------------------------------
+      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-true}
       - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
       - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
       - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
+
     networks:
       - ctrlf-net
     depends_on:
