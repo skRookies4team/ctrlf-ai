@@ -74,16 +74,23 @@ HR_SALARY_KEYWORDS = frozenset([
 ])
 
 # Q16: 내 인사 정보 조회용 키워드
+# 주의: "부서"는 Q17과 겹치므로 제외하고, "내 부서"는 Q17에서 먼저 체크되므로 제외
+# "내 이메일", "내 직급" 등 개인 정보 조회에 집중
 HR_PERSONAL_INFO_KEYWORDS = frozenset([
     "인사 정보", "인사정보", "내 정보", "내정보", "프로필", "사원정보", "사원 정보",
     "입사일", "입사 일", "입사 언제", "언제 입사", "사원번호", "사원 번호",
-    "직급", "직책", "부서", "내 부서", "나의 부서", "이메일", "연락처", "전화번호",
+    "직급", "직책", "이메일", "연락처", "전화번호",
+    "내 직급", "나의 직급", "내 직책", "나의 직책",
+    "내 이메일", "나의 이메일", "내 전화번호", "나의 전화번호",
+    "내 연락처", "나의 연락처",
 ])
 
 # Q17: 내 팀/부서 정보 조회용 키워드
+# "부서", "내 부서" 등 팀/부서 단위 정보 조회에 집중
 HR_TEAM_INFO_KEYWORDS = frozenset([
     "팀 정보", "팀정보", "부서 정보", "부서정보", "우리 팀", "우리팀",
-    "우리 부서", "우리부서", "팀 인원", "팀인원", "부서 인원", "부서인원",
+    "우리 부서", "우리부서", "내 부서", "나의 부서", "부서",
+    "팀 인원", "팀인원", "부서 인원", "부서인원",
     "팀 구성", "팀구성", "팀원", "부서원", "몇 명", "몇명",
     "팀장", "부서장",
 ])
@@ -256,39 +263,47 @@ def _classify_hr_leave(query: str) -> str:
     # Q17: 팀/부서 정보 조회 (우선순위 높음)
     for keyword in HR_TEAM_INFO_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q17 (팀/부서 정보): matched_keyword='{keyword}', query='{query}'")
             return "Q17"
 
     # Q16: 인사 정보 조회
     for keyword in HR_PERSONAL_INFO_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q16 (인사 정보): matched_keyword='{keyword}', query='{query}'")
             return "Q16"
 
     # Q13: 급여 명세서 요약
     for keyword in HR_SALARY_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q13 (급여): matched_keyword='{keyword}', query='{query}'")
             return "Q13"
 
     # Q15: 복지 포인트 사용 내역 (Q14보다 우선 체크)
     for keyword in HR_WELFARE_HISTORY_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q15 (복지 내역): matched_keyword='{keyword}', query='{query}'")
             return "Q15"
 
     # Q14: 복지/식대 포인트 잔액
     for keyword in HR_WELFARE_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q14 (복지 잔액): matched_keyword='{keyword}', query='{query}'")
             return "Q14"
 
     # Q10: 근태 현황
     for keyword in HR_ATTENDANCE_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q10 (근태): matched_keyword='{keyword}', query='{query}'")
             return "Q10"
 
     # Q12: 연차 사용 이력 (이력/내역/사용 관련 키워드 우선 체크)
     for keyword in HR_LEAVE_HISTORY_KEYWORDS:
         if keyword in q_lower:
+            logger.info(f"HR_LEAVE_CHECK -> Q12 (연차 이력): matched_keyword='{keyword}', query='{query}'")
             return "Q12"
 
     # Q11: 남은 연차 일수 (기본값)
+    logger.info(f"HR_LEAVE_CHECK -> Q11 (남은 연차, 기본값): query='{query}'")
     return "Q11"
 
 

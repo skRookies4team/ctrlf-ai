@@ -73,6 +73,21 @@ class PersonalizationClient:
         self._base_url = base_url or settings.backend_base_url
         self._api_token = api_token if api_token is not None else settings.BACKEND_API_TOKEN
         self._timeout = timeout
+        
+        # 초기화 시 설정 로깅
+        mode = settings.PERSONALIZATION_MODE
+        if self._base_url:
+            logger.info(
+                f"PersonalizationClient initialized: "
+                f"mode={mode}, base_url={self._base_url}, "
+                f"has_api_token={bool(self._api_token)}, timeout={self._timeout}s"
+            )
+        else:
+            logger.warning(
+                f"PersonalizationClient initialized: "
+                f"mode={mode}, base_url=None (BACKEND_BASE_URL not set), "
+                f"will use mock data in auto mode"
+            )
 
     @property
     def is_configured(self) -> bool:
@@ -148,17 +163,28 @@ class PersonalizationClient:
 
         # mock 모드: 무조건 mock 반환
         if mode == "mock":
-            logger.debug(f"PERSONALIZATION_MODE=mock, returning mock facts for {sub_intent_id}")
+            logger.info(
+                f"PERSONALIZATION_MODE=mock, returning mock facts for {sub_intent_id} "
+                f"(user_id={user_id})"
+            )
             return self._get_mock_facts(sub_intent_id, period)
 
         # 백엔드 URL 미설정 시: 모드에 따라 분기
         if not self._base_url:
             if mode == "auto":
                 # auto 모드: URL 없으면 mock fallback
-                logger.debug("Backend URL not configured (auto mode), returning mock facts")
+                logger.warning(
+                    f"Backend URL not configured (auto mode), returning mock facts. "
+                    f"sub_intent_id={sub_intent_id}, user_id={user_id}. "
+                    f"실제 백엔드 데이터를 사용하려면 BACKEND_BASE_URL 환경변수를 설정하세요."
+                )
                 return self._get_mock_facts(sub_intent_id, period)
             # real 모드: URL 없으면 에러 반환
-            logger.warning("Backend URL not configured (real mode)")
+            logger.error(
+                f"Backend URL not configured (real mode). "
+                f"sub_intent_id={sub_intent_id}, user_id={user_id}. "
+                f"BACKEND_BASE_URL 환경변수를 설정하거나 PERSONALIZATION_MODE=auto로 변경하세요."
+            )
             return PersonalizationFacts(
                 sub_intent_id=sub_intent_id,
                 items=[],
@@ -206,6 +232,11 @@ class PersonalizationClient:
 
             if response.status_code == 200:
                 data = response.json()
+                logger.info(
+                    f"Personalization resolve success: sub_intent_id={sub_intent_id}, "
+                    f"user_id={user_id}, metrics_keys={list(data.get('metrics', {}).keys())}, "
+                    f"items_count={len(data.get('items', []))}, has_error={data.get('error') is not None}"
+                )
                 return PersonalizationFacts(**data)
             elif response.status_code == 404:
                 return PersonalizationFacts(
@@ -238,7 +269,8 @@ class PersonalizationClient:
                 
                 logger.warning(
                     f"Personalization resolve failed: status={response.status_code}, "
-                    f"body_len={len(response.text)}"
+                    f"sub_intent_id={sub_intent_id}, user_id={user_id}, "
+                    f"endpoint={endpoint}, body_preview={response.text[:500]}"
                 )
                 return PersonalizationFacts(
                     sub_intent_id=sub_intent_id,
@@ -246,7 +278,7 @@ class PersonalizationClient:
                     metrics={},
                     error=PersonalizationError(
                         type=PersonalizationErrorType.HTTP_ERROR.value,
-                        message=f"HTTP {response.status_code}",
+                        message=f"HTTP {response.status_code}: {response.text[:200]}",
                     ),
                 )
 
@@ -255,7 +287,10 @@ class PersonalizationClient:
         except httpx.TimeoutException as e:
             timeout_type = type(e).__name__  # 로그에서 구체적 타입 구분
             if mode == "auto":
-                logger.warning(f"Personalization timeout ({timeout_type}, auto fallback to mock): {e}")
+                logger.warning(
+                    f"Personalization timeout ({timeout_type}, auto fallback to mock): "
+                    f"sub_intent_id={sub_intent_id}, user_id={user_id}, endpoint={endpoint}, error={e}"
+                )
                 return self._get_mock_facts(sub_intent_id, period)
 
             logger.warning(f"Personalization timeout ({timeout_type}): {e}")
@@ -273,7 +308,11 @@ class PersonalizationClient:
         except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
             error_type = type(e).__name__  # 로그에서 구체적 타입 구분
             if mode == "auto":
-                logger.warning(f"Personalization network error ({error_type}, auto fallback to mock): {e}")
+                logger.warning(
+                    f"Personalization network error ({error_type}, auto fallback to mock): "
+                    f"sub_intent_id={sub_intent_id}, user_id={user_id}, endpoint={endpoint}, error={e}. "
+                    f"백엔드 서버가 실행 중인지 확인하세요."
+                )
                 return self._get_mock_facts(sub_intent_id, period)
 
             logger.warning(f"Personalization network error ({error_type}): {e}")
