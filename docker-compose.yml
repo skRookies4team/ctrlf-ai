@@ -32,86 +32,18 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # -----------------------------------------------------------------
-      # 앱 기본 설정
-      # -----------------------------------------------------------------
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
       - LOG_LEVEL=DEBUG
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-
-      # -----------------------------------------------------------------
-      # Milvus 벡터 DB 설정
-      # -----------------------------------------------------------------
-      - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
-      - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
-      - MILVUS_PORT=${MILVUS_PORT:-19540}
-      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
-      - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
-
-      # -----------------------------------------------------------------
-      # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
-      # -----------------------------------------------------------------
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
-      - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
-
-      # -----------------------------------------------------------------
-      # 외부 서비스 URL
-      # -----------------------------------------------------------------
-      - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL}
-      - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL}
-      - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL}
-      - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
-
-      # -----------------------------------------------------------------
-      # 인증 토큰 (보안: 기본값 없음, 반드시 .env에서 설정)
-      # -----------------------------------------------------------------
-      - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
-      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-}
-      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-}
-      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-}
-
-      # -----------------------------------------------------------------
-      # PII 마스킹 설정
-      # -----------------------------------------------------------------
-      - PII_BASE_URL=
-      - PII_ENABLED=${PII_ENABLED:-true}
-
-      # -----------------------------------------------------------------
-      # Router 설정 (config.py 기본값과 일치)
-      # -----------------------------------------------------------------
-      - ROUTER_ORCHESTRATOR_ENABLED=${ROUTER_ORCHESTRATOR_ENABLED:-false}
-
-      # -----------------------------------------------------------------
-      # 개인화 모드: auto (백엔드 시도 후 실패시 fallback), real (백엔드 필수)
-      # -----------------------------------------------------------------
-      - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
-
-      # -----------------------------------------------------------------
-      # Quality Gate 설정 (config.py 기본값과 일치)
-      # -----------------------------------------------------------------
-      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-true}
-      - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
-      - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
-      - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
-
     networks:
       - ctrlf-net
     depends_on:
       elasticsearch:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   # =============================================================================
-  # Elasticsearch - 로그 저장소
+  # Elasticsearch
   # =============================================================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
@@ -130,16 +62,15 @@ services:
       timeout: 5s
       retries: 5
 
+
   # =============================================================================
-  # Kibana - 로그 시각화
+  # Kibana
   # =============================================================================
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.3
     container_name: ctrlf-kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
-      - SERVER_NAME=ctrlf-kibana
-      - SERVER_HOST=0.0.0.0
     ports:
       - "5601:5601"
     networks:
@@ -149,7 +80,7 @@ services:
         condition: service_healthy
 
   # =============================================================================
-  # Prometheus - 메트릭 수집
+  # Prometheus
   # =============================================================================
   prometheus:
     image: prom/prometheus:latest
@@ -162,22 +93,37 @@ services:
       - ctrlf-net
 
   # =============================================================================
-  # Grafana - 메트릭 시각화
+  # Grafana  ✅ (여기로 와야 함)
   # =============================================================================
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.2.3
     container_name: ctrlf-grafana
     ports:
       - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
     networks:
       - ctrlf-net
     depends_on:
       - prometheus
 
 # =============================================================================
-# 네트워크 설정
+# 네트워크
 # =============================================================================
 networks:
   ctrlf-net:
     driver: bridge
     name: ctrlf-network
+
+# =============================================================================
+# 볼륨 (맨 아래)
+# =============================================================================
+volumes:
+  grafana-data:
+
+
