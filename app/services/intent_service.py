@@ -1,6 +1,7 @@
 """
 의도 분류 서비스 (Intent Classification Service)
 
+신고 관련 도메인 삭제했습니다.
 규칙 기반 의도 분류 및 라우팅 서비스입니다.
 사용자의 질문을 분석하여 적절한 처리 경로(RAG, LLM only, Backend API 등)를
 결정합니다.
