@@ -68,6 +68,7 @@ from fastapi import BackgroundTasks
 from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
+from app.strategy.auto_strategy import decide_strategy
 from app.core.metrics import (
     LOG_TAG_LLM_ERROR,
     LOG_TAG_LLM_FALLBACK,
@@ -101,7 +102,12 @@ from app.models.router_types import (
 from app.clients.backend_client import BackendDataClient
 from app.clients.llm_client import LLMClient, LLMCompletionResult, get_llm_client
 from app.clients.personalization_client import PersonalizationClient
-from app.models.personalization import AnswerGeneratorContext
+from app.models.personalization import (
+    AnswerGeneratorContext,
+    PersonalizationFacts,
+    PersonalizationError,
+    PersonalizationErrorType,
+)
 from app.services.answer_generator import AnswerGenerator
 from app.services.personalization_mapper import (
     to_personalization_q,
@@ -900,6 +906,43 @@ class ChatService:
                 tool=route.value,
                 reason=f"rule-based: IntentService",
             )
+            
+        # ============================================================
+        # 🔥 Phase LLM-Ops: Dynamic Strategy Decision (AUTO TUNING)
+        # ============================================================
+        raw_strategy = await decide_strategy(domain=domain)
+
+        strategy = {
+            "use_rag": raw_strategy.get("use_rag", True) if raw_strategy else True,
+            "model": raw_strategy.get("model") if raw_strategy else None,
+            "reason": raw_strategy.get("reason", "AUTO_STRATEGY_FALLBACK") if raw_strategy else "AUTO_STRATEGY_FALLBACK",
+        }
+
+        # 1️⃣ RAG 사용 여부 override
+        # use_rag가 있으면 사용, 없으면 disable_rag의 반대값 사용
+        use_rag = strategy.get("use_rag", not strategy.get("disable_rag", False))
+        
+        if not use_rag:
+            # RAG 강제 차단 (전역 컨텍스트)
+            set_retrieval_blocked(
+                blocked=True,
+                reason=f"AUTO_RULE:{strategy.get('reason', 'UNKNOWN')}"
+            )
+
+        # AUTO STRATEGY 이후에 다시 반영
+        if strategy.get("model"):
+            req.llm_model = strategy["model"]
+            llm_provider = strategy["model"]  
+            
+
+        logger.info(
+            f"[AUTO_STRATEGY] domain={domain}, "
+            f"use_rag={use_rag}, "
+            f"disable_rag={strategy.get('disable_rag', False)}, "
+            f"model={strategy.get('model', None)}, "
+            f"reason={auto_strategy_reason}"
+        )
+
 
         # =====================================================================
         # 멀티턴 맥락 유지: Step 1-4 - 컨텍스트 처리
@@ -1764,6 +1807,8 @@ class ChatService:
             # Option 3: 실제 사용된 검색 엔진 (운영 디버깅용)
             retriever_used=retriever_used,
             latency_ms=latency_ms,
+            auto_strategy_applied=auto_strategy_applied if 'auto_strategy_applied' in locals() else False,
+            auto_strategy_reason=auto_strategy_reason if 'auto_strategy_reason' in locals() else None,
             # Phase 12: 에러 정보 및 개별 latency
             error_type=error_type,
             error_message=error_message,
@@ -2444,6 +2489,10 @@ class ChatService:
         try:
             # 1) PersonalizationClient로 facts 조회
             # period가 None이면 클라이언트에서 DEFAULT_PERIOD_FOR_INTENT 사용
+            logger.info(
+                f"Personalization request: q={q}, user_id={req.user_id}, period={period}"
+            )
+            
             facts = await self._personalization_client.resolve_facts(
                 sub_intent_id=q,
                 user_id=req.user_id,
@@ -2454,7 +2503,10 @@ class ChatService:
             logger.info(
                 f"Personalization facts retrieved: q={q}, "
                 f"has_error={facts.error is not None}, "
-                f"metrics_keys={list(facts.metrics.keys()) if facts.metrics else []}"
+                f"error_type={facts.error.type if facts.error else None}, "
+                f"error_message={facts.error.message if facts.error else None}, "
+                f"metrics_keys={list(facts.metrics.keys()) if facts.metrics else []}, "
+                f"items_count={len(facts.items) if facts.items else 0}"
             )
 
             # 2) AnswerGenerator로 자연어 답변 생성
@@ -2464,6 +2516,12 @@ class ChatService:
                 facts=facts,
             )
             raw_answer = await self._answer_generator.generate(context)
+            
+            logger.info(
+                f"Personalization answer generated: q={q}, "
+                f"answer_length={len(raw_answer) if raw_answer else 0}, "
+                f"answer_preview={raw_answer[:100] if raw_answer else 'None'}..."
+            )
 
             # 3) PII 마스킹 (OUTPUT)
             pii_output = await self._pii.detect_and_mask(
@@ -2519,22 +2577,71 @@ class ChatService:
             )
 
         except Exception as e:
-            logger.error(f"Personalization handling failed: {e}")
+            logger.error(
+                f"Personalization handling failed: q={q}, user_id={req.user_id}, "
+                f"error_type={type(e).__name__}, error={e}",
+                exc_info=True
+            )
+            
+            # 예외 발생 시에도 AnswerGenerator를 통해 에러 메시지 생성
+            # AI Gateway에서 적절한 답변을 생성하도록 함
+            error_facts = PersonalizationFacts(
+                sub_intent_id=q,
+                items=[],
+                metrics={},
+                error=PersonalizationError(
+                    type=PersonalizationErrorType.UNEXPECTED_ERROR.value,
+                    message=f"{type(e).__name__}: {str(e)}",
+                ),
+            )
+            
+            error_context = AnswerGeneratorContext(
+                sub_intent_id=q,
+                user_question=user_query,
+                facts=error_facts,
+            )
+            
+            try:
+                # AnswerGenerator가 에러 메시지 생성
+                error_answer = await self._answer_generator.generate(error_context)
+                
+                # PII 마스킹
+                pii_output = await self._pii.detect_and_mask(
+                    text=error_answer,
+                    stage=MaskingStage.OUTPUT,
+                )
+                final_answer = pii_output.masked_text
+            except Exception as gen_error:
+                # AnswerGenerator 호출 자체가 실패한 경우 최소한의 fallback 메시지
+                logger.error(
+                    f"AnswerGenerator failed during error handling: {gen_error}",
+                    exc_info=True
+                )
+                final_answer = "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
+                pii_output = await self._pii.detect_and_mask(
+                    text=final_answer,
+                    stage=MaskingStage.OUTPUT,
+                )
+                final_answer = pii_output.masked_text
+            
             latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-            # 에러 시 fallback 메시지 반환
             return ChatResponse(
-                answer=BACKEND_FALLBACK_MESSAGE,
+                answer=final_answer,
                 sources=[],
                 meta=ChatAnswerMeta(
                     route=RouteType.BACKEND_API.value,
                     intent=intent.value if intent else "BACKEND_STATUS",
                     domain=domain,
-                    masked=pii_input.has_pii,
+                    masked=pii_input.has_pii or pii_output.has_pii,
                     has_pii_input=pii_input.has_pii,
+                    has_pii_output=pii_output.has_pii,
                     latency_ms=latency_ms,
+                    rag_used=False,
+                    rag_source_count=0,
+                    personalization_q=q,
                     error_type="PERSONALIZATION_ERROR",
-                    error_message=str(e),
+                    error_message=f"{type(e).__name__}: {str(e)}",
                 ),
             )
 
