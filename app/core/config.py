@@ -197,7 +197,7 @@ class Settings(BaseSettings):
 
     # 벡터 검색 설정
     MILVUS_TOP_K: int = 5  # 기본 검색 결과 수
-    MILVUS_SEARCH_PARAMS: str = '{"metric_type": "COSINE", "params": {"nprobe": 10}}'
+    MILVUS_SEARCH_PARAMS: str = '{"metric_type": "L2", "params": {"nprobe": 10}}'
 
     # Milvus 사용 여부 (True면 RAGFlow 대신 Milvus 사용)
     # 기본값: False (RAGFlow 사용). 환경변수로 MILVUS_ENABLED=true 설정 시 Milvus 활성화
