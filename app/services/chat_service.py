@@ -69,7 +69,6 @@ from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
 from app.strategy.auto_strategy import decide_strategy
-from app.strategy.auto_strategy import decide_strategy
 from app.core.metrics import (
     LOG_TAG_LLM_ERROR,
     LOG_TAG_LLM_FALLBACK,
@@ -906,18 +905,17 @@ class ChatService:
         # ============================================================
         # 🔥 Phase LLM-Ops: Dynamic Strategy Decision (AUTO TUNING)
         # ============================================================
+        raw_strategy = await decide_strategy(domain=domain)
 
-        strategy = await decide_strategy(domain=domain)
+        strategy = {
+            "use_rag": raw_strategy.get("use_rag", True) if raw_strategy else True,
+            "model": raw_strategy.get("model") if raw_strategy else None,
+            "reason": raw_strategy.get("reason", "AUTO_STRATEGY_FALLBACK") if raw_strategy else "AUTO_STRATEGY_FALLBACK",
+        }
 
         # 1️⃣ RAG 사용 여부 override
         if not strategy["use_rag"]:
             # RAG 강제 차단 (전역 컨텍스트)
-            set_retrieval_blocked(
-                blocked=True,
-                reason=f"AUTO_RULE:{strategy['reason']}"
-            )
-            
-        if strategy["disable_rag"]:
             set_retrieval_blocked(
                 blocked=True,
                 reason=f"AUTO_RULE:{strategy['reason']}"
@@ -928,8 +926,6 @@ class ChatService:
             req.llm_model = strategy["model"]
             llm_provider = strategy["model"]  
             
-        meta.auto_strategy_applied = True
-        meta.auto_strategy_reason = strategy["reason"]
 
         logger.info(
             f"[AUTO_STRATEGY] domain={domain}, "
