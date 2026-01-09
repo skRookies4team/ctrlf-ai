@@ -18,7 +18,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.chat import ChatMessage
+from app.models.chat import ChatMessage, ChatSource
 
 
 # =============================================================================
@@ -137,6 +137,8 @@ class StreamTokenEvent(BaseModel):
 class StreamDoneEvent(BaseModel):
     """
     스트리밍 정상 종료 이벤트 (1회).
+
+    Phase 60: sources 필드 추가 - RAG 검색 결과 출처 반환
     """
 
     type: Literal["done"] = "done"
@@ -144,6 +146,11 @@ class StreamDoneEvent(BaseModel):
     total_tokens: Optional[int] = Field(default=None, description="총 토큰 수")
     elapsed_ms: int = Field(..., description="총 소요 시간 (ms)")
     ttfb_ms: Optional[int] = Field(default=None, description="첫 토큰까지 시간 (ms)")
+    # Phase 60: RAG 출처 반환
+    sources: List[ChatSource] = Field(
+        default_factory=list,
+        description="RAG 검색 결과 출처 목록 (문서 제목, 조항 등)",
+    )
 
     def to_ndjson(self) -> str:
         """NDJSON 문자열로 변환 (줄바꿈 포함)."""
