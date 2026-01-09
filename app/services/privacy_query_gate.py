@@ -90,8 +90,27 @@ LIST_ACTION_TERMS: Set[str] = {
     "어느", "어디", "뭐야", "뭔지", "무엇",
 }
 
-# 민감 속성 (교육/점수/평가/징계 등 인사성 정보)
-SENSITIVE_ATTRIBUTE_TERMS: Set[str] = {
+# =============================================================================
+# Phase 60: 민감 속성 레벨 분리
+# =============================================================================
+
+# 레벨 1: 직접적 개인정보 (이름만 있어도 차단)
+# - "홍길동 이메일" → Action 없이도 명백한 개인정보 요청
+DIRECT_PII_TERMS: Set[str] = {
+    # 연락처 정보
+    "이메일", "전화번호", "연락처", "휴대폰", "핸드폰", "폰번호",
+    # 주소/위치 정보
+    "주소", "거주지", "집주소", "자택",
+    # 급여/금전 정보
+    "급여", "연봉", "월급", "보너스", "인센티브", "수당",
+    # 식별 정보
+    "주민번호", "주민등록번호", "사번", "사원번호",
+}
+
+# 레벨 2: 상태/성과 정보 (이름 + Action 있을 때만 차단)
+# - "홍길동 담당 교육 뭐야?" → 허용 (업무 질문)
+# - "홍길동 교육 이수 현황 알려줘" → 차단 (개인정보 요청)
+STATUS_INFO_TERMS: Set[str] = {
     # 교육 관련
     "교육", "이수", "미이수", "수료", "미수료", "진도", "수강",
     "시청률", "영상", "강의", "학습", "훈련",
@@ -99,14 +118,22 @@ SENSITIVE_ATTRIBUTE_TERMS: Set[str] = {
     "퀴즈", "점수", "성적", "오답", "정답", "테스트", "시험",
     "평가", "결과", "합격", "불합격", "탈락",
     # 성과/인사 관련
-    "성과", "실적", "평가", "등급", "고과", "KPI",
+    "성과", "실적", "등급", "고과", "KPI",
     "징계", "경고", "주의", "불이익",
-    # 기타 민감 정보
-    "급여", "연봉", "보너스", "인센티브",
-    # 개인 식별 정보
-    "id", "아이디", "이름", "성명", "주소", "주민번호",
-    "이메일", "전화번호", "연락처", "휴대폰",
+    # 기본 인사 정보
     "직급", "직책", "부서", "입사일", "근속",
+    "id", "아이디", "이름", "성명",
+}
+
+# 전체 민감 속성 (기존 호환성 유지)
+SENSITIVE_ATTRIBUTE_TERMS: Set[str] = DIRECT_PII_TERMS | STATUS_INFO_TERMS
+
+# 업무 맥락 키워드 (이 키워드가 있으면 개인정보 요청이 아닌 업무 질문으로 간주)
+# "홍길동 팀장님 담당 교육이 뭐야?" → 업무 질문, 허용
+WORK_CONTEXT_TERMS: Set[str] = {
+    "담당", "진행", "맡은", "책임", "관리",
+    "주관", "주최", "기획", "운영", "개설",
+    "만든", "작성", "올린", "등록",
 }
 
 # 1인칭 표현 (본인 요청은 허용)
@@ -225,6 +252,10 @@ class PrivacyQueryGate:
         self._sensitive_pattern = self._build_pattern(SENSITIVE_ATTRIBUTE_TERMS)
         self._first_person_pattern = self._build_pattern(FIRST_PERSON_TERMS)
         self._third_person_pattern = self._build_pattern(THIRD_PERSON_TERMS)
+        # Phase 60: 민감도 레벨별 패턴
+        self._direct_pii_pattern = self._build_pattern(DIRECT_PII_TERMS)
+        self._status_info_pattern = self._build_pattern(STATUS_INFO_TERMS)
+        self._work_context_pattern = self._build_pattern(WORK_CONTEXT_TERMS)
 
     def _build_pattern(self, terms: Set[str]) -> re.Pattern:
         """키워드 집합을 정규식 패턴으로 컴파일"""
@@ -407,23 +438,62 @@ class PrivacyQueryGate:
         has_english_name = bool(re.search(english_name_pattern, query))
 
         if (has_korean_name or has_english_name) and not result.is_first_person:
-            # 이름이 있고 1인칭이 아니면 다른 사람의 개인정보 요청
-            # 민감 속성(이메일, 부서, 직급 등)이 포함되어 있는지 확인
-            matched_sensitive = self._find_matches(normalized_query, self._sensitive_pattern)
-            if matched_sensitive:
+            # Phase 60: 민감도 레벨별 차단 로직
+            # 이름이 있고 1인칭이 아닌 경우, 민감도에 따라 차단 여부 결정
+
+            # 레벨 1: 직접적 PII (이메일, 전화번호, 급여 등) → Action 없이도 차단
+            matched_direct_pii = self._find_matches(normalized_query, self._direct_pii_pattern)
+            if matched_direct_pii:
                 result.decision = PrivacyGateDecision.BLOCK_PII_LIST
                 result.blocked = True
                 result.reason = (
-                    f"다른 사람의 개인정보 요청 감지: "
-                    f"이름={has_korean_name or has_english_name}, "
-                    f"민감속성={matched_sensitive}"
+                    f"다른 사람의 직접적 개인정보 요청 감지: "
+                    f"이름={actual_korean_names or 'English'}, "
+                    f"직접PII={matched_direct_pii}"
                 )
                 result.block_response = PRIVACY_BLOCK_RESPONSE
                 logger.warning(
-                    f"[PrivacyGate] BLOCKED - 다른 사람의 개인정보 요청: "
-                    f"query_preview={query[:80]}..."
+                    f"[PrivacyGate] BLOCKED (DIRECT_PII) - "
+                    f"pii={matched_direct_pii}, query_preview={query[:80]}..."
                 )
                 return result
+
+            # 레벨 2: 상태/성과 정보 (교육, 점수 등) → Action 있을 때만 차단
+            # 단, 업무 맥락 키워드("담당", "진행" 등)가 있으면 업무 질문으로 간주하여 허용
+            matched_status = self._find_matches(normalized_query, self._status_info_pattern)
+            matched_action = self._find_matches(normalized_query, self._action_pattern)
+            matched_work_context = self._find_matches(normalized_query, self._work_context_pattern)
+
+            if matched_status and matched_action:
+                # 업무 맥락이 있으면 허용
+                if matched_work_context:
+                    logger.debug(
+                        f"[PrivacyGate] ALLOW (work context) - "
+                        f"work_context={matched_work_context}, "
+                        f"query_preview={query[:80]}..."
+                    )
+                else:
+                    result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                    result.blocked = True
+                    result.reason = (
+                        f"다른 사람의 상태정보 요청 감지: "
+                        f"이름={actual_korean_names or 'English'}, "
+                        f"상태정보={matched_status}, 행위={matched_action}"
+                    )
+                    result.block_response = PRIVACY_BLOCK_RESPONSE
+                    logger.warning(
+                        f"[PrivacyGate] BLOCKED (STATUS_INFO+ACTION) - "
+                        f"status={matched_status}, action={matched_action}, "
+                        f"query_preview={query[:80]}..."
+                    )
+                    return result
+
+            # 이름 + 상태정보만 있고 Action 없으면 허용 (업무 질문일 수 있음)
+            if matched_status and not matched_action:
+                logger.debug(
+                    f"[PrivacyGate] ALLOW (name+status but no action) - "
+                    f"status={matched_status}, query_preview={query[:80]}..."
+                )
         
         if result.is_first_person:
             logger.info(f"[PrivacyGate] 1인칭 개인화 요청으로 허용: query={query[:80]}, is_first_person={result.is_first_person}")
@@ -474,23 +544,33 @@ class PrivacyQueryGate:
             )
         elif result.score_total >= self.block_threshold and has_target and has_action and has_sensitive:
             # 3개 조건 모두 성립 시 차단
-            result.decision = PrivacyGateDecision.BLOCK_PII_LIST
-            result.blocked = True
-            result.reason = (
-                f"개인정보성 명단 요청 감지: "
-                f"대상={result.matched_target_terms}, "
-                f"행위={result.matched_action_terms}, "
-                f"속성={result.matched_sensitive_terms}"
-            )
-            result.block_response = PRIVACY_BLOCK_RESPONSE
+            # Phase 60: 업무 맥락이 있으면 허용
+            matched_work_context = self._find_matches(normalized_query, self._work_context_pattern)
+            if matched_work_context:
+                result.decision = PrivacyGateDecision.ALLOW
+                logger.debug(
+                    f"[PrivacyGate] ALLOW (work context in score-based) - "
+                    f"work_context={matched_work_context}, score={result.score_total}, "
+                    f"query_preview={query[:80]}..."
+                )
+            else:
+                result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                result.blocked = True
+                result.reason = (
+                    f"개인정보성 명단 요청 감지: "
+                    f"대상={result.matched_target_terms}, "
+                    f"행위={result.matched_action_terms}, "
+                    f"속성={result.matched_sensitive_terms}"
+                )
+                result.block_response = PRIVACY_BLOCK_RESPONSE
 
-            logger.warning(
-                f"[PrivacyGate] BLOCKED - score={result.score_total}, "
-                f"target={result.matched_target_terms}, "
-                f"action={result.matched_action_terms}, "
-                f"sensitive={result.matched_sensitive_terms}, "
-                f"query_preview={query[:80]}..."
-            )
+                logger.warning(
+                    f"[PrivacyGate] BLOCKED - score={result.score_total}, "
+                    f"target={result.matched_target_terms}, "
+                    f"action={result.matched_action_terms}, "
+                    f"sensitive={result.matched_sensitive_terms}, "
+                    f"query_preview={query[:80]}..."
+                )
         else:
             result.decision = PrivacyGateDecision.ALLOW
             logger.debug(
