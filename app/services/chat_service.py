@@ -1034,6 +1034,12 @@ class ChatService:
         # Phase 58: Quality Gate WARNING 메시지 (PROCEED_WITH_WARNING인 경우)
         quality_warning_message: Optional[str] = None
 
+        # Phase 59: RAG Quality meta 필드 (프론트 배너/Kibana용)
+        rag_quality_grade: Optional[str] = None
+        rag_quality_action: Optional[str] = None
+        rag_quality_min_l2: Optional[float] = None
+        rag_quality_insufficient: bool = False
+
         if route in rag_only_routes:
             # RAG_INTERNAL: RAG만 사용
             rag_search_attempted = True
@@ -1086,10 +1092,22 @@ class ChatService:
                         retriever_used=retriever_used,
                         latency_ms=latency_ms,
                         rag_latency_ms=rag_latency_ms,
+                        # Phase 59: RAG Quality meta
+                        rag_quality_grade=rag_result.quality_grade,
+                        rag_quality_action=rag_result.quality_action,
+                        rag_quality_min_l2=rag_result.min_l2_distance,
+                        rag_quality_warning=None,  # REJECT이므로 warning 없음
+                        rag_quality_insufficient=True,
                     ),
                 )
 
-            # Phase 58: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처
+            # Phase 58/59: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 + meta 변수 설정
+            # 공통으로 rag_quality_* 변수 캡처 (OK/LOW 모두)
+            rag_quality_grade = rag_result.quality_grade
+            rag_quality_action = rag_result.quality_action
+            rag_quality_min_l2 = rag_result.min_l2_distance
+            rag_quality_insufficient = rag_result.insufficient_evidence
+
             if rag_result.warning_message:
                 quality_warning_message = rag_result.warning_message
                 logger.info(
@@ -1175,10 +1193,22 @@ class ChatService:
                         retriever_used=retriever_used,
                         latency_ms=latency_ms,
                         rag_latency_ms=rag_latency_ms,
+                        # Phase 59: RAG Quality meta
+                        rag_quality_grade=rag_result.quality_grade,
+                        rag_quality_action=rag_result.quality_action,
+                        rag_quality_min_l2=rag_result.min_l2_distance,
+                        rag_quality_warning=None,  # REJECT이므로 warning 없음
+                        rag_quality_insufficient=True,
                     ),
                 )
 
-            # Phase 58: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 (MIXED 경로)
+            # Phase 58/59: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 + meta 변수 설정 (MIXED 경로)
+            # 공통으로 rag_quality_* 변수 캡처 (OK/LOW 모두)
+            rag_quality_grade = rag_result.quality_grade
+            rag_quality_action = rag_result.quality_action
+            rag_quality_min_l2 = rag_result.min_l2_distance
+            rag_quality_insufficient = rag_result.insufficient_evidence
+
             if rag_result.warning_message:
                 quality_warning_message = rag_result.warning_message
                 logger.info(
@@ -1865,6 +1895,12 @@ class ChatService:
                 if forbidden_result and forbidden_result.is_forbidden
                 else None
             ),
+            # Phase 59: RAG Quality meta (프론트 배너/Kibana용)
+            rag_quality_grade=rag_quality_grade,
+            rag_quality_action=rag_quality_action,
+            rag_quality_min_l2=rag_quality_min_l2,
+            rag_quality_warning=quality_warning_message,
+            rag_quality_insufficient=rag_quality_insufficient,
         )
 
         # Phase 12: 메트릭 기록
