@@ -120,6 +120,38 @@ THIRD_PERSON_TERMS: Set[str] = {
     "전체", "모든", "각", "개별",
 }
 
+# 한국 성씨 목록 (한글 이름 감지용)
+# 이름 감지는 성씨로 시작하는 패턴만 이름으로 인식
+KOREAN_SURNAMES: Set[str] = {
+    "김", "이", "박", "최", "정", "강", "조", "윤", "장", "임",
+    "한", "오", "서", "신", "권", "황", "안", "송", "류", "전",
+    "홍", "고", "문", "양", "손", "배", "백", "허", "유", "남",
+    "심", "노", "하", "곽", "성", "차", "주", "우", "구", "민",
+    "진", "나", "원", "천", "방", "공", "현", "함", "변", "염",
+}
+
+# 성씨로 시작하지만 이름이 아닌 흔한 단어들
+# 이 단어들은 성씨 검사에서 제외됨
+NON_NAME_WORDS: Set[str] = {
+    # 교육/업무 관련
+    "교육", "현황", "정보", "성과", "문서", "문제", "방법", "방침",
+    "고객", "고과", "배포", "배치", "원본", "원칙", "공개", "공유",
+    "심사", "심각", "변경", "변수", "함수", "함께", "진행", "진도",
+    "정책", "정리", "정답", "정보보안", "정보보호", "개인정보", "개인정보보호",
+    # 이수/수료 관련 (이(성씨)+수 조합)
+    "이수", "미이수", "이수자", "미이수자", "이메일",
+    # 기술 관련
+    "서버", "서비스", "문의", "조회", "조치", "진단", "손실",
+    # 상태/수치 관련
+    "최고", "최저", "최신", "최근", "고성과", "저성과", "하위", "상위",
+    # 기타 자주 사용되는 단어
+    "전체", "전화", "전문", "전략", "백업", "백서", "유지", "유출",
+    "남은", "남용", "차단", "주요", "주의", "우선", "구현", "구성",
+    "민감", "민원", "양식", "양성", "황폐", "황당",
+    # 기타 복합어
+    "내용", "내역", "나의", "나열",
+}
+
 
 # =============================================================================
 # 표준 차단 문구
@@ -226,18 +258,24 @@ class PrivacyQueryGate:
                         logger.info(f"[PrivacyGate] 1인칭 개인정보 패턴 매칭 (정규식): pattern={pattern}, query={query[:80]}")
                         return True
         
-        # 한글 이름 패턴 감지 (2-4글자 한글 이름)
+        # 한글 이름 패턴 감지 (성씨로 시작하는 2-4글자)
         # 예: "최기민", "홍길동", "김철수" 등
-        # 주의: "부서", "직급" 같은 단어는 위에서 이미 처리되었으므로 여기서는 실제 이름만 감지
+        # 성씨로 시작하지 않거나 NON_NAME_WORDS에 포함된 단어는 이름으로 간주하지 않음
         korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
-        has_korean_name = bool(re.search(korean_name_pattern, query))
-        
+        korean_matches = re.findall(korean_name_pattern, query)
+        # 성씨로 시작하고 NON_NAME_WORDS에 없는 것만 이름으로 인식
+        actual_korean_names = [
+            m for m in korean_matches
+            if m[0] in KOREAN_SURNAMES and m not in NON_NAME_WORDS
+        ]
+        has_korean_name = len(actual_korean_names) > 0
+
         # 영문 이름 패턴 감지 (대문자로 시작하는 2-3단어)
         # 예: "John Smith", "Kim", "Lee" 등
         english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
         has_english_name = bool(re.search(english_name_pattern, query))
-        
-        # 이름이 있으면 1인칭이 아님 (다른 사람 질문)
+
+        # 실제 이름이 있으면 1인칭이 아님 (다른 사람 질문)
         if has_korean_name or has_english_name:
             return False
 
@@ -292,12 +330,22 @@ class PrivacyQueryGate:
         
         # 이름이 포함된 질문은 무조건 차단 (다른 사람의 개인정보 요청)
         # "한규화의", "최기민의" 같은 소유격 표현도 감지
+        # 성씨로 시작하지 않거나 NON_NAME_WORDS에 포함된 단어는 이름으로 간주하지 않음
         korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
-        korean_name_with_possessive = r'[가-힣]{2,4}의'  # "한규화의", "최기민의" 등
+        korean_name_with_possessive = r'([가-힣]{2,4})의'  # "한규화의", "최기민의" 등
         english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
-        has_korean_name = bool(re.search(korean_name_pattern, query)) or bool(re.search(korean_name_with_possessive, query))
+
+        # 성씨로 시작하고 NON_NAME_WORDS에 없는 것만 이름으로 인식
+        korean_matches = re.findall(korean_name_pattern, query)
+        possessive_matches = re.findall(korean_name_with_possessive, query)
+        all_korean_matches = korean_matches + possessive_matches
+        actual_korean_names = [
+            m for m in all_korean_matches
+            if m[0] in KOREAN_SURNAMES and m not in NON_NAME_WORDS
+        ]
+        has_korean_name = len(actual_korean_names) > 0
         has_english_name = bool(re.search(english_name_pattern, query))
-        
+
         if (has_korean_name or has_english_name) and not result.is_first_person:
             # 이름이 있고 1인칭이 아니면 다른 사람의 개인정보 요청
             # 민감 속성(이메일, 부서, 직급 등)이 포함되어 있는지 확인
