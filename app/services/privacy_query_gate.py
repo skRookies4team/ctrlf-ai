@@ -150,6 +150,28 @@ NON_NAME_WORDS: Set[str] = {
     "민감", "민원", "양식", "양성", "황폐", "황당",
     # 기타 복합어
     "내용", "내역", "나의", "나열",
+    # Phase 60: 한(韓) 성씨로 시작하는 흔한 단어들 (이름 오인식 방지)
+    "한번", "한달", "한해", "한시간", "한주", "한쪽", "한국", "한글",
+    "한계", "한도", "한정", "한마디", "한눈", "한편", "한동안",
+    # Phase 60: 이(李) 성씨로 시작하는 흔한 단어들
+    "이번", "이번주", "이번달", "이후", "이전", "이상", "이하", "이유",
+    "이용", "이론", "이해", "이력", "이날", "이때", "이렇게", "이런",
+    # Phase 60: 오(吳) 성씨로 시작하는 흔한 단어들
+    "오전", "오후", "오늘", "오류", "오랜", "오래", "오히려",
+    # Phase 60: 강(姜) 성씨로 시작하는 흔한 단어들
+    "강의", "강좌", "강화", "강조", "강력", "강제",
+    # Phase 60: 성(成) 성씨로 시작하는 흔한 단어들
+    "성희롱", "성과", "성적", "성공", "성능", "성립",
+    # Phase 60: 장(張) 성씨로 시작하는 흔한 단어들
+    "장애인", "장애", "장기", "장비", "장점", "장소", "장치",
+    # Phase 60: 기타 성씨로 시작하는 흔한 단어들
+    "고용", "고객", "고려", "고장", "고정",
+    "임원", "임시", "임금", "임대",
+    "권한", "권리", "권고",
+    "황당", "황폐",
+    "안내", "안전", "안정",
+    "유형", "유지", "유출", "유효",
+    "배포", "배경", "배치", "배워",
 }
 
 
@@ -217,6 +239,50 @@ class PrivacyQueryGate:
         matches = pattern.findall(query)
         return [m.lower() for m in matches]
 
+    def _filter_korean_names(self, korean_matches: List[str]) -> List[str]:
+        """
+        Phase 60: 한글 매칭 결과에서 실제 이름만 필터링.
+
+        조사가 붙은 형태("한달에", "한번도" 등)도 처리하기 위해
+        조사를 제거한 원형과 NON_NAME_WORDS를 비교합니다.
+
+        Args:
+            korean_matches: 정규식으로 매칭된 한글 단어 목록
+
+        Returns:
+            List[str]: 실제 이름으로 판단된 단어 목록
+        """
+        # 한글 조사 목록 (긴 것부터 제거해야 함)
+        particles = ['에서', '으로', '부터', '까지', '에게', '한테',
+                     '은', '는', '이', '가', '을', '를', '의', '에',
+                     '로', '와', '과', '도', '만', '요']
+
+        actual_names = []
+        for m in korean_matches:
+            # 성씨로 시작하지 않으면 이름 아님
+            if m[0] not in KOREAN_SURNAMES:
+                continue
+
+            # 원형 그대로 NON_NAME_WORDS에 있으면 이름 아님
+            if m in NON_NAME_WORDS:
+                continue
+
+            # 조사 제거 후 원형 추출
+            base_word = m
+            for particle in sorted(particles, key=len, reverse=True):
+                if m.endswith(particle) and len(m) > len(particle):
+                    base_word = m[:-len(particle)]
+                    break
+
+            # 원형이 NON_NAME_WORDS에 있으면 이름 아님
+            if base_word in NON_NAME_WORDS:
+                continue
+
+            # 위 조건을 모두 통과하면 이름으로 판단
+            actual_names.append(m)
+
+        return actual_names
+
     def _is_first_person_query(self, query: str) -> bool:
         """1인칭 개인화 요청인지 판단"""
         # 1인칭 개인정보 조회 패턴을 먼저 체크 (가장 우선순위)
@@ -263,11 +329,8 @@ class PrivacyQueryGate:
         # 성씨로 시작하지 않거나 NON_NAME_WORDS에 포함된 단어는 이름으로 간주하지 않음
         korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
         korean_matches = re.findall(korean_name_pattern, query)
-        # 성씨로 시작하고 NON_NAME_WORDS에 없는 것만 이름으로 인식
-        actual_korean_names = [
-            m for m in korean_matches
-            if m[0] in KOREAN_SURNAMES and m not in NON_NAME_WORDS
-        ]
+        # Phase 60: 조사가 붙은 형태도 처리 ("한달에" → "한달"로 비교)
+        actual_korean_names = self._filter_korean_names(korean_matches)
         has_korean_name = len(actual_korean_names) > 0
 
         # 영문 이름 패턴 감지 (대문자로 시작하는 2-3단어)
@@ -335,14 +398,11 @@ class PrivacyQueryGate:
         korean_name_with_possessive = r'([가-힣]{2,4})의'  # "한규화의", "최기민의" 등
         english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
 
-        # 성씨로 시작하고 NON_NAME_WORDS에 없는 것만 이름으로 인식
+        # Phase 60: 조사 붙은 형태도 처리하는 필터링 적용
         korean_matches = re.findall(korean_name_pattern, query)
         possessive_matches = re.findall(korean_name_with_possessive, query)
         all_korean_matches = korean_matches + possessive_matches
-        actual_korean_names = [
-            m for m in all_korean_matches
-            if m[0] in KOREAN_SURNAMES and m not in NON_NAME_WORDS
-        ]
+        actual_korean_names = self._filter_korean_names(all_korean_matches)
         has_korean_name = len(actual_korean_names) > 0
         has_english_name = bool(re.search(english_name_pattern, query))
 
