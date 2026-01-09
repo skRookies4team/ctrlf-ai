@@ -103,6 +103,8 @@ class ClarifyGroup(str, Enum):
 
 # Phase 23: 되묻기 응답 키워드 매핑
 # 각 clarify_group에서 사용자 응답 키워드 → sub_intent 결정
+# Phase 53: "알려", "뭐야", "어떤" 등 범용 키워드를 각 그룹에 추가하여
+#           도메인별로 적절한 라우팅이 되도록 수정 (EDU에만 있던 문제 해결)
 CLARIFY_KEYWORD_MAPPING: dict[ClarifyGroup, dict[str, str]] = {
     ClarifyGroup.EDU: {
         # 이수/진도/조회/내역/기록 → 백엔드 상태 조회
@@ -126,26 +128,52 @@ CLARIFY_KEYWORD_MAPPING: dict[ClarifyGroup, dict[str, str]] = {
         "알려": "RAG_INTERNAL",
     },
     ClarifyGroup.POLICY: {
+        # 개인화 조회 (내 연차/근태 등)
         "조회": "BACKEND_STATUS",
         "현황": "BACKEND_STATUS",
         "상태": "BACKEND_STATUS",
+        "잔여": "BACKEND_STATUS",
+        "남은": "BACKEND_STATUS",
+        "내꺼": "BACKEND_STATUS",
+        # 규정/정책 설명 → RAG 검색
         "내용": "RAG_INTERNAL",
         "설명": "RAG_INTERNAL",
         "규정": "RAG_INTERNAL",
         "정책": "RAG_INTERNAL",
+        # Phase 53: 범용 키워드 추가 (POLICY 도메인에서 RAG로 처리)
+        "요약": "RAG_INTERNAL",
+        "정리": "RAG_INTERNAL",
+        "안내": "RAG_INTERNAL",
+        "어떤": "RAG_INTERNAL",
+        "뭐야": "RAG_INTERNAL",
+        "알려": "RAG_INTERNAL",
     },
     ClarifyGroup.PROFILE: {
+        # 개인 정보 조회 → 백엔드 상태 조회
         "조회": "BACKEND_STATUS",
         "확인": "BACKEND_STATUS",
         "내역": "BACKEND_STATUS",
         "정보": "BACKEND_STATUS",
+        # Phase 53: 범용 키워드 추가 (PROFILE은 개인정보 조회이므로 BACKEND)
+        "알려": "BACKEND_STATUS",
+        "뭐야": "BACKEND_STATUS",
+        "어떤": "BACKEND_STATUS",
     },
     ClarifyGroup.INCIDENT: {
+        # 사고 통계/현황 조회
         "통계": "BACKEND_STATUS",
         "현황": "BACKEND_STATUS",
         "조회": "BACKEND_STATUS",
+        # 사고 신고/보고 → 백엔드 API
         "신고": "BACKEND_API",
         "보고": "BACKEND_API",
+        # Phase 53: 범용 키워드 추가 (INCIDENT 도메인에서 RAG로 처리)
+        "내용": "RAG_INTERNAL",
+        "설명": "RAG_INTERNAL",
+        "안내": "RAG_INTERNAL",
+        "알려": "RAG_INTERNAL",
+        "뭐야": "RAG_INTERNAL",
+        "어떤": "RAG_INTERNAL",
     },
 }
 
