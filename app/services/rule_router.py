@@ -786,10 +786,15 @@ class RuleRouter:
         query_normalized: str,
         debug_info: RouterDebugInfo,
     ) -> Optional[RouterResult]:
-        """애매한 경계를 체크하고 되묻기 결과를 반환합니다.
+        """애매한 경계를 체크하고 RAG 라우트로 보냅니다.
 
-        경계 A: 교육 내용 설명 vs 내 이수현황/진도
-        경계 B: 규정 질문 vs HR/근태/복지 개인화
+        Phase 53: needs_clarify 되묻기 메커니즘 제거
+        - 애매한 질문도 RAG로 보내고, LLM이 자연스럽게 "어떤 교육을 원하시나요?" 등으로 응답
+        - 복잡한 상태 관리(PendingAction) 불필요
+        - 더 자연스러운 대화 흐름 제공
+
+        경계 A: 교육 내용 설명 vs 내 이수현황/진도 → EDUCATION_QA (RAG)
+        경계 B: 규정 질문 vs HR/근태/복지 개인화 → POLICY_QA (RAG)
 
         Args:
             query_lower: 소문자로 변환된 질문
@@ -797,31 +802,31 @@ class RuleRouter:
             debug_info: 디버그 정보 객체
 
         Returns:
-            Optional[RouterResult]: 되묻기가 필요하면 RouterResult, 아니면 None
+            Optional[RouterResult]: 애매한 경계면 RAG RouterResult, 아니면 None
         """
-        # 경계 A: 교육 관련 애매함 체크 (정규화 텍스트 사용)
+        # 경계 A: 교육 관련 애매함 → EDUCATION_QA (RAG)로 라우팅
+        # LLM이 "어떤 교육을 원하시나요?" 등으로 자연스럽게 되물음
         if self._is_boundary_a_ambiguous(query_lower, query_normalized):
-            debug_info.rule_hits.append("BOUNDARY_A_AMBIGUOUS")
+            debug_info.rule_hits.append("BOUNDARY_A_AMBIGUOUS_TO_RAG")
             return RouterResult(
-                tier0_intent=Tier0Intent.UNKNOWN,
+                tier0_intent=Tier0Intent.EDUCATION_QA,
                 domain=RouterDomain.EDU,
-                route_type=RouterRouteType.ROUTE_UNKNOWN,
-                confidence=0.3,
-                needs_clarify=True,
-                clarify_question=random.choice(ClarifyTemplates.EDUCATION_CONTENT_VS_STATUS),
+                route_type=RouterRouteType.RAG_INTERNAL,
+                confidence=0.6,  # 애매하지만 RAG는 타도록
+                needs_clarify=False,  # 되묻기 없이 RAG로 처리
                 debug=debug_info,
             )
 
-        # 경계 B: 연차/휴가 관련 애매함 체크 (정규화 텍스트 사용)
+        # 경계 B: 연차/휴가 관련 애매함 → POLICY_QA (RAG)로 라우팅
+        # LLM이 "연차 규정을 원하시나요, 잔여 연차 조회를 원하시나요?" 등으로 자연스럽게 되물음
         if self._is_boundary_b_ambiguous(query_lower, query_normalized):
-            debug_info.rule_hits.append("BOUNDARY_B_AMBIGUOUS")
+            debug_info.rule_hits.append("BOUNDARY_B_AMBIGUOUS_TO_RAG")
             return RouterResult(
-                tier0_intent=Tier0Intent.UNKNOWN,
-                domain=RouterDomain.HR,
-                route_type=RouterRouteType.ROUTE_UNKNOWN,
-                confidence=0.3,
-                needs_clarify=True,
-                clarify_question=random.choice(ClarifyTemplates.POLICY_VS_HR_PERSONAL),
+                tier0_intent=Tier0Intent.POLICY_QA,
+                domain=RouterDomain.POLICY,
+                route_type=RouterRouteType.RAG_INTERNAL,
+                confidence=0.6,  # 애매하지만 RAG는 타도록
+                needs_clarify=False,  # 되묻기 없이 RAG로 처리
                 debug=debug_info,
             )
 
