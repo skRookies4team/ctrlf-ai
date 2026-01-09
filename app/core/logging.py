@@ -218,6 +218,12 @@ def setup_logging(settings: "Settings") -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+    # boto3/botocore/urllib3 로거 레벨 조정
+    # - DEBUG로 두면 서명/요청 정보가 매우 상세히 출력되어 민감정보가 로그에 섞일 수 있음
+    logging.getLogger("boto3").setLevel(logging.WARNING)
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
     # 설정 완료 로그
     app_logger.info(
         f"Logging configured: level={settings.LOG_LEVEL}, "

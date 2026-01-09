@@ -60,6 +60,7 @@ cp .env.example .env
 
 # 서버 실행 (코드 수정 시 자동 재시작)
 uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # 확인
 curl http://localhost:8000/health

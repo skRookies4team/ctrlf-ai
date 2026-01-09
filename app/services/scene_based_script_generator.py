@@ -227,7 +227,10 @@ class SceneBasedScriptGenerator:
             top_k: 씬당 검색할 청크 수
         """
         settings = get_settings()
-        self._llm_client = llm_client or LLMClient()
+        # 스크립트/아웃라인 생성은 장문 생성에 해당하므로, 기본 LLM 타임아웃(60s)보다
+        # settings의 장문 타임아웃(기본 120s)을 사용합니다.
+        # (요청별 timeout을 넘기지 않는 generate_chat_completion 경로를 사용하므로 생성 시 주입)
+        self._llm_client = llm_client or LLMClient(timeout=settings.TIMEOUT_LLM_LONGFORM_SEC)
         self._milvus_client = milvus_client or get_milvus_client()
         # 우선순위: 직접 지정 > SCRIPT_LLM_MODEL > LLM_MODEL_NAME
         self._model = model or settings.SCRIPT_LLM_MODEL or settings.LLM_MODEL_NAME
@@ -298,6 +301,9 @@ class SceneBasedScriptGenerator:
                 return self._generate_fallback_script(
                     script_id, source_set_id, education_id, doc_titles
                 )
+
+            # HeyGen 180초 제한 대응: 챕터/씬 수 제한 및 인덱스 재정렬 (기본: 챕터 1개, 챕터당 씬 4개)
+            outline = self._apply_outline_limits(outline)
 
             logger.info(
                 f"Outline generated: {len(outline.chapters)} chapters, "
@@ -403,7 +409,7 @@ class SceneBasedScriptGenerator:
         for chunk in all_chunks[:3]:
             sample_content += chunk.get("text", "")[:300] + "\n"
 
-        system_prompt = """당신은 한국 기업의 법정의무교육 영상 스크립트 기획 전문가입니다.
+        system_prompt = """당신은 한국 기업의 교육 영상 스크립트 기획 전문가입니다.
 주어진 문서 정보를 바탕으로 교육 영상의 씬 아웃라인(목차)을 JSON 형식으로 생성해주세요.
 
 [중요] 모든 출력은 반드시 한국어로 작성하세요. 영어 사용 금지.
@@ -429,11 +435,12 @@ class SceneBasedScriptGenerator:
 }
 
 규칙:
-1. 전체 3-5개 챕터, 챕터당 2-4개 씬으로 구성
-2. keywords는 해당 씬에서 다룰 핵심 내용을 검색할 수 있는 한국어 키워드 2-3개
-3. 각 씬은 20-40초 분량으로 설계
-4. 반드시 유효한 JSON만 출력 (설명 없이)
-5. title, chapters, scenes의 모든 텍스트는 반드시 한국어로 작성
+1. 전체 1개 챕터로 구성 (HeyGen 180초 제한 대응)
+2. 챕터당 2개 씬으로 구성 (요청: 챕터 1개, 씬 2개)
+3. keywords는 해당 씬에서 다룰 핵심 내용을 검색할 수 있는 한국어 키워드 2-3개
+4. 각 씬은 25-35초 분량으로 설계
+5. 반드시 유효한 JSON만 출력 (설명 없이)
+6. title, chapters, scenes의 모든 텍스트는 반드시 한국어로 작성
 """ + KOREAN_ENFORCEMENT
 
         user_prompt = f"""다음 교육 자료의 씬 아웃라인을 생성해주세요.
@@ -502,6 +509,55 @@ JSON 아웃라인:"""
         except Exception as e:
             logger.error(f"Outline parsing failed: {e}")
             return None
+
+    def _apply_outline_limits(self, outline: ScriptOutline) -> ScriptOutline:
+        """
+        설정 기반으로 아웃라인을 안전한 범위로 제한합니다.
+
+        - 챕터 수 제한
+        - 챕터당 씬 수 제한
+        - chapter_index / scene_index를 0-based로 재정렬
+        - total_scenes 재계산
+        """
+        settings = get_settings()
+        max_chapters = int(getattr(settings, "SCRIPT_MAX_CHAPTERS", 0) or 0)
+        max_scenes_per_chapter = int(getattr(settings, "SCRIPT_MAX_SCENES_PER_CHAPTER", 0) or 0)
+
+        chapters = outline.chapters or []
+        if max_chapters > 0:
+            chapters = chapters[:max_chapters]
+
+        normalized: List[ChapterOutline] = []
+        total_scenes = 0
+        for ch_idx, ch in enumerate(chapters):
+            scenes = ch.scenes or []
+            if max_scenes_per_chapter > 0:
+                scenes = scenes[:max_scenes_per_chapter]
+
+            reindexed_scenes: List[SceneOutline] = []
+            for sc_idx, sc in enumerate(scenes):
+                reindexed_scenes.append(
+                    SceneOutline(
+                        scene_index=sc_idx,
+                        title=sc.title,
+                        purpose=sc.purpose,
+                        keywords=sc.keywords,
+                        target_duration_sec=sc.target_duration_sec,
+                    )
+                )
+                total_scenes += 1
+
+            normalized.append(
+                ChapterOutline(
+                    chapter_index=ch_idx,
+                    title=ch.title,
+                    scenes=reindexed_scenes,
+                )
+            )
+
+        outline.chapters = normalized
+        outline.total_scenes = total_scenes
+        return outline
 
     # =========================================================================
     # 2단계: 씬별 RAG 검색 + 스크립트 생성

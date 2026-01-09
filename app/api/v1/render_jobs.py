@@ -161,7 +161,15 @@ def get_render_job_runner():
     from app.services.render_job_runner import get_render_job_runner as _get_runner
 
     runner = _get_runner()
-    if runner._renderer is None:
+    # ✅ 매 요청마다 Real renderer를 다시 바인딩:
+    # - uvicorn --reload / .env 변경 시에도 VIDEO_RENDER_ENGINE/VIDEO_VISUAL_STYLE 변경이 반영되도록
+    # - get_real_video_renderer() 내부에서 설정 변화가 있으면 싱글톤을 갱신함
+    # 기본은 Real renderer(FFmpeg/HeyGen). 개발 환경에서 의존성 미설치 시에만 MVP로 폴백.
+    try:
+        from app.services.video_renderer_real import get_real_video_renderer
+
+        runner.set_renderer(get_real_video_renderer())
+    except Exception:
         runner.set_renderer(get_mvp_video_renderer())
     return runner
 

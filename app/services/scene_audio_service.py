@@ -167,6 +167,7 @@ class SceneAudioService:
         narration: str,
         output_dir: Path,
         scene_offset_sec: float = 0.0,
+        target_duration_sec: Optional[float] = None,
     ) -> SceneAudioResult:
         """씬 오디오를 생성합니다.
 
@@ -220,15 +221,49 @@ class SceneAudioService:
             scene_offset_sec=scene_offset_sec,
         )
 
-        # Step 5: duration 계산 (+ 패딩)
+        # Step 5: duration 계산
+        # - target_duration_sec가 있으면(스크립트 durationSec) 그 길이까지 무음으로 패딩
+        # - 없으면 기존 정책: 오디오 길이 + 기본 패딩
+        final_audio_path = concat_path
         final_duration = total_audio_duration + self._silence_padding_sec
+
+        if target_duration_sec is not None:
+            try:
+                target = float(target_duration_sec)
+            except Exception:
+                target = None
+
+            if target is not None and target > 0:
+                # 오디오가 더 길면(말이 더 많으면) 자르지 않고 그대로 둠
+                if total_audio_duration >= target:
+                    final_duration = total_audio_duration
+                else:
+                    pad_sec = max(target - total_audio_duration, 0.0)
+                    if pad_sec > 0 and self._has_ffmpeg:
+                        silence_path = output_dir / f"{scene_id}_pad.mp3"
+                        await self._create_silence_audio(silence_path, pad_sec)
+
+                        padded_path = output_dir / f"{scene_id}_audio_padded.mp3"
+                        ok = await self._ffmpeg_concat_reencode(
+                            [str(concat_path), str(silence_path)],
+                            padded_path,
+                        )
+                        if ok:
+                            final_audio_path = padded_path
+                            final_duration = target
+                        else:
+                            # 실패 시: 패딩 없이 진행
+                            final_duration = total_audio_duration
+                    else:
+                        # FFmpeg 없으면 패딩 불가 → 오디오 길이로 진행
+                        final_duration = total_audio_duration
 
         # 실패 문장 수 계산
         failed_count = sum(1 for r in sentence_results if not r.success)
 
         result = SceneAudioResult(
             scene_id=scene_id,
-            audio_path=str(concat_path),
+            audio_path=str(final_audio_path),
             duration_sec=final_duration,
             audio_duration_sec=total_audio_duration,
             captions=captions,
@@ -267,12 +302,14 @@ class SceneAudioService:
         for scene in scenes:
             scene_id = scene.get("scene_id", f"scene-{len(results)}")
             narration = scene.get("narration", "")
+            target_duration_sec = scene.get("duration_sec")
 
             result = await self.generate_scene_audio(
                 scene_id=scene_id,
                 narration=narration,
                 output_dir=output_dir,
                 scene_offset_sec=current_offset,
+                target_duration_sec=target_duration_sec,
             )
 
             results.append(result)
@@ -286,6 +323,61 @@ class SceneAudioService:
         )
 
         return results
+
+    async def _ffmpeg_concat_reencode(
+        self, audio_paths: List[str], output_path: Path
+    ) -> bool:
+        """FFmpeg concat (재인코딩) - 패딩/이종 mp3에도 안정적으로 동작.
+
+        concat demuxer는 스트림 파라미터가 조금만 달라도 실패할 수 있어
+        **concat filter**로 디코드 후 다시 인코딩하는 방식으로 합칩니다.
+        """
+        if not self._has_ffmpeg:
+            return False
+
+        try:
+            valid_paths = [p for p in audio_paths if p and Path(p).exists()]
+            if not valid_paths:
+                return False
+
+            # inputs
+            cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+            for p in valid_paths:
+                cmd.extend(["-i", p])
+
+            # filter: concat
+            # 예: [0:a][1:a][2:a]concat=n=3:v=0:a=1[aout]
+            pads = "".join([f"[{i}:a]" for i in range(len(valid_paths))])
+            filter_complex = f"{pads}concat=n={len(valid_paths)}:v=0:a=1[aout]"
+            cmd.extend(
+                [
+                    "-filter_complex",
+                    filter_complex,
+                    "-map",
+                    "[aout]",
+                    "-c:a",
+                    "libmp3lame",
+                    "-q:a",
+                    "4",
+                    str(output_path),
+                ]
+            )
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(cmd, capture_output=True, timeout=120),
+            )
+            if result.returncode != 0:
+                logger.error(
+                    f"FFmpeg concat(reencode) failed: {result.stderr.decode()[-800:]}"
+                )
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"FFmpeg concat(reencode) error: {e}")
+            return False
 
     # =========================================================================
     # TTS Generation
