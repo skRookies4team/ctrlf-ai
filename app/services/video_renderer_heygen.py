@@ -183,7 +183,31 @@ class HeyGenVideoRenderer(VideoRenderer):
             height=self.config.height,
         )
 
-        logger.info(f"Generating video with HeyGen: job_id={ctx.job_id}")
+        # 예상 비디오 길이 계산 (디버깅용)
+        estimated_duration = sum(
+            scene.get("duration_sec", 30)
+            for chapter in enhanced.get("chapters", [])
+            for scene in chapter.get("scenes", [])
+        )
+        scene_count = sum(
+            len(chapter.get("scenes", []))
+            for chapter in enhanced.get("chapters", [])
+        )
+        
+        # 크레딧 계산 (30초 단위로 올림)
+        # 사진 아바타: 1분당 1크레딧, 비디오 아바타: 1분당 2크레딧
+        # 정확한 아바타 타입은 알 수 없으므로 최대값(비디오 아바타)으로 계산
+        duration_minutes = (estimated_duration + 29) // 30 * 0.5  # 30초 단위로 올림 후 분으로 변환
+        estimated_credits_photo = duration_minutes * 1  # 사진 아바타
+        estimated_credits_video = duration_minutes * 2  # 비디오 아바타
+        
+        logger.info(
+            f"Generating video with HeyGen: job_id={ctx.job_id}, "
+            f"avatar_id={self.config.avatar_id}, "
+            f"estimated_duration={estimated_duration}s ({duration_minutes:.1f}min), "
+            f"scenes={scene_count}, "
+            f"estimated_credits=photo:{estimated_credits_photo:.1f} / video:{estimated_credits_video:.1f}"
+        )
 
         # HeyGen 요청
         heygen_video_id = await self._heygen_client.generate_video(payload)
@@ -208,8 +232,42 @@ class HeyGenVideoRenderer(VideoRenderer):
                 break
 
             if status_str == "failed":
-                error_msg = data.get("error_message", "Unknown error")
-                raise RuntimeError(f"HeyGen failed: {error_msg}")
+                # HeyGen 에러 구조: error 필드가 딕셔너리일 수 있음
+                error_obj = data.get("error")
+                if isinstance(error_obj, dict):
+                    error_code = error_obj.get("code")
+                    error_msg = error_obj.get("message") or error_obj.get("detail") or "Unknown error"
+                    error_detail = error_obj.get("detail")
+                else:
+                    error_code = data.get("error_code")
+                    error_msg = data.get("error_message") or str(error_obj) if error_obj else "Unknown error"
+                    error_detail = None
+                
+                # 크레딧 부족 에러인 경우 추가 정보 로깅
+                if error_code == "MOVIO_PAYMENT_INSUFFICIENT_CREDIT":
+                    estimated_duration = sum(
+                        scene.get("duration_sec", 30)
+                        for chapter in ctx.script_json.get("chapters", [])
+                        for scene in chapter.get("scenes", [])
+                    )
+                    duration_minutes = (estimated_duration + 29) // 30 * 0.5
+                    estimated_credits_photo = duration_minutes * 1
+                    estimated_credits_video = duration_minutes * 2
+                    logger.error(
+                        f"HeyGen insufficient credit error: video_id={heygen_video_id}, "
+                        f"estimated_duration={estimated_duration}s ({duration_minutes:.1f}min), "
+                        f"estimated_credits=photo:{estimated_credits_photo:.1f} / video:{estimated_credits_video:.1f}, "
+                        f"error_detail={error_detail}, "
+                        f"full_error={error_obj}"
+                    )
+                
+                # 전체 응답 로깅 (디버깅용)
+                logger.error(
+                    f"HeyGen video failed: video_id={heygen_video_id}, "
+                    f"error_code={error_code}, error_message={error_msg}, "
+                    f"error_detail={error_detail}, full_response={data}"
+                )
+                raise RuntimeError(f"HeyGen failed: {error_msg}" + (f" (code: {error_code})" if error_code else ""))
 
             await asyncio.sleep(self.config.poll_interval_sec)
         else:

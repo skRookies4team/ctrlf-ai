@@ -224,22 +224,38 @@ class HeyGenVideoGenerationService:
                 raise ValueError(f"Script not found: {job.script_id}")
 
             # 2. Heygen 형식으로 변환
+            settings = get_settings()
             heygen_payload = convert_script_to_heygen_format(
                 script_data,
-                voice_id=get_settings().HEYGEN_VOICE_ID,
+                voice_id=settings.HEYGEN_VOICE_ID,
+                avatar_id=settings.HEYGEN_AVATAR_ID,
             )
 
             logger.info(
                 f"HeyGen payload prepared: job_id={job_id}, "
                 f"chapters={len(heygen_payload.get('video_inputs', []))}"
             )
+            # 디버깅: 첫 번째 video_input 구조 로깅
+            if heygen_payload.get("video_inputs"):
+                import json
+                logger.debug(
+                    f"HeyGen payload first video_input: {json.dumps(heygen_payload['video_inputs'][0], indent=2, ensure_ascii=False)}"
+                )
 
-            # 3. Heygen Job 생성
+            # 3. Heygen Job 생성 (Heygen API 호출)
+            # 플로우 요구사항: "ctrlf-ai는 Heygen API 호출로 영상 생성"
+            logger.info(
+                f"Creating Heygen video job: job_id={job_id}, "
+                f"chapters={len(heygen_payload.get('video_inputs', []))}"
+            )
             heygen_video_id = await self._heygen.generate_video(heygen_payload)
             job.heygen_video_id = heygen_video_id
             job.updated_at = datetime.utcnow()
             self._job_store.save(job)  # 상태 저장
-            logger.info(f"HeyGen video job created: job_id={job_id}, heygen_video_id={heygen_video_id}")
+            logger.info(
+                f"HeyGen video job created: job_id={job_id}, "
+                f"heygen_video_id={heygen_video_id}"
+            )
 
             # 4. 폴링
             status_data = await self._heygen.poll_video_status(heygen_video_id)
@@ -261,7 +277,13 @@ class HeyGenVideoGenerationService:
             self._job_store.save(job)  # 상태 저장
             logger.info(f"HeyGen video URL: job_id={job_id}, url={video_url}")
 
-            # 6. 결과 다운로드 및 S3 업로드
+            # 6. 결과 다운로드 및 S3 업로드 (boto3로 직접 업로드, presign 사용 금지)
+            # 플로우 요구사항: "Heygen 결과물을 받아 ctrlf-ai가 '파일 형태(mp4)'로 S3에 저장
+            # (업로드 presign 사용 금지, 서버가 boto3로 직접 put_object)"
+            logger.info(
+                f"Starting S3 upload: job_id={job_id}, video_id={job.video_id}, "
+                f"script_id={job.script_id}, heygen_video_url={video_url}"
+            )
             s3_key = await self._download_and_upload_to_s3(
                 job_id=job_id,
                 video_id=job.video_id,
@@ -271,6 +293,10 @@ class HeyGenVideoGenerationService:
             job.s3_key = s3_key
             job.updated_at = datetime.utcnow()
             self._job_store.save(job)  # 상태 저장
+            
+            logger.info(
+                f"S3 upload completed: job_id={job_id}, s3_key={s3_key}"
+            )
 
             # 7. 영상 길이 추출 (대략적으로 스크립트 길이 사용)
             duration_sec = self._calculate_video_duration(script_data)
@@ -499,6 +525,10 @@ class HeyGenVideoGenerationService:
         """
         백엔드에 영상 생성 완료를 알립니다 (재시도 포함).
 
+        플로우 요구사항:
+        - 백엔드에는 저장된 S3 key 또는 재생 URL(정책에 맞는 방식) 전달
+        - 현재는 재생 URL을 전달하되, S3 key도 로그에 기록
+
         Args:
             job: 완료된 Job
         """
@@ -516,14 +546,24 @@ class HeyGenVideoGenerationService:
         )
 
         try:
-            # S3 URL 생성 (public URL 또는 presigned URL)
+            # S3 재생 URL 생성 (public URL 또는 presigned URL)
+            # 플로우 요구사항: "백엔드에는 저장된 S3 key 또는 재생 URL(정책에 맞는 방식) 전달"
+            # 현재는 재생 URL을 전달 (정책에 맞는 방식)
             video_url = await self._storage.get_url(job.s3_key)
             
+            logger.info(
+                f"Preparing backend callback: job_id={job.job_id}, "
+                f"s3_key={job.s3_key}, video_url={video_url}, duration={job.duration_sec}s"
+            )
+            
             # 재시도 로직과 함께 백엔드 콜백 호출
+            # 플로우 요구사항: "백엔드에는 저장된 S3 key 또는 재생 URL(정책에 맞는 방식) 전달"
+            # 백엔드는 videoUrl만 사용하므로, video_url에 재생 URL 또는 S3 URI를 전달
             await retry_async_operation(
                 self._backend.notify_job_complete,
                 job_id=job.job_id,
-                video_url=video_url,
+                video_url=video_url,  # 재생 URL (HTTP URL)
+                s3_key=job.s3_key,  # S3 key (선택적, 백엔드에서 사용하지 않음)
                 duration=job.duration_sec or 0,
                 status="COMPLETED",
                 config=retry_config,
@@ -532,7 +572,7 @@ class HeyGenVideoGenerationService:
             
             logger.info(
                 f"Backend callback succeeded: job_id={job.job_id}, "
-                f"video_url={video_url}, duration={job.duration_sec}s"
+                f"s3_key={job.s3_key}, video_url={video_url}, duration={job.duration_sec}s"
             )
 
         except JobCompleteCallbackError as e:

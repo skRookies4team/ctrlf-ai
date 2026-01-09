@@ -69,6 +69,19 @@ services:
       - ROUTER_ORCHESTRATOR_ENABLED=true
       # 개인화 모드: auto (백엔드 시도 후 실패시 fallback), real (백엔드 필수)
       - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
+      # HeyGen 영상 생성 설정
+      - HEYGEN_API_KEY=${HEYGEN_API_KEY:-}
+      - HEYGEN_AVATAR_ID=${HEYGEN_AVATAR_ID:-}
+      - HEYGEN_VOICE_ID=${HEYGEN_VOICE_ID:-}
+      # AWS S3 설정 (boto3 직접 업로드용, presign 사용 금지)
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
+      - AWS_S3_REGION=${AWS_S3_REGION:-ap-northeast-2}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
+      # Storage 설정
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-s3}
+      - STORAGE_PUBLIC_BASE_URL=${STORAGE_PUBLIC_BASE_URL:-}
     networks:
       - ctrlf-net
     depends_on:

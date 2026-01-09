@@ -117,7 +117,8 @@ class ScriptCompleteResponse(BaseModel):
 class JobCompleteRequest(BaseModel):
     """영상 생성 완료 콜백 요청."""
     jobId: str
-    videoUrl: str
+    videoUrl: Optional[str] = None  # 영상 URL (S3 URI 형식: s3://bucket/key 또는 HTTP URL)
+    s3Key: Optional[str] = None  # S3 key (선택적, videoUrl이 S3 URI 형식이면 불필요)
     duration: int
     status: str
 
@@ -797,16 +798,34 @@ class BackendClient:
     async def notify_job_complete(
         self,
         job_id: str,
-        video_url: str,
-        duration: int,
+        video_url: Optional[str] = None,
+        s3_key: Optional[str] = None,
+        duration: int = 0,
         status: str = "COMPLETED",
     ) -> JobCompleteResponse:
-        """영상 생성 완료를 백엔드에 알립니다."""
+        """
+        영상 생성 완료를 백엔드에 알립니다.
+        
+        Args:
+            job_id: Job ID
+            video_url: 영상 URL (S3 URI 형식: s3://bucket/key 또는 HTTP URL)
+            s3_key: S3 key (선택적, video_url이 S3 URI 형식이면 불필요)
+            duration: 영상 길이 (초)
+            status: Job 상태 (COMPLETED 등)
+        """
         if not self._base_url:
             logger.warning(
                 "BACKEND_BASE_URL not configured, skipping job complete callback"
             )
             return JobCompleteResponse(saved=False)
+
+        # s3_key는 선택적 (video_url이 S3 URI 형식이면 충분)
+        # video_url이 S3 URI 형식(s3://...)이면 경고 불필요
+        if not s3_key and video_url and not video_url.startswith("s3://"):
+            logger.warning(
+                f"S3 key not provided for job {job_id}, video_url={video_url}. "
+                f"Backend may not be able to access the video file."
+            )
 
         url = f"{self._base_url}/internal/video/job/{job_id}/complete"
         headers = self._get_internal_headers()
@@ -814,6 +833,7 @@ class BackendClient:
         request_body = JobCompleteRequest(
             jobId=job_id,
             videoUrl=video_url,
+            s3Key=s3_key,
             duration=duration,
             status=status,
         )

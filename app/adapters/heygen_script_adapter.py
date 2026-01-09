@@ -77,10 +77,16 @@ def convert_script_to_heygen_format(
 
     # 기본값 설정
     if voice_id is None:
-        voice_id = settings.HEYGEN_VOICE_ID or "default_voice"
+        voice_id = settings.HEYGEN_VOICE_ID
     
     if avatar_id is None:
-        avatar_id = "default_avatar"
+        avatar_id = settings.HEYGEN_AVATAR_ID
+    
+    # 필수 필드 검증
+    if not voice_id:
+        raise ValueError("HEYGEN_VOICE_ID is required. Set HEYGEN_VOICE_ID environment variable.")
+    if not avatar_id:
+        raise ValueError("HEYGEN_AVATAR_ID is required. Set HEYGEN_AVATAR_ID environment variable.")
     
     if width is None:
         width = settings.VIDEO_WIDTH
@@ -123,15 +129,16 @@ def convert_script_to_heygen_format(
             )
 
             # HeyGen v2 API 형식
+            # 참고: voice는 video_input 최상위 레벨에 있어야 함
             video_input = {
                 "character": {
                     "type": "avatar",
                     "avatar_id": avatar_id,
-                    "voice": {
-                        "type": "text",
-                        "input_text": narration,
-                        "voice_id": voice_id,
-                    },
+                },
+                "voice": {
+                    "type": "text",
+                    "input_text": narration,
+                    "voice_id": voice_id,
                 },
                 "background": {
                     "type": "color",

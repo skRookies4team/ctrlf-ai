@@ -599,6 +599,8 @@ class Settings(BaseSettings):
     # =========================================================================
     # HeyGen API 키
     HEYGEN_API_KEY: Optional[str] = None
+    # HeyGen Avatar ID
+    HEYGEN_AVATAR_ID: Optional[str] = None
     # HeyGen Voice ID
     HEYGEN_VOICE_ID: Optional[str] = None
     # HeyGen API 타임아웃 (초)

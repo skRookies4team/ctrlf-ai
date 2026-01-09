@@ -964,8 +964,16 @@ class RenderJobRunner:
                     message=f"실패: {error_message[:100]}",
                 )
 
-            logger.error(f"Render job failed: job_id={job_id}, error={e}")
+            logger.error(f"Render job failed: job_id={job_id}, error={e}", exc_info=True)
             await self._cleanup_job_files(job_id)
+            
+            # 백엔드에 실패 콜백 전송 (비동기, 실패해도 무시)
+            asyncio.create_task(
+                self._notify_job_failed(
+                    job_id=job_id,
+                    error_message=error_message,
+                )
+            )
 
         finally:
             if job_id in self._running_jobs:
@@ -998,6 +1006,34 @@ class RenderJobRunner:
             # 콜백 실패는 로그만 남기고 무시 (렌더링 자체는 성공)
             logger.warning(
                 f"Job complete callback failed (non-blocking): "
+                f"job_id={job_id}, error={e}"
+            )
+
+    async def _notify_job_failed(
+        self,
+        job_id: str,
+        error_message: str,
+    ) -> None:
+        """영상 생성 실패를 백엔드에 알립니다 (백그라운드).
+
+        Args:
+            job_id: 잡 ID
+            error_message: 에러 메시지
+        """
+        from app.clients.backend_client import get_backend_callback_client
+
+        try:
+            callback_client = get_backend_callback_client()
+            await callback_client.notify_job_complete(
+                job_id=job_id,
+                video_url=None,
+                duration=0,
+                status="FAILED",
+            )
+        except Exception as e:
+            # 콜백 실패는 로그만 남기고 무시
+            logger.warning(
+                f"Job failed callback failed (non-blocking): "
                 f"job_id={job_id}, error={e}"
             )
 

@@ -63,10 +63,33 @@ class VideoJob:
     def from_dict(cls, data: Dict) -> "VideoJob":
         """Dict에서 생성 (JSON 역직렬화용)."""
         # datetime 문자열을 datetime 객체로 변환
+        def parse_datetime(dt_str: str) -> datetime:
+            """datetime 문자열 파싱 (Z 또는 timezone 정보 처리)."""
+            if not dt_str:
+                return datetime.utcnow()
+            
+            # Z로 끝나면 UTC로 변환
+            if dt_str.endswith("Z"):
+                dt_str = dt_str[:-1] + "+00:00"
+            # 중복된 +00:00 제거 (버그로 인한 중복 방지)
+            while "+00:00+00:00" in dt_str:
+                dt_str = dt_str.replace("+00:00+00:00", "+00:00")
+            
+            try:
+                return datetime.fromisoformat(dt_str)
+            except ValueError:
+                # fallback: Z만 제거하고 재시도
+                dt_str_clean = dt_str.replace("Z", "")
+                if "+00:00" not in dt_str_clean and dt_str_clean.count("+") == 0:
+                    dt_str_clean += "+00:00"
+                return datetime.fromisoformat(dt_str_clean)
+        
         if isinstance(data.get("created_at"), str):
-            data["created_at"] = datetime.fromisoformat(data["created_at"].replace("Z", "+00:00"))
+            data["created_at"] = parse_datetime(data["created_at"])
+        
         if isinstance(data.get("updated_at"), str):
-            data["updated_at"] = datetime.fromisoformat(data["updated_at"].replace("Z", "+00:00"))
+            data["updated_at"] = parse_datetime(data["updated_at"])
+        
         # 문자열을 Enum으로 변환
         if isinstance(data.get("status"), str):
             data["status"] = VideoJobStatus(data["status"])
