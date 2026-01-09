@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from app.clients.backend_client import BackendClient, get_backend_client
-from app.clients.milvus_client import get_milvus_client
+from app.clients.llm_client import LLMClient
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.clients.http_client import get_async_http_client
@@ -70,6 +70,7 @@ class FaqAutoGenerateService:
         self,
         faq_service: Optional[FaqDraftService] = None,
         backend_client: Optional[BackendClient] = None,
+        llm_client: Optional[LLMClient] = None,
     ):
         """
         FaqAutoGenerateService 초기화.
@@ -77,10 +78,12 @@ class FaqAutoGenerateService:
         Args:
             faq_service: FAQ 초안 생성 서비스 (None이면 새로 생성)
             backend_client: 백엔드 클라이언트 (None이면 새로 생성)
+            llm_client: LLM 클라이언트 (None이면 새로 생성, 임베딩 생성용)
         """
         self._faq_service = faq_service or FaqDraftService()
         self._backend_client = backend_client or get_backend_client()
-        self._milvus_client = None  # lazy initialization
+        # 규칙 준수: Milvus 클라이언트 직접 호출 금지, LLMClient를 통해 임베딩 생성
+        self._llm_client = llm_client or LLMClient()
         self._settings = get_settings()
         # Elasticsearch 설정
         if not self._settings.ELASTICSEARCH_URL:
@@ -873,16 +876,6 @@ class FaqAutoGenerateService:
         if not messages:
             return {}
 
-        # Milvus 클라이언트 lazy initialization
-        if self._milvus_client is None:
-            try:
-                self._milvus_client = get_milvus_client()
-            except Exception as e:
-                logger.warning(
-                    f"Milvus 클라이언트 초기화 실패, 간단한 정규화 기반 클러스터링으로 fallback: {e}"
-                )
-                return self._cluster_questions_fallback(messages)
-
         try:
             # 1. 질문 텍스트 정규화 및 중복 제거
             normalized_questions: Dict[str, str] = {}  # normalized -> original
@@ -895,14 +888,39 @@ class FaqAutoGenerateService:
                 return {}
 
             # 2. 임베딩 생성 (배치 처리)
+            # 규칙 준수: Milvus 클라이언트 직접 호출 금지, LLMClient를 통해 임베딩 생성
             question_texts = list(normalized_questions.keys())
             embeddings: List[List[float]] = []
             
-            logger.info(f"임베딩 생성 시작: {len(question_texts)}개 질문")
+            logger.info(f"임베딩 생성 시작: {len(question_texts)}개 질문 (LLMClient 사용)")
             for text in question_texts:
                 try:
-                    embedding = await self._milvus_client.generate_embedding(text)
-                    embeddings.append(embedding)
+                    # LLMClient를 통한 임베딩 생성 (규칙 준수)
+                    # OpenAI API 형식 응답에서 임베딩 벡터 추출
+                    embedding_response = await self._llm_client.generate_embedding(text)
+                    
+                    # OpenAI API 형식: {"data": [{"embedding": [...], ...}], ...}
+                    if isinstance(embedding_response, dict) and "data" in embedding_response:
+                        data_list = embedding_response["data"]
+                        if data_list and isinstance(data_list, list) and len(data_list) > 0:
+                            embedding_data = data_list[0]
+                            if isinstance(embedding_data, dict) and "embedding" in embedding_data:
+                                embedding = embedding_data["embedding"]
+                                if isinstance(embedding, list):
+                                    embeddings.append(embedding)
+                                else:
+                                    raise ValueError(f"Invalid embedding format: {type(embedding)}")
+                            else:
+                                raise ValueError(f"Invalid embedding data structure: {embedding_data}")
+                        else:
+                            raise ValueError(f"Empty or invalid data array: {data_list}")
+                    else:
+                        # 직접 임베딩 벡터 리스트인 경우 (하위 호환성)
+                        if isinstance(embedding_response, list):
+                            embeddings.append(embedding_response)
+                        else:
+                            raise ValueError(f"Invalid embedding response format: {type(embedding_response)}")
+                            
                 except Exception as e:
                     logger.warning(f"임베딩 생성 실패: {text[:50]}..., error: {e}")
                     # 실패한 경우 fallback으로 처리
