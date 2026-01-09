@@ -250,21 +250,10 @@ class AnswerGenerator:
                 f"Personalization facts has error: sub_intent_id={context.sub_intent_id}, "
                 f"error_type={error_type}, error_message={error_message}"
             )
-            
-            # Q17 (부서 정보)의 경우 특별 처리: 기간과 무관한 정보이므로 더 적절한 메시지 사용
-            if context.sub_intent_id == "Q17" and error_type == PersonalizationErrorType.NOT_FOUND.value:
-                # 백엔드에서 보낸 메시지가 있으면 사용, 없으면 기본 메시지
-                if error_message and "부서" in error_message:
-                    user_message = error_message
-                else:
-                    user_message = "소속 부서 정보를 찾을 수 없어요. 인사팀에 문의해 주세요."
-            else:
-                # 에러 타입별 사용자 메시지
-                user_message = ERROR_RESPONSE_TEMPLATES.get(
-                    error_type,
-                    "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
-                )
-            
+            user_message = ERROR_RESPONSE_TEMPLATES.get(
+                error_type,
+                "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
+            )
             logger.info(
                 f"Returning error response: sub_intent_id={context.sub_intent_id}, "
                 f"error_type={error_type}, user_message_length={len(user_message)}"
@@ -1148,100 +1137,32 @@ class AnswerGenerator:
         metrics = facts.metrics
         items = facts.items
         
-        # 백엔드 응답 필드명에 맞춰서 가져오기 (여러 가능한 필드명 지원)
-        department = (
-            metrics.get("department") or 
-            metrics.get("department_name") or 
-            metrics.get("dept_name") or 
-            ""
-        )
-        team_name = (
-            metrics.get("team_name") or 
-            metrics.get("team") or 
-            department or  # 부서명을 팀명으로도 사용
-            ""
-        )
-        team_leader = (
-            metrics.get("team_leader") or 
-            metrics.get("team_lead") or 
-            metrics.get("leader") or 
-            ""
-        )
-        team_leader_position = metrics.get("team_lead_position") or metrics.get("leader_position") or ""
-        team_size = (
-            metrics.get("team_size") or 
-            metrics.get("total_members") or 
-            metrics.get("member_count") or 
-            0
-        )
-        department_size = (
-            metrics.get("department_size") or 
-            metrics.get("dept_size") or 
-            team_size or  # 부서 인원이 없으면 팀 인원 사용
-            0
-        )
-        parent_department = metrics.get("parent_department") or metrics.get("parent_dept") or ""
-        department_code = metrics.get("department_code") or metrics.get("dept_code") or ""
+        team_name = metrics.get("team_name", "")
+        department = metrics.get("department", "")
+        team_leader = metrics.get("team_leader", "")
+        team_size = metrics.get("team_size", 0)
+        department_size = metrics.get("department_size", 0)
         
         lines = []
         
-        # 부서 정보 (가장 중요)
+        if team_name:
+            lines.append(f"팀명: {team_name}")
         if department:
             lines.append(f"부서: {department}")
-            if department_code:
-                lines[-1] += f" ({department_code})"
-        
-        # 상위 부서 정보
-        if parent_department:
-            lines.append(f"상위 부서: {parent_department}")
-        
-        # 팀장 정보
         if team_leader:
-            leader_info = f"팀장: {team_leader}"
-            if team_leader_position:
-                leader_info += f" ({team_leader_position})"
-            lines.append(leader_info)
-        
-        # 인원 정보
+            lines.append(f"팀장: {team_leader}")
         if team_size > 0:
             lines.append(f"팀 인원: {team_size}명")
-            if metrics.get("full_time") or metrics.get("contract"):
-                full_time = metrics.get("full_time", 0)
-                contract = metrics.get("contract", 0)
-                if full_time > 0 or contract > 0:
-                    lines[-1] += f" (정규직 {full_time}명, 계약직 {contract}명)"
-        
-        if department_size > 0 and department_size != team_size:
+        if department_size > 0:
             lines.append(f"부서 인원: {department_size}명")
         
-        # items에서 추가 정보 추출 (팀원 목록 등)
+        # items에서 추가 정보 추출
         if items:
-            # 팀원 목록이 있는 경우
-            if items and isinstance(items[0], dict) and "name" in items[0]:
-                lines.append("")
-                lines.append("팀원 목록:")
-                for item in items[:10]:  # 최대 10명만 표시
-                    name = item.get("name", "")
-                    position = item.get("position", "")
-                    job_title = item.get("job_title", "")
-                    is_leader = item.get("is_leader", False)
-                    
-                    if name:
-                        member_info = f"- {name}"
-                        if position:
-                            member_info += f" ({position})"
-                        if job_title and job_title != position:
-                            member_info += f" - {job_title}"
-                        if is_leader:
-                            member_info += " [팀장]"
-                        lines.append(member_info)
-            else:
-                # 일반 items (label-value 형식)
-                for item in items:
-                    label = item.get("label", "")
-                    value = item.get("value", "")
-                    if label and value:
-                        lines.append(f"{label}: {value}")
+            for item in items:
+                label = item.get("label", "")
+                value = item.get("value", "")
+                if label and value:
+                    lines.append(f"{label}: {value}")
         
         if lines:
             return "\n".join(lines)

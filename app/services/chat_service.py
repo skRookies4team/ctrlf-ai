@@ -69,6 +69,7 @@ from app.core.config import get_settings
 from app.core.exceptions import ErrorType, ServiceType, UpstreamServiceError
 from app.core.logging import get_logger
 from app.strategy.auto_strategy import decide_strategy
+from app.strategy.auto_strategy import decide_strategy
 from app.core.metrics import (
     LOG_TAG_LLM_ERROR,
     LOG_TAG_LLM_FALLBACK,
@@ -910,17 +911,8 @@ class ChatService:
         # ============================================================
         # 🔥 Phase LLM-Ops: Dynamic Strategy Decision (AUTO TUNING)
         # ============================================================
-        raw_strategy = await decide_strategy(domain=domain)
 
-        strategy = {
-            "use_rag": raw_strategy.get("use_rag", True) if raw_strategy else True,
-            "model": raw_strategy.get("model") if raw_strategy else None,
-            "reason": raw_strategy.get("reason", "AUTO_STRATEGY_FALLBACK") if raw_strategy else "AUTO_STRATEGY_FALLBACK",
-        }
-
-        # auto_strategy_reason 변수 명시적 정의 (1811번째 줄에서 사용)
-        auto_strategy_reason = strategy.get("reason", "AUTO_STRATEGY_FALLBACK")
-        auto_strategy_applied = raw_strategy is not None
+        strategy = await decide_strategy(domain=domain)
 
         # 1️⃣ RAG 사용 여부 override
         # use_rag가 있으면 사용, 없으면 disable_rag의 반대값 사용
@@ -930,14 +922,24 @@ class ChatService:
             # RAG 강제 차단 (전역 컨텍스트)
             set_retrieval_blocked(
                 blocked=True,
-                reason=f"AUTO_RULE:{auto_strategy_reason}"
+                reason=f"AUTO_RULE:{strategy.get('reason', 'UNKNOWN')}"
+            )
+            
+        if strategy.get("disable_rag", False):
+            set_retrieval_blocked(
+                blocked=True,
+                reason=f"AUTO_RULE:{strategy.get('reason', 'UNKNOWN')}"
             )
 
         # AUTO STRATEGY 이후에 다시 반영
         if strategy.get("model"):
             req.llm_model = strategy["model"]
             llm_provider = strategy["model"]  
-            
+
+        # strategy 정보 저장 (나중에 meta 생성 시 사용)
+        # 이 변수들은 나중에 ChatAnswerMeta 생성 시 사용됨
+        auto_strategy_applied = True
+        auto_strategy_reason = strategy.get("reason", "UNKNOWN")
 
         logger.info(
             f"[AUTO_STRATEGY] domain={domain}, "
@@ -1032,6 +1034,12 @@ class ChatService:
         # Phase 58: Quality Gate WARNING 메시지 (PROCEED_WITH_WARNING인 경우)
         quality_warning_message: Optional[str] = None
 
+        # Phase 59: RAG Quality meta 필드 (프론트 배너/Kibana용)
+        rag_quality_grade: Optional[str] = None
+        rag_quality_action: Optional[str] = None
+        rag_quality_min_l2: Optional[float] = None
+        rag_quality_insufficient: bool = False
+
         if route in rag_only_routes:
             # RAG_INTERNAL: RAG만 사용
             rag_search_attempted = True
@@ -1084,10 +1092,22 @@ class ChatService:
                         retriever_used=retriever_used,
                         latency_ms=latency_ms,
                         rag_latency_ms=rag_latency_ms,
+                        # Phase 59: RAG Quality meta
+                        rag_quality_grade=rag_result.quality_grade,
+                        rag_quality_action=rag_result.quality_action,
+                        rag_quality_min_l2=rag_result.min_l2_distance,
+                        rag_quality_warning=None,  # REJECT이므로 warning 없음
+                        rag_quality_insufficient=True,
                     ),
                 )
 
-            # Phase 58: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처
+            # Phase 58/59: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 + meta 변수 설정
+            # 공통으로 rag_quality_* 변수 캡처 (OK/LOW 모두)
+            rag_quality_grade = rag_result.quality_grade
+            rag_quality_action = rag_result.quality_action
+            rag_quality_min_l2 = rag_result.min_l2_distance
+            rag_quality_insufficient = rag_result.insufficient_evidence
+
             if rag_result.warning_message:
                 quality_warning_message = rag_result.warning_message
                 logger.info(
@@ -1173,10 +1193,22 @@ class ChatService:
                         retriever_used=retriever_used,
                         latency_ms=latency_ms,
                         rag_latency_ms=rag_latency_ms,
+                        # Phase 59: RAG Quality meta
+                        rag_quality_grade=rag_result.quality_grade,
+                        rag_quality_action=rag_result.quality_action,
+                        rag_quality_min_l2=rag_result.min_l2_distance,
+                        rag_quality_warning=None,  # REJECT이므로 warning 없음
+                        rag_quality_insufficient=True,
                     ),
                 )
 
-            # Phase 58: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 (MIXED 경로)
+            # Phase 58/59: PROCEED_WITH_WARNING인 경우 경고 메시지 캡처 + meta 변수 설정 (MIXED 경로)
+            # 공통으로 rag_quality_* 변수 캡처 (OK/LOW 모두)
+            rag_quality_grade = rag_result.quality_grade
+            rag_quality_action = rag_result.quality_action
+            rag_quality_min_l2 = rag_result.min_l2_distance
+            rag_quality_insufficient = rag_result.insufficient_evidence
+
             if rag_result.warning_message:
                 quality_warning_message = rag_result.warning_message
                 logger.info(
@@ -1863,6 +1895,12 @@ class ChatService:
                 if forbidden_result and forbidden_result.is_forbidden
                 else None
             ),
+            # Phase 59: RAG Quality meta (프론트 배너/Kibana용)
+            rag_quality_grade=rag_quality_grade,
+            rag_quality_action=rag_quality_action,
+            rag_quality_min_l2=rag_quality_min_l2,
+            rag_quality_warning=quality_warning_message,
+            rag_quality_insufficient=rag_quality_insufficient,
         )
 
         # Phase 12: 메트릭 기록
