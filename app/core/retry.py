@@ -35,7 +35,7 @@ T = TypeVar("T")
 
 # 기본 타임아웃 (초)
 DEFAULT_RAGFLOW_TIMEOUT = 10.0
-DEFAULT_LLM_TIMEOUT = 600.0  # LLM은 응답 생성에 시간이 걸림 (ultrathink 모델용 10분)
+DEFAULT_LLM_TIMEOUT = 1200.0  # LLM은 응답 생성에 시간이 걸림 (ultrathink 모델용 20분)
 DEFAULT_BACKEND_TIMEOUT = 5.0
 DEFAULT_PII_TIMEOUT = 5.0
 
