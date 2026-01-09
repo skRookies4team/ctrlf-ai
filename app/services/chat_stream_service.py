@@ -48,8 +48,7 @@ from app.services.forbidden_query_filter import (
 from app.services.chat_service import ChatService
 from app.services.router_orchestrator import RouterOrchestrator
 from app.models.chat import ChatRequest
-from app.models.router_types import Tier0Intent
-from app.services.personalization_mapper import to_personalization_q
+# Phase 60: Tier0Intent, to_personalization_q 제거 - ChatService 통합 파이프라인 사용
 
 logger = get_logger(__name__)
 
@@ -291,10 +290,11 @@ class ChatStreamService:
                         yield token_event.to_ndjson()
                         await asyncio.sleep(0.005)
 
-                    # DONE 이벤트 전송
+                    # DONE 이벤트 전송 (차단 시 sources 없음)
                     done_event = StreamDoneEvent(
                         finish_reason="blocked",
                         elapsed_ms=int((time.perf_counter() - start_time) * 1000),
+                        sources=[],
                     )
                     yield done_event.to_ndjson()
                     self._tracker.complete_request(request_id, block_response)
@@ -334,10 +334,11 @@ class ChatStreamService:
                         yield token_event.to_ndjson()
                         await asyncio.sleep(0.005)
 
-                    # DONE 이벤트 전송
+                    # DONE 이벤트 전송 (차단 시 sources 없음)
                     done_event = StreamDoneEvent(
                         finish_reason="blocked",
                         elapsed_ms=int((time.perf_counter() - start_time) * 1000),
+                        sources=[],
                     )
                     yield done_event.to_ndjson()
                     self._tracker.complete_request(request_id, block_response)
@@ -355,196 +356,139 @@ class ChatStreamService:
             yield meta_event.to_ndjson()
 
             # =================================================================
-            # 3-1. 개인화 요청 체크 (ChatService로 처리)
+            # Phase 60: 모든 요청을 ChatService로 처리 (통합 파이프라인)
+            # - RAG 검색, 의도 분류, 가드레일, PII 마스킹 등 모든 로직 적용
+            # - 응답을 스트리밍 형식으로 변환하여 전송
+            # - sources를 done 이벤트에 포함
             # =================================================================
+            chat_service_succeeded = False
+            chat_response_sources = []
+
             if user_query:
                 try:
-                    # RouterOrchestrator로 개인화 요청인지 확인
-                    orchestration_result = await self._router_orchestrator.route(
-                        user_query=user_query,
+                    # ChatRequest 생성
+                    chat_request = ChatRequest(
                         session_id=request.session_id,
                         user_id=request.user_id,
+                        user_role=request.user_role,
+                        department=request.department,
+                        domain=request.domain,
+                        channel=request.channel,
+                        messages=request.messages,
+                        llm_model=request.llm_model,  # LLM 프로바이더 선택
+                        model=None,  # A/B 테스트 임베딩 모델은 기본값 사용
                     )
-                    
-                    # BACKEND_STATUS이고 sub_intent_id가 있으면 개인화 요청 가능성 체크
-                    if (orchestration_result.router_result.tier0_intent == Tier0Intent.BACKEND_STATUS
-                        and orchestration_result.router_result.sub_intent_id):
-                        sub_intent_id = orchestration_result.router_result.sub_intent_id
-                        personalization_q = to_personalization_q(sub_intent_id, user_query)
-                        
-                        if personalization_q:
-                            # 개인화 요청이면 ChatService로 처리하고 스트리밍 형식으로 변환
-                            logger.info(
-                                f"[Stream] Personalization request detected: "
-                                f"sub_intent_id={sub_intent_id} -> Q={personalization_q}"
-                            )
-                            
-                            try:
-                                # ChatRequest 생성
-                                chat_request = ChatRequest(
-                                    session_id=request.session_id,
-                                    user_id=request.user_id,
-                                    user_role=request.user_role,
-                                    department=request.department,
-                                    domain=request.domain,
-                                    channel=request.channel,
-                                    messages=request.messages,
-                                    llm_model=request.llm_model,  # LLM 프로바이더 선택
-                                    model=None,  # A/B 테스트 임베딩 모델은 기본값 사용
-                                )
-                                
-                                # ChatService로 개인화 응답 생성
-                                chat_response = await self._chat_service.handle_chat(chat_request)
-                                
-                                # 응답을 스트리밍 형식으로 변환
-                                answer_text = chat_response.answer
-                                
-                                # 응답이 비어있으면 기본 메시지 사용
-                                # (ChatService에서 이미 적절한 에러 메시지를 생성했어야 함)
-                                if not answer_text or len(answer_text.strip()) == 0:
-                                    logger.warning("[Stream] Personalization response is empty, using fallback")
-                                    answer_text = "조회된 정보가 없어요."
-                                
-                                if not ttfb_recorded:
-                                    metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
-                                    ttfb_recorded = True
-                                
-                                # 답변을 단어 단위로 스트리밍 (더 자연스러운 스트리밍 효과)
-                                # 공백을 기준으로 단어 분리, 단어 단위로 스트리밍
-                                words = answer_text.split()
-                                for i, word in enumerate(words):
-                                    # 단어 앞에 공백 추가 (첫 단어 제외)
-                                    if i > 0:
-                                        token_event = StreamTokenEvent(text=" ")
-                                        yield token_event.to_ndjson()
-                                        accumulated_response += " "
-                                        await asyncio.sleep(0.01)
-                                    
-                                    # 단어를 문자 단위로 스트리밍
-                                    for char in word:
-                                        token_event = StreamTokenEvent(text=char)
-                                        yield token_event.to_ndjson()
-                                        accumulated_response += char
-                                        await asyncio.sleep(0.03)  # 문자 단위 스트리밍 속도 조정
-                                    
-                                    # 단어 끝에 약간의 딜레이 (더 자연스러운 느낌)
-                                    await asyncio.sleep(0.05)
-                                
-                                metrics.total_tokens = len(answer_text)
-                                metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
-                                metrics.completed = True
-                                
-                                # DONE 이벤트 전송
-                                done_event = StreamDoneEvent(
-                                    finish_reason="stop",
-                                    elapsed_ms=metrics.total_elapsed_ms,
-                                    ttfb_ms=metrics.ttfb_ms,
-                                    total_tokens=metrics.total_tokens,
-                                )
-                                yield done_event.to_ndjson()
-                                self._tracker.complete_request(request_id, accumulated_response)
-                                
-                                # 메트릭 로깅
-                                self._log_metrics(metrics)
-                                
-                                # 텔레메트리 이벤트 발행
-                                self._emit_telemetry_event(
-                                    request=request,
-                                    metrics=metrics,
-                                    error_code=None,
-                                )
-                                telemetry_emitted = True
-                                return
-                                
-                            except Exception as e:
-                                # ChatService 호출 중 예기치 않은 예외 발생
-                                # (ChatService 내부에서 이미 에러 처리를 했어야 하는데 예외가 발생한 경우)
-                                logger.error(f"[Stream] Unexpected error during Personalization ChatService call: {e}", exc_info=True)
-                                
-                                # 최후의 수단으로 최소한의 에러 메시지 사용
-                                # (ChatService 내부에서 AnswerGenerator를 통해 적절한 메시지를 생성하도록 수정했으므로
-                                #  이 경로로 오는 경우는 거의 없어야 함)
-                                error_text = "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
-                                if not ttfb_recorded:
-                                    metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
-                                    ttfb_recorded = True
-                                
-                                # 에러 메시지도 단어 단위로 스트리밍
-                                words = error_text.split()
-                                for i, word in enumerate(words):
-                                    if i > 0:
-                                        token_event = StreamTokenEvent(text=" ")
-                                        yield token_event.to_ndjson()
-                                        accumulated_response += " "
-                                        await asyncio.sleep(0.01)
-                                    
-                                    for char in word:
-                                        token_event = StreamTokenEvent(text=char)
-                                        yield token_event.to_ndjson()
-                                        accumulated_response += char
-                                        await asyncio.sleep(0.03)
-                                    
-                                    await asyncio.sleep(0.05)
-                                
-                                metrics.total_tokens = len(error_text)
-                                metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
-                                metrics.completed = True
-                                
-                                done_event = StreamDoneEvent(
-                                    finish_reason="stop",
-                                    elapsed_ms=metrics.total_elapsed_ms,
-                                    ttfb_ms=metrics.ttfb_ms,
-                                    total_tokens=metrics.total_tokens,
-                                )
-                                yield done_event.to_ndjson()
-                                self._tracker.complete_request(request_id, accumulated_response)
-                                self._log_metrics(metrics)
-                                self._emit_telemetry_event(
-                                    request=request,
-                                    metrics=metrics,
-                                    error_code=None,
-                                )
-                                telemetry_emitted = True
-                                return
-                            
-                except Exception as e:
-                    # 개인화 체크 중 에러가 발생하면 로그만 남기고 일반 LLM 스트리밍으로 fallback
-                    logger.warning(f"[Stream] Personalization check failed, falling back to LLM: {e}", exc_info=True)
 
-            # 3. LLM 스트리밍 호출 (개인화 요청이 아닌 경우)
-            if not self._settings.llm_base_url:
-                # LLM 미설정 시 fallback
-                logger.warning("LLM not configured, sending fallback response")
-                fallback_text = "LLM 서비스가 설정되지 않았습니다. 관리자에게 문의하세요."
-                for char in fallback_text:
-                    token_event = StreamTokenEvent(text=char)
-                    yield token_event.to_ndjson()
-                    accumulated_response += char
+                    # ChatService로 응답 생성 (RAG, 의도분류, 가드레일 등 포함)
+                    logger.info(f"[Stream] Processing via ChatService: session_id={request.session_id}")
+                    chat_response = await self._chat_service.handle_chat(chat_request)
+
+                    # 응답을 스트리밍 형식으로 변환
+                    answer_text = chat_response.answer
+                    chat_response_sources = chat_response.sources  # sources 저장
+
+                    # 응답이 비어있으면 기본 메시지 사용
+                    if not answer_text or len(answer_text.strip()) == 0:
+                        logger.warning("[Stream] ChatService response is empty, using fallback")
+                        answer_text = "죄송합니다. 응답을 생성하지 못했습니다."
+
                     if not ttfb_recorded:
                         metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
                         ttfb_recorded = True
-                    await asyncio.sleep(0.01)  # 시뮬레이션용 딜레이
-                metrics.total_tokens = len(fallback_text)
-            else:
-                # 실제 LLM 스트리밍 호출
-                async for token in self._stream_llm_response(
-                    request, metrics, start_time, provider_config
-                ):
-                    yield token
-                    # token 이벤트에서 텍스트 추출하여 누적
-                    if '"type":"token"' in token:
-                        try:
-                            import json
-                            data = json.loads(token.strip())
-                            if data.get("type") == "token":
-                                accumulated_response += data.get("text", "")
-                        except Exception:
-                            pass
-                    if not ttfb_recorded and '"type":"token"' in token:
-                        metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
-                        ttfb_recorded = True
 
-            # 4. DONE 이벤트 전송
+                    # 답변을 단어 단위로 스트리밍 (자연스러운 스트리밍 효과)
+                    words = answer_text.split()
+                    for i, word in enumerate(words):
+                        # 단어 앞에 공백 추가 (첫 단어 제외)
+                        if i > 0:
+                            token_event = StreamTokenEvent(text=" ")
+                            yield token_event.to_ndjson()
+                            accumulated_response += " "
+                            await asyncio.sleep(0.01)
+
+                        # 단어를 문자 단위로 스트리밍
+                        for char in word:
+                            token_event = StreamTokenEvent(text=char)
+                            yield token_event.to_ndjson()
+                            accumulated_response += char
+                            await asyncio.sleep(0.02)  # 문자 단위 스트리밍 속도
+
+                        # 단어 끝에 약간의 딜레이
+                        await asyncio.sleep(0.03)
+
+                    metrics.total_tokens = len(answer_text)
+                    metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                    metrics.completed = True
+                    chat_service_succeeded = True
+
+                    # DONE 이벤트 전송 (Phase 60: sources 포함)
+                    done_event = StreamDoneEvent(
+                        finish_reason="stop",
+                        elapsed_ms=metrics.total_elapsed_ms,
+                        ttfb_ms=metrics.ttfb_ms,
+                        total_tokens=metrics.total_tokens,
+                        sources=chat_response_sources,  # RAG 출처 포함
+                    )
+                    yield done_event.to_ndjson()
+                    self._tracker.complete_request(request_id, accumulated_response)
+
+                    # 메트릭 로깅
+                    self._log_metrics(metrics)
+
+                    # 텔레메트리 이벤트 발행
+                    self._emit_telemetry_event(
+                        request=request,
+                        metrics=metrics,
+                        error_code=None,
+                    )
+                    telemetry_emitted = True
+                    return
+
+                except Exception as e:
+                    # ChatService 호출 중 예외 발생 시 fallback
+                    logger.error(f"[Stream] ChatService call failed, falling back to direct LLM: {e}", exc_info=True)
+                    chat_service_succeeded = False
+
+            # =================================================================
+            # Fallback: ChatService 실패 시 직접 LLM 스트리밍 (RAG 없음)
+            # 이 경로는 거의 사용되지 않아야 함
+            # =================================================================
+            if not chat_service_succeeded:
+                logger.warning("[Stream] Using fallback LLM streaming (no RAG)")
+
+                if not self._settings.llm_base_url:
+                    # LLM 미설정 시 fallback
+                    logger.warning("LLM not configured, sending fallback response")
+                    fallback_text = "LLM 서비스가 설정되지 않았습니다. 관리자에게 문의하세요."
+                    for char in fallback_text:
+                        token_event = StreamTokenEvent(text=char)
+                        yield token_event.to_ndjson()
+                        accumulated_response += char
+                        if not ttfb_recorded:
+                            metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
+                            ttfb_recorded = True
+                        await asyncio.sleep(0.01)
+                    metrics.total_tokens = len(fallback_text)
+                else:
+                    # 직접 LLM 스트리밍 호출 (RAG 없음 - fallback용)
+                    async for token in self._stream_llm_response(
+                        request, metrics, start_time, provider_config
+                    ):
+                        yield token
+                        # token 이벤트에서 텍스트 추출하여 누적
+                        if '"type":"token"' in token:
+                            try:
+                                import json
+                                data = json.loads(token.strip())
+                                if data.get("type") == "token":
+                                    accumulated_response += data.get("text", "")
+                            except Exception:
+                                pass
+                        if not ttfb_recorded and '"type":"token"' in token:
+                            metrics.ttfb_ms = int((time.perf_counter() - start_time) * 1000)
+                            ttfb_recorded = True
+
+            # 4. DONE 이벤트 전송 (fallback 경로 - sources 없음)
             metrics.total_elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             metrics.completed = True
 
@@ -553,6 +497,7 @@ class ChatStreamService:
                 total_tokens=metrics.total_tokens or None,
                 elapsed_ms=metrics.total_elapsed_ms,
                 ttfb_ms=metrics.ttfb_ms,
+                sources=[],  # 일반 LLM 스트리밍은 RAG 미사용
             )
             yield done_event.to_ndjson()
 
