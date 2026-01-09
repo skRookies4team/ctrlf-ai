@@ -231,11 +231,15 @@ class QuizGenerateService:
                 # 시도 횟수에 따라 temperature 살짝 상승 → 탈출 시도
                 temperature = 0.55 + min(0.25, 0.05 * attempt)
 
-                llm_response = await self._llm.generate_chat_completion(
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=1400,
-                )
+                try:
+                    llm_response = await self._llm.generate_chat_completion(
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=1400,
+                    )
+                except Exception as e:
+                    logger.warning(f"LLM call failed: {e}; retrying")
+                    continue
 
                 parsed = self._parse_llm_response(llm_response)
                 if not parsed:

@@ -390,7 +390,8 @@ class TestSelfCheckValidation:
         })
 
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.return_value = mock_llm_response
+        # side_effect로 여러 호출에 대응
+        mock_llm.generate_chat_completion.side_effect = [mock_llm_response] * 10
 
         service = QuizQualityService(llm_client=mock_llm, selfcheck_enabled=True)
         valid, qc_result = await service.validate_quiz_set(
@@ -416,7 +417,8 @@ class TestSelfCheckValidation:
         })
 
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.return_value = mock_llm_response
+        # side_effect로 여러 호출에 대응
+        mock_llm.generate_chat_completion.side_effect = [mock_llm_response] * 10
 
         service = QuizQualityService(llm_client=mock_llm, selfcheck_enabled=True)
         valid, qc_result = await service.validate_quiz_set(
@@ -462,7 +464,8 @@ class TestSelfCheckValidation:
     ) -> None:
         """Self-check LLM 호출 실패 시 FAIL 처리 테스트."""
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.side_effect = Exception("LLM Error")
+        # side_effect로 여러 호출 모두 예외 발생
+        mock_llm.generate_chat_completion.side_effect = [Exception("LLM Error")] * 10
 
         service = QuizQualityService(llm_client=mock_llm, selfcheck_enabled=True)
         valid, qc_result = await service.validate_quiz_set(
@@ -702,28 +705,33 @@ class TestQuizGenerateServiceIntegration:
         from app.models.quiz_generate import QuizGenerateRequest
         from app.services.quiz_generate_service import QuizGenerateService
 
-        mock_llm_response = json.dumps({
-            "questions": [
-                {
+        # 서비스가 N개 보장 루프로 동작하므로 side_effect 사용
+        responses = [
+            json.dumps({
+                "questions": [{
                     "stem": "USB 메모리를 사외로 반출할 때 필요한 조치는?",
                     "options": [
                         {"text": "정보보호팀의 사전 승인", "is_correct": True},
                         {"text": "자유 반출", "is_correct": False},
+                        {"text": "무시", "is_correct": False},
+                        {"text": "사후 보고", "is_correct": False},
                     ],
                     "difficulty": "EASY",
-                }
-            ]
-        })
+                }]
+            }) for _ in range(10)
+        ]
 
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.return_value = mock_llm_response
+        mock_llm.generate_chat_completion.side_effect = responses
 
-        # QC 비활성화
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        # QC 비활성화, 의미적 중복 검사도 비활성화
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            enable_semantic_dedup=False,
+        )
 
         request = QuizGenerateRequest(
-            education_id="EDU-001",
-            doc_id="DOC-001",
             num_questions=1,
             quiz_candidate_blocks=[
                 QuizCandidateBlock(

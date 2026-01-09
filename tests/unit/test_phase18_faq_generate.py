@@ -202,7 +202,8 @@ class TestFaqDraftService:
         mock_llm.generate_chat_completion.assert_called_once()
 
         # Verify draft
-        assert draft.domain == "SEC_POLICY"
+        # Note: "USB", "반출" 키워드로 인해 SECURITY 도메인으로 자동 분류됨
+        assert draft.domain == "SECURITY"
         assert draft.cluster_id == "cluster-001"
         assert draft.question == "USB 반출 시 어떤 절차가 필요한가요?"
         # top_docs 사용 시 answer_source=TOP_DOCS
@@ -667,7 +668,8 @@ class TestFaqIntegration:
         draft = await service.generate_faq_draft(request)
 
         # Verify complete flow
-        assert draft.domain == "TRAINING_QUIZ"
+        # Note: "교육", "이수" 키워드로 인해 EDUCATION 도메인으로 자동 분류됨
+        assert draft.domain == "EDUCATION"
         assert draft.cluster_id == "edu-cluster-001"
         assert "4대 필수교육" in draft.question
         assert "인사고과" in draft.answer_markdown

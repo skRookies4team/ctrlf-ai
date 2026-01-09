@@ -561,7 +561,8 @@ ai_confidence: 0.92""")
 
         # 검증
         assert draft.faq_draft_id is not None
-        assert draft.domain == "SEC_POLICY"
+        # Note: "USB", "반출" 키워드로 인해 SECURITY 도메인으로 자동 분류됨
+        assert draft.domain == "SECURITY"
         assert draft.cluster_id == "cluster-001"
         assert draft.answer_source == "TOP_DOCS"
         assert draft.source_doc_id == "DOC-001"

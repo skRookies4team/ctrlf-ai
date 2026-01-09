@@ -121,7 +121,7 @@ class QuizQualityService:
             selfcheck_enabled: LLM Self-check 활성화 여부 (비용 고려)
         """
         self._llm = llm_client or LLMClient()
-        self._selfcheck_enabled = False
+        self._selfcheck_enabled = selfcheck_enabled
 
     async def validate_quiz_set(
         self,
