@@ -487,6 +487,22 @@ class Settings(BaseSettings):
     TTS_PROVIDER: str = "gtts"
 
     # =========================================================================
+    # Script Generation Guard (HeyGen 180s 제한 대응)
+    # =========================================================================
+    # HeyGen 무료/기본 플랜은 영상 길이 180초 제한이 있어, 스크립트가 길면 COMPOSE_VIDEO 단계에서 실패합니다.
+    # 기본값은 "챕터 1개"로 제한하여 안전하게 180초 이하를 목표로 합니다.
+    SCRIPT_MAX_CHAPTERS: int = 1
+    # 챕터 내 씬 수 상한 (요청: 챕터 1개, 씬 2개로 제한)
+    SCRIPT_MAX_SCENES_PER_CHAPTER: int = 2
+
+    # =========================================================================
+    # Video Duration Guard
+    # =========================================================================
+    # 전체 영상 길이 상한(초). 씬 duration 합/합성 결과를 이 값 이하로 맞추도록 스케일링합니다.
+    # (요청사항) 기본 60초
+    MAX_VIDEO_DURATION_SEC: float = 60.0
+
+    # =========================================================================
     # Phase 40: Scene Audio 설정 (문장 단위 TTS + 캡션 타임라인)
     # =========================================================================
     # 씬 끝 무음 패딩 시간 (초)
@@ -495,8 +511,9 @@ class Settings(BaseSettings):
     # TTS 문장 최대 길이 (초과 시 분할)
     TTS_MAX_SENTENCE_LENGTH: int = 300
 
-    # Storage Provider 선택 (local, s3, minio)
-    STORAGE_PROVIDER: str = "local"
+    # Storage Provider 선택 (local, s3, minio, backend_presigned)
+    # 요청 사항: AI 서버가 AWS credentials로 S3에 직접 업로드하도록 기본값을 s3로 설정
+    STORAGE_PROVIDER: str = "s3"
 
     # 렌더링 출력 디렉토리 (임시 파일용)
     RENDER_OUTPUT_DIR: str = "./video_output"
@@ -513,10 +530,14 @@ class Settings(BaseSettings):
     STORAGE_PUBLIC_BASE_URL: Optional[str] = None
 
     # S3 설정 (STORAGE_PROVIDER=s3 일 때)
-    AWS_S3_BUCKET: Optional[str] = None
+    # 기본 버킷 (환경변수 AWS_S3_BUCKET으로 언제든 override 가능)
+    AWS_S3_BUCKET: Optional[str] = "ctrl-s3"
     AWS_S3_REGION: str = "ap-northeast-2"
     AWS_S3_PREFIX: str = ""  # Phase 34: object_key에 prefix 포함하므로 빈값
     S3_ENDPOINT_URL: Optional[str] = None  # MinIO 호환 S3 엔드포인트
+    # AWS credentials profile (~/.aws/credentials)
+    # 예) AWS_PROFILE=sk_4th_team04
+    AWS_PROFILE: Optional[str] = None
 
     # MinIO 설정 (STORAGE_PROVIDER=minio 일 때)
     MINIO_ENDPOINT: Optional[str] = None
@@ -554,8 +575,50 @@ class Settings(BaseSettings):
     # =========================================================================
     # Phase 37: Video Visual Style 설정
     # =========================================================================
-    # 영상 시각 스타일 (basic: 단색 배경+텍스트, animated: 씬 이미지+Ken Burns+fade)
-    VIDEO_VISUAL_STYLE: str = "basic"  # "basic" or "animated"
+    # 영상 시각 스타일
+    # - basic: 단색 배경 + 텍스트(drawtext)
+    # - animated: 씬 이미지 + Ken Burns(zoompan) + fade 전환
+    # - presentation: PPT 스타일 슬라이드(타이틀/본문 레이아웃) + fade 전환
+    #
+    # 기본값은 presentation으로 설정 (env 미설정 시에도 PPT 스타일로 렌더)
+    VIDEO_VISUAL_STYLE: str = "presentation"  # "basic" | "animated" | "presentation"
+    # presentation 슬라이드 기본 배경색 (VideoComposer/HeyGen PIP 공통)
+    # video_composer.py의 기본 팔레트(bg=(16,18,22))와 동일한 색상
+    PRESENTATION_BG_HEX: str = "#101216"
+
+    # =========================================================================
+    # Video Render Engine 설정 (FFmpeg vs HeyGen)
+    # =========================================================================
+    # ffmpeg: 기존 로컬 렌더링 파이프라인 (TTS + FFmpeg)
+    # heygen: HeyGen API로 아바타 영상 생성 후 다운로드하여 Storage 업로드
+    # heygen_pip: HeyGen(아바타+음성) + FFmpeg(슬라이드 위에 아바타 PIP 합성)
+    # 기본값을 heygen_pip로 설정해 "아바타 + 슬라이드"가 기본 경로가 되도록 합니다.
+    # (HEYGEN_* 값이 미설정이면 heygen_pip 단계에서 명확히 실패하여 설정 누락을 바로 알 수 있습니다.)
+    VIDEO_RENDER_ENGINE: str = "heygen_pip"  # "ffmpeg" | "heygen" | "heygen_pip"
+
+    # HeyGen 설정 (VIDEO_RENDER_ENGINE=heygen)
+    HEYGEN_API_KEY: Optional[str] = None
+    HEYGEN_AVATAR_ID: Optional[str] = None
+    HEYGEN_VOICE_ID: Optional[str] = None
+    HEYGEN_BG_TYPE: str = "color"
+    HEYGEN_BG_VALUE: str = "#FAFAFA"
+    # ⚠️ HeyGen 플랜에 따라 허용 해상도가 제한될 수 있어 별도 분리
+    # RESOLUTION_NOT_ALLOWED 방지를 위해 기본값은 1280x720로 둡니다.
+    HEYGEN_VIDEO_WIDTH: int = 1280
+    HEYGEN_VIDEO_HEIGHT: int = 720
+    HEYGEN_POLL_INTERVAL_SEC: int = 10
+    # FAST 모드에서 완료 감지 지연을 줄이기 위해 폴링 간격을 더 짧게 사용
+    HEYGEN_POLL_INTERVAL_SEC_FAST: int = 3
+    HEYGEN_MAX_POLLS: int = 180  # 약 30분
+
+    # =========================================================================
+    # Video Fast Mode (속도 최적화)
+    # =========================================================================
+    # 요청사항: 슬라이드/자막/썸네일 생성 생략 + 중복 생성 방지(재사용) + 폴링 간격 조정
+    VIDEO_FAST_MODE: bool = True
+    VIDEO_SKIP_SLIDES: bool = False       # heygen_pip에서 슬라이드 대신 단색 배경 비디오 사용
+    VIDEO_SKIP_SUBTITLES: bool = True    # SRT 생성 생략
+    VIDEO_SKIP_THUMBNAIL: bool = True    # 썸네일 생성 생략
 
     # Animated 모드 설정
     VIDEO_WIDTH: int = 1920  # 영상 너비 (animated 모드)
@@ -721,16 +784,15 @@ class Settings(BaseSettings):
         Backend 서비스 URL을 반환합니다.
 
         우선순위:
-        1. BACKEND_BASE_URL이 직접 설정된 경우 그 값 사용
-        2. BACKEND_BASE_URL_REAL 사용
+        1. BACKEND_BASE_URL_REAL 사용 (실제 접속 가능한 문자열 URL 우선)
+        2. BACKEND_BASE_URL이 직접 설정된 경우 그 값 사용 (HttpUrl 타입)
 
         Returns:
             str: Backend 서비스 URL, 미설정 시 None
         """
-        if self.BACKEND_BASE_URL:
-            return str(self.BACKEND_BASE_URL).rstrip("/")
         if self.BACKEND_BASE_URL_REAL:
             return self.BACKEND_BASE_URL_REAL.rstrip("/")
+        
         return None
 
     @property

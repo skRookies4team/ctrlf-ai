@@ -1,20 +1,27 @@
 """
-Phase 34: Storage Adapter
+Phase 34/35/36: Storage Adapter
 
 파일 저장 어댑터 인터페이스 및 구현체.
 
 지원 Provider:
 - local: 로컬 파일 시스템 (개발용) - FastAPI StaticFiles로 서빙 (/assets)
 - s3: AWS S3 (운영용) - S3_ENDPOINT_URL로 MinIO 호환 지원
+- backend_presigned: 백엔드가 발급한 Presigned URL로 업로드 (운영 권장)
 
-환경변수 (Phase 34):
-- STORAGE_PROVIDER: local | s3 (기본: local)
+환경변수:
+- STORAGE_PROVIDER: local | s3 | backend_presigned
 - STORAGE_LOCAL_DIR: 로컬 저장 경로 (기본: ./data/assets)
-- STORAGE_PUBLIC_BASE_URL: 파일 접근 기본 URL (기본: /assets)
+- STORAGE_PUBLIC_BASE_URL: 파일 접근 기본 URL (기본: /assets, 또는 S3 public base URL)
+
+S3 직접 업로드(s3) 사용 시:
 - AWS_S3_BUCKET: S3 버킷 이름
 - AWS_S3_REGION: S3 리전 (기본: ap-northeast-2)
 - S3_ENDPOINT_URL: MinIO 호환 S3 엔드포인트 (선택)
 - AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY: 인증
+
+backend_presigned 사용 시:
+- BACKEND_BASE_URL: 백엔드 서비스 URL
+- BACKEND_SERVICE_TOKEN: 내부 API 인증 토큰 (선택/권장)
 """
 
 import asyncio
@@ -298,6 +305,7 @@ class S3StorageProvider(BaseStorageProvider):
         self._prefix = self.config.s3_prefix
         self._endpoint_url = self.config.s3_endpoint_url or os.getenv("S3_ENDPOINT_URL")
         self._public_base_url = self.config.s3_public_base_url or os.getenv("STORAGE_PUBLIC_BASE_URL")
+        self._aws_profile = os.getenv("AWS_PROFILE")
 
         if not self._bucket:
             raise ValueError("S3 bucket not configured. Set AWS_S3_BUCKET.")
@@ -316,7 +324,13 @@ class S3StorageProvider(BaseStorageProvider):
                 client_kwargs["endpoint_url"] = self._endpoint_url
                 logger.info(f"S3 using custom endpoint: {self._endpoint_url}")
 
-            self._client = boto3.client("s3", **client_kwargs)
+            # AWS_PROFILE이 설정된 경우 해당 shared credentials profile 사용
+            if self._aws_profile:
+                session = boto3.Session(profile_name=self._aws_profile)
+                self._client = session.client("s3", **client_kwargs)
+                logger.info(f"S3 using AWS_PROFILE: {self._aws_profile}")
+            else:
+                self._client = boto3.client("s3", **client_kwargs)
         return self._client
 
     async def put_object(
@@ -381,7 +395,7 @@ class S3StorageProvider(BaseStorageProvider):
         """URL 생성.
 
         Phase 34: public_base_url이 설정되면 직접 URL 구성,
-        아니면 presigned URL 생성.
+        아니면 s3:// 형태의 짧은 URL 반환.
         """
         full_key = f"{self._prefix}{key}" if self._prefix else key
 
@@ -390,18 +404,8 @@ class S3StorageProvider(BaseStorageProvider):
             base = self._public_base_url.rstrip("/")
             return f"{base}/{full_key}"
 
-        # 기본: presigned URL
-        client = self._get_client()
-        loop = asyncio.get_event_loop()
-
-        def _generate_url():
-            return client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": self._bucket, "Key": full_key},
-                ExpiresIn=expires_in,
-            )
-
-        return await loop.run_in_executor(None, _generate_url)
+        # 기본: DB 저장/콜백용으로 짧은 s3:// URL 사용 (쿼리 포함 presigned URL은 길이 초과 문제 유발)
+        return f"s3://{self._bucket}/{full_key}"
 
     async def delete_object(self, key: str) -> bool:
         """S3 객체 삭제."""
@@ -621,6 +625,9 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
         settings = get_settings()
 
         self._backend_base_url = settings.backend_base_url
+        # 내부 API 인증: 기본은 X-Internal-Token (권장/표준)
+        self._internal_token = settings.BACKEND_INTERNAL_TOKEN
+        # 레거시/옵션: Authorization Bearer 토큰 (환경에 따라 사용)
         self._service_token = settings.BACKEND_SERVICE_TOKEN
         self._presign_path = settings.BACKEND_STORAGE_PRESIGN_PATH
         self._complete_path = settings.BACKEND_STORAGE_COMPLETE_PATH
@@ -641,6 +648,10 @@ class BackendPresignedStorageProvider(BaseStorageProvider):
     def _get_headers(self) -> dict:
         """Internal API 요청 헤더 반환."""
         headers = {"Content-Type": "application/json"}
+        # 내부 통신 표준: X-Internal-Token
+        if self._internal_token:
+            headers["X-Internal-Token"] = self._internal_token
+        # 일부 환경에서 Authorization을 추가로 요구할 수 있어 함께 지원
         if self._service_token:
             headers["Authorization"] = f"Bearer {self._service_token}"
         return headers
@@ -1187,7 +1198,11 @@ def get_storage_provider(
         - VIDEO_MAX_UPLOAD_BYTES: 업로드 최대 용량
     """
     if provider is None:
-        provider_str = os.getenv("STORAGE_PROVIDER", "local").lower()
+        # env 미설정 시에는 settings 기본값을 따르도록 합니다.
+        from app.core.config import get_settings
+        settings = get_settings()
+
+        provider_str = os.getenv("STORAGE_PROVIDER", settings.STORAGE_PROVIDER).lower()
         try:
             provider = StorageProvider(provider_str)
         except ValueError:
@@ -1205,7 +1220,8 @@ def get_storage_provider(
             local_path=settings.STORAGE_LOCAL_DIR,
             # Phase 34: storage_public_base_url 프로퍼티 사용
             base_url=settings.storage_public_base_url,
-            s3_bucket=os.getenv("AWS_S3_BUCKET"),
+            # env 우선, 없으면 settings 기본값 사용
+            s3_bucket=os.getenv("AWS_S3_BUCKET") or settings.AWS_S3_BUCKET,
             s3_region=os.getenv("AWS_S3_REGION", "ap-northeast-2"),
             s3_prefix=settings.AWS_S3_PREFIX,
             s3_endpoint_url=settings.S3_ENDPOINT_URL,

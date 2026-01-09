@@ -1,7 +1,10 @@
+import os
 import requests
 
 url = "https://api.heygen.com/v1/video/generate"
-api_key = "sk_V2_hgu_ko6LfWBvdAc_ASijbAefxErsoX8AHw7lTTHfUSPop2h9"
+api_key = os.getenv("HEYGEN_API_KEY", "").strip()
+if not api_key:
+    raise RuntimeError("HEYGEN_API_KEY가 설정되지 않았습니다. .env 또는 환경변수로 설정해주세요.")
 
 payload = {
     "video_inputs": [

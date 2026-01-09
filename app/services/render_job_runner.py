@@ -25,6 +25,7 @@ Phase 34 변경사항:
 """
 
 import asyncio
+import os
 import shutil
 import uuid
 from datetime import datetime
@@ -162,6 +163,11 @@ class RenderJobRunner:
     def set_renderer(self, renderer: VideoRenderer) -> None:
         """렌더러 설정."""
         self._renderer = renderer
+        try:
+            renderer_name = renderer.__class__.__name__
+        except Exception:
+            renderer_name = str(type(renderer))
+        logger.info(f"RenderJobRunner renderer set: {renderer_name}")
 
     # =========================================================================
     # Job Creation
@@ -1001,6 +1007,17 @@ class RenderJobRunner:
         """
         job_dir = self._output_dir / job_id
         if job_dir.exists():
+            # 디버깅을 위해 실패 케이스 산출물을 유지하고 싶으면 환경변수로 끌 수 있게 한다.
+            # 예: KEEP_RENDER_JOB_OUTPUT=1
+            keep = (os.getenv("KEEP_RENDER_JOB_OUTPUT") or "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "y",
+            )
+            if keep:
+                logger.info(f"KEEP_RENDER_JOB_OUTPUT enabled, skipping cleanup: {job_dir}")
+                return
             try:
                 shutil.rmtree(job_dir)
                 logger.info(f"Cleaned up job files: {job_dir}")
