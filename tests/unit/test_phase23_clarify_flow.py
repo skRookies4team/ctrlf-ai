@@ -497,3 +497,130 @@ class TestClarifyGroupDetermination:
         orchestrator = RouterOrchestrator()
         group = orchestrator._determine_clarify_group(Tier0Intent.UNKNOWN)
         assert group == ClarifyGroup.UNKNOWN
+
+
+# =============================================================================
+# Phase 53: "알려" 키워드가 각 도메인에서 올바르게 처리되는지 테스트
+# =============================================================================
+
+
+class TestPhase53AllyeoKeywordMapping:
+    """Phase 53: '알려' 키워드가 각 ClarifyGroup에서 올바르게 매핑되는지 테스트."""
+
+    @pytest.mark.anyio
+    async def test_policy_group_allyeo_maps_to_rag_internal(self):
+        """POLICY 그룹에서 '알려' → RAG_INTERNAL로 라우팅."""
+        store = PendingActionStore()
+        orchestrator = RouterOrchestrator(pending_store=store)
+
+        # POLICY 도메인의 되묻기 pending 생성
+        pending = PendingAction(
+            action_type=PendingActionType.CLARIFY,
+            trace_id="test-trace-policy",
+            pending_intent=Tier0Intent.POLICY_QA,
+            original_query="연차 알려줘",
+            clarify_group=ClarifyGroup.POLICY,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
+            router_result=RouterResult(
+                tier0_intent=Tier0Intent.POLICY_QA,
+                domain=RouterDomain.POLICY,
+            ),
+        )
+        store.set("session-policy-allyeo", pending)
+
+        # "알려줘" 응답 - POLICY 도메인에서 RAG_INTERNAL로 처리되어야 함
+        result = await orchestrator.route(
+            user_query="알려줘",
+            session_id="session-policy-allyeo",
+        )
+
+        # POLICY 도메인에서 "알려"는 RAG_INTERNAL로 라우팅되어야 함
+        assert result.router_result.route_type == RouterRouteType.RAG_INTERNAL
+        assert result.can_execute is True
+
+    @pytest.mark.anyio
+    async def test_edu_group_allyeo_maps_to_rag_internal(self):
+        """EDU 그룹에서 '알려' → RAG_INTERNAL로 라우팅."""
+        store = PendingActionStore()
+        orchestrator = RouterOrchestrator(pending_store=store)
+
+        pending = PendingAction(
+            action_type=PendingActionType.CLARIFY,
+            trace_id="test-trace-edu",
+            pending_intent=Tier0Intent.EDUCATION_QA,
+            original_query="교육 알려줘",
+            clarify_group=ClarifyGroup.EDU,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
+            router_result=RouterResult(
+                tier0_intent=Tier0Intent.EDUCATION_QA,
+                domain=RouterDomain.EDU,
+            ),
+        )
+        store.set("session-edu-allyeo", pending)
+
+        result = await orchestrator.route(
+            user_query="알려줘",
+            session_id="session-edu-allyeo",
+        )
+
+        # EDU 도메인에서 "알려"는 RAG_INTERNAL로 라우팅되어야 함
+        assert result.router_result.route_type == RouterRouteType.RAG_INTERNAL
+        assert result.can_execute is True
+
+    @pytest.mark.anyio
+    async def test_profile_group_allyeo_maps_to_backend_status(self):
+        """PROFILE 그룹에서 '알려' → BACKEND_STATUS로 라우팅 (개인정보 조회)."""
+        store = PendingActionStore()
+        orchestrator = RouterOrchestrator(pending_store=store)
+
+        pending = PendingAction(
+            action_type=PendingActionType.CLARIFY,
+            trace_id="test-trace-profile",
+            pending_intent=Tier0Intent.BACKEND_STATUS,
+            original_query="내 정보 알려줘",
+            clarify_group=ClarifyGroup.PROFILE,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
+            router_result=RouterResult(
+                tier0_intent=Tier0Intent.BACKEND_STATUS,
+                domain=RouterDomain.HR,
+            ),
+        )
+        store.set("session-profile-allyeo", pending)
+
+        result = await orchestrator.route(
+            user_query="알려줘",
+            session_id="session-profile-allyeo",
+        )
+
+        # PROFILE 도메인에서 "알려"는 BACKEND_API로 라우팅되어야 함 (개인정보 조회)
+        assert result.router_result.route_type == RouterRouteType.BACKEND_API
+        assert result.can_execute is True
+
+    @pytest.mark.anyio
+    async def test_incident_group_allyeo_maps_to_rag_internal(self):
+        """INCIDENT 그룹에서 '알려' → RAG_INTERNAL로 라우팅."""
+        store = PendingActionStore()
+        orchestrator = RouterOrchestrator(pending_store=store)
+
+        pending = PendingAction(
+            action_type=PendingActionType.CLARIFY,
+            trace_id="test-trace-incident",
+            pending_intent=Tier0Intent.POLICY_QA,
+            original_query="보안사고 알려줘",
+            clarify_group=ClarifyGroup.INCIDENT,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
+            router_result=RouterResult(
+                tier0_intent=Tier0Intent.POLICY_QA,
+                domain=RouterDomain.POLICY,
+            ),
+        )
+        store.set("session-incident-allyeo", pending)
+
+        result = await orchestrator.route(
+            user_query="알려줘",
+            session_id="session-incident-allyeo",
+        )
+
+        # INCIDENT 도메인에서 "알려"는 RAG_INTERNAL로 라우팅되어야 함
+        assert result.router_result.route_type == RouterRouteType.RAG_INTERNAL
+        assert result.can_execute is True

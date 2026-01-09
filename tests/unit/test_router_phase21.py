@@ -54,10 +54,13 @@ class TestRuleRouterAmbiguousBoundaries:
     """애매한 경계 감지 테스트 (경계 A, B)."""
 
     def test_boundary_a_education_ambiguous(self):
-        """경계 A: '교육 알려줘' - 내용인지 이수현황인지 애매함."""
+        """경계 A: '교육 알려줘' - 애매하지만 RAG로 라우팅 (Phase 53).
+
+        Phase 53: needs_clarify 대신 RAG_INTERNAL로 라우팅하고,
+        LLM이 자연스럽게 "어떤 교육을 원하시나요?" 등으로 되물음.
+        """
         router = RuleRouter()
 
-        # Note: '학습 현황 알려줘'는 EDU_STATUS_CHECK으로 명확히 분류됨
         ambiguous_queries = [
             "교육 알려줘",
             "교육 확인해줘",
@@ -66,7 +69,11 @@ class TestRuleRouterAmbiguousBoundaries:
 
         for query in ambiguous_queries:
             result = router.route(query)
-            assert result.needs_clarify is True, f"Query '{query}' should need clarification"
+            # Phase 53: needs_clarify=False, RAG로 라우팅
+            assert result.needs_clarify is False, f"Query '{query}' should NOT need clarification (Phase 53)"
+            assert result.route_type == RouterRouteType.RAG_INTERNAL
+            assert result.tier0_intent == Tier0Intent.EDUCATION_QA
+            assert "BOUNDARY_A_AMBIGUOUS_TO_RAG" in result.debug.rule_hits
 
     def test_boundary_a_education_content_clear(self):
         """경계 A: '교육내용 알려줘' - 명확히 교육 내용 질문."""
@@ -100,11 +107,13 @@ class TestRuleRouterAmbiguousBoundaries:
             assert result.tier0_intent == Tier0Intent.BACKEND_STATUS
 
     def test_boundary_b_leave_ambiguous(self):
-        """경계 B: '연차 알려줘' - 규정인지 내 잔여인지 애매함.
+        """경계 B: '연차 알려줘' - 애매하지만 RAG로 라우팅 (Phase 53).
+
+        Phase 53: needs_clarify 대신 RAG_INTERNAL로 라우팅하고,
+        LLM이 자연스럽게 "연차 규정을 원하시나요?" 등으로 되물음.
 
         Phase 50 업데이트:
         - '휴가 확인해줘'는 HR_PERSONAL_KEYWORDS에 '휴가 확인'이 추가되어 명확한 개인화로 분류됨
-        - 진짜 애매한 패턴만 테스트 (알려줘, 어떻게 되어있어 등)
         """
         router = RuleRouter()
 
@@ -112,13 +121,15 @@ class TestRuleRouterAmbiguousBoundaries:
             "연차 알려줘",
             "연차 어떻게 되어있어?",
             "휴가 있어?",
-            # Note: "휴가 확인해줘"는 Phase 50에서 명확한 개인화로 분류됨
         ]
 
         for query in ambiguous_queries:
             result = router.route(query)
-            assert result.needs_clarify is True, f"Query '{query}' should need clarification"
-            assert "BOUNDARY_B" in result.debug.rule_hits or result.domain == RouterDomain.HR
+            # Phase 53: needs_clarify=False, RAG로 라우팅
+            assert result.needs_clarify is False, f"Query '{query}' should NOT need clarification (Phase 53)"
+            assert result.route_type == RouterRouteType.RAG_INTERNAL
+            assert result.tier0_intent == Tier0Intent.POLICY_QA
+            assert "BOUNDARY_B_AMBIGUOUS_TO_RAG" in result.debug.rule_hits
 
     def test_boundary_b_policy_clear(self):
         """경계 B: '연차 이월 규정' - 명확히 정책 질문."""
@@ -458,19 +469,24 @@ class TestRouterOrchestrator:
 
     @pytest.mark.anyio
     async def test_clarify_response_stored(self):
-        """되묻기 필요 시 pending action 저장."""
+        """Phase 53: 애매한 질문도 RAG로 라우팅 (되묻기 없음).
+
+        Phase 53 변경: needs_clarify 메커니즘 제거.
+        애매한 질문도 RAG_INTERNAL로 라우팅하고,
+        LLM이 자연스럽게 "어떤 교육을 원하시나요?" 등으로 되물음.
+        """
         orchestrator = RouterOrchestrator(rule_router=RuleRouter())
 
         result = await orchestrator.route(
-            user_query="교육 알려줘",  # 애매한 질문
+            user_query="교육 알려줘",  # 애매한 질문 → RAG로 라우팅
             session_id="test-session-clarify",
         )
 
-        assert result.needs_user_response is True
-        assert result.can_execute is False
-        assert result.pending_action is not None
-        assert result.pending_action.action_type == PendingActionType.CLARIFY
-        assert "교육" in result.response_message or "이수현황" in result.response_message
+        # Phase 53: 되묻기 없이 RAG로 바로 라우팅
+        assert result.needs_user_response is False
+        assert result.can_execute is True
+        assert result.router_result.route_type == RouterRouteType.RAG_INTERNAL
+        assert result.router_result.tier0_intent == Tier0Intent.EDUCATION_QA
 
     @pytest.mark.anyio
     async def test_confirmation_response_stored(self):
@@ -638,12 +654,19 @@ class TestExampleInputs:
         assert result.needs_clarify is False
 
     def test_example_3_education_ambiguous(self):
-        """예시 3: 교육 관련 애매한 질문."""
+        """예시 3: 교육 관련 애매한 질문 → RAG로 라우팅 (Phase 53).
+
+        Phase 53 변경: needs_clarify 대신 RAG_INTERNAL로 라우팅.
+        LLM이 자연스럽게 "어떤 교육을 원하시나요?" 등으로 되물음.
+        """
         router = RuleRouter()
         result = router.route("교육 알려줘")
 
-        assert result.needs_clarify is True
-        assert result.clarify_question != ""
+        # Phase 53: 되묻기 없이 RAG로 라우팅
+        assert result.needs_clarify is False
+        assert result.tier0_intent == Tier0Intent.EDUCATION_QA
+        assert result.route_type == RouterRouteType.RAG_INTERNAL
+        assert "BOUNDARY_A_AMBIGUOUS_TO_RAG" in result.debug.rule_hits
 
     def test_example_4_quiz_start(self):
         """예시 4: 퀴즈 시작 (OPEN_QUIZ 액션으로 패널 바로 열기).

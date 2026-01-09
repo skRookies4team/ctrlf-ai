@@ -279,24 +279,36 @@ class TestRuleRouterPersonalization:
         assert result.sub_intent_id == SubIntentId.EDU_STATUS_CHECK.value
 
     def test_boundary_a_clarify(self):
-        """경계 A (교육 내용 vs 이수현황) 되묻기."""
+        """경계 A: 애매한 교육 질문 → RAG로 라우팅 (Phase 53).
+
+        Phase 53 변경: needs_clarify 대신 RAG_INTERNAL로 라우팅.
+        LLM이 자연스럽게 "어떤 교육을 원하시나요?" 등으로 되물음.
+        """
         from app.services.rule_router import RuleRouter
 
         router = RuleRouter()
 
         result = router.route("교육 알려줘")
-        assert result.needs_clarify is True
-        assert result.clarify_question in ClarifyTemplates.EDUCATION_CONTENT_VS_STATUS
+        # Phase 53: 되묻기 없이 RAG로 라우팅
+        assert result.needs_clarify is False
+        assert result.tier0_intent == Tier0Intent.EDUCATION_QA
+        assert result.route_type == RouterRouteType.RAG_INTERNAL
 
     def test_boundary_b_clarify(self):
-        """경계 B (규정 vs HR 개인화) 되묻기."""
+        """경계 B: 애매한 연차 질문 → RAG로 라우팅 (Phase 53).
+
+        Phase 53 변경: needs_clarify 대신 RAG_INTERNAL로 라우팅.
+        LLM이 자연스럽게 "연차 규정을 원하시나요?" 등으로 되물음.
+        """
         from app.services.rule_router import RuleRouter
 
         router = RuleRouter()
 
         result = router.route("연차 알려줘")
-        assert result.needs_clarify is True
-        assert result.clarify_question in ClarifyTemplates.POLICY_VS_HR_PERSONAL
+        # Phase 53: 되묻기 없이 RAG로 라우팅
+        assert result.needs_clarify is False
+        assert result.tier0_intent == Tier0Intent.POLICY_QA
+        assert result.route_type == RouterRouteType.RAG_INTERNAL
 
 
 # =============================================================================
@@ -416,16 +428,24 @@ class TestOrchestratorPersonalization:
 
     @pytest.mark.asyncio
     async def test_clarify_flow(self):
-        """되묻기 플로우 테스트."""
+        """Phase 53: 애매한 질문도 RAG로 라우팅 (되묻기 없음).
+
+        Phase 53 변경: needs_clarify 메커니즘 제거.
+        애매한 질문도 RAG_INTERNAL로 라우팅하고,
+        LLM이 자연스럽게 "어떤 교육을 원하시나요?" 등으로 되물음.
+        """
         from app.services.router_orchestrator import RouterOrchestrator
 
         orchestrator = RouterOrchestrator()
 
-        # 애매한 질문
+        # 애매한 질문 → RAG로 라우팅
         result = await orchestrator.route(
             user_query="교육 알려줘",
             session_id="test-session-003",
         )
 
-        assert result.needs_user_response is True
-        assert result.response_message in ClarifyTemplates.EDUCATION_CONTENT_VS_STATUS
+        # Phase 53: 되묻기 없이 RAG로 바로 라우팅
+        assert result.needs_user_response is False
+        assert result.can_execute is True
+        assert result.router_result.route_type == RouterRouteType.RAG_INTERNAL
+        assert result.router_result.tier0_intent == Tier0Intent.EDUCATION_QA
