@@ -122,6 +122,7 @@ class RAGFlowIngestClient:
         trace_id: str,
         request_id: str,
         department: Optional[str] = None,
+        spring_document_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         RAGFlow에 문서 ingest를 요청합니다.
@@ -138,6 +139,7 @@ class RAGFlowIngestClient:
             trace_id: 추적 ID
             request_id: 요청 ID
             department: 부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)
+            spring_document_id: 백엔드 원본 문서 ID (예: POL-xxx) - 콜백 시 백엔드에 전달
 
         Returns:
             dict: RAGFlow 응답
@@ -164,6 +166,7 @@ class RAGFlowIngestClient:
                 "domain": domain,
                 "traceId": trace_id,
                 "requestId": request_id,
+                "spring_document_id": spring_document_id,  # 백엔드 원본 문서 ID
             },
         }
 
