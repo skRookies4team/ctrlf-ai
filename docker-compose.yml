@@ -37,8 +37,15 @@ services:
       # -----------------------------------------------------------------
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
-      - LOG_LEVEL=DEBUG
+      - APP_VERSION=${APP_VERSION:-0.1.0}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+
+      # -----------------------------------------------------------------
+      # Elasticsearch 설정
+      # -----------------------------------------------------------------
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_INDEX=${ELASTICSEARCH_INDEX:-ctrlf-chat-log-*}
 
       # -----------------------------------------------------------------
       # Milvus 벡터 DB 설정
@@ -48,6 +55,28 @@ services:
       - MILVUS_PORT=${MILVUS_PORT:-19540}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
       - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
+      - MILVUS_TOP_K=${MILVUS_TOP_K:-5}
+
+      # -----------------------------------------------------------------
+      # RAG 검색 설정
+      # -----------------------------------------------------------------
+      - RETRIEVAL_BACKEND=${RETRIEVAL_BACKEND:-milvus}
+      - RAG_DATASET_FILTER_ENABLED=${RAG_DATASET_FILTER_ENABLED:-true}
+      - RAG_EDUCATION_DATASET_IDS=${RAG_EDUCATION_DATASET_IDS:-직무교육,장애인인식개선교육,직장내괴롭힘교육,직장내성희롱교육,정보보안교육,사내규정}
+      - RAG_DEPARTMENT_FILTER_ENABLED=${RAG_DEPARTMENT_FILTER_ENABLED:-false}
+
+      # -----------------------------------------------------------------
+      # LLM 모델 설정
+      # -----------------------------------------------------------------
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct}
+      - SCRIPT_LLM_MODEL=${SCRIPT_LLM_MODEL:-LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct}
+
+      # -----------------------------------------------------------------
+      # 임베딩 설정
+      # -----------------------------------------------------------------
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-BAAI/bge-m3}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
 
       # -----------------------------------------------------------------
       # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
@@ -55,7 +84,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
       - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
 
       # -----------------------------------------------------------------
       # 외부 서비스 URL
@@ -81,7 +109,7 @@ services:
       - PII_ENABLED=${PII_ENABLED:-true}
 
       # -----------------------------------------------------------------
-      # Router 설정 (config.py 기본값과 일치)
+      # Router 설정
       # -----------------------------------------------------------------
       - ROUTER_ORCHESTRATOR_ENABLED=${ROUTER_ORCHESTRATOR_ENABLED:-false}
 
@@ -91,12 +119,40 @@ services:
       - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
 
       # -----------------------------------------------------------------
-      # Quality Gate 설정 (config.py 기본값과 일치)
+      # Quality Gate 설정
       # -----------------------------------------------------------------
       - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-true}
       - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
       - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
       - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
+
+      # -----------------------------------------------------------------
+      # HeyGen 영상 생성 설정
+      # -----------------------------------------------------------------
+      - VIDEO_RENDER_ENGINE=${VIDEO_RENDER_ENGINE:-heygen_pip}
+      - HEYGEN_API_KEY=${HEYGEN_API_KEY:-}
+      - HEYGEN_AVATAR_ID=${HEYGEN_AVATAR_ID:-}
+      - HEYGEN_VOICE_ID=${HEYGEN_VOICE_ID:-}
+      - HEYGEN_BG_TYPE=${HEYGEN_BG_TYPE:-color}
+      - HEYGEN_BG_VALUE=${HEYGEN_BG_VALUE:-#FFFFFF}
+      - HEYGEN_VIDEO_WIDTH=${HEYGEN_VIDEO_WIDTH:-1280}
+      - HEYGEN_VIDEO_HEIGHT=${HEYGEN_VIDEO_HEIGHT:-720}
+
+      # -----------------------------------------------------------------
+      # Storage/S3 설정 (영상 업로드)
+      # -----------------------------------------------------------------
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-s3}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-ctrl-s3}
+      - AWS_S3_REGION=${AWS_S3_REGION:-ap-northeast-2}
+      - AWS_PROFILE=${AWS_PROFILE:-}
+
+      # -----------------------------------------------------------------
+      # FAQ 자동 생성 설정
+      # -----------------------------------------------------------------
+      - FAQ_DOMAIN=${FAQ_DOMAIN:-POLICY}
+      - FAQ_INTENT=${FAQ_INTENT:-POLICY_QA}
+      - FAQ_LOG_FETCH_LIMIT=${FAQ_LOG_FETCH_LIMIT:-500}
+      - FAQ_LOOKBACK=${FAQ_LOOKBACK:-now-7d}
 
     networks:
       - ctrlf-net
