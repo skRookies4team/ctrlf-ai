@@ -172,6 +172,10 @@ class IngestRequest(BaseModel):
         None,
         description="부서 범위 (전체 부서, 총무팀, 기획팀, 마케팅팀, 인사팀, 재무팀, 개발팀, 영업팀, 법무팀)"
     )
+    fileExtension: Optional[str] = Field(
+        None,
+        description="파일 확장자 (예: .pdf) - RAGFlow가 파일 유형을 판단하는데 사용"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -560,8 +564,44 @@ async def ingest_rag_document(
         )
 
     # title 필드를 doc_id로 사용 (title이 없으면 sourceUrl에서 추출 - fallback)
+    # RAGFlow가 확장자를 보고 파일 유형을 판단하므로, 확장자를 title에 붙임
+    # 우선순위: 1) request.fileExtension 2) sourceUrl에서 추출
+
+    logger.info(
+        f"[DEBUG] Full request: {request.model_dump() if hasattr(request, 'model_dump') else request.dict()}"
+    )
+
     if request.title and request.title.strip():
-        doc_id_for_ragflow = request.title.strip()
+        title = request.title.strip()
+        
+        # 확장자 결정: fileExtension 우선, 없으면 sourceUrl에서 추출
+        ext = None
+        if request.fileExtension and request.fileExtension.strip():
+            ext = request.fileExtension.strip()
+            if not ext.startswith('.'):
+                ext = '.' + ext
+            logger.info(f"Using fileExtension from request: {ext}")
+        else:
+            # sourceUrl에서 확장자 추출 시도
+            try:
+                from urllib.parse import urlparse
+                import os
+                parsed_url = urlparse(request.sourceUrl)
+                filename = os.path.basename(parsed_url.path)
+                _, extracted_ext = os.path.splitext(filename)
+                if extracted_ext:
+                    ext = extracted_ext
+                    logger.info(f"Extracted extension from sourceUrl: {ext}")
+            except Exception as e:
+                logger.warning(f"Failed to extract extension from sourceUrl: {e}")
+        
+        # 확장자가 있으면 title에 붙이기 (이미 있으면 붙이지 않음)
+        if ext:
+            if not title.lower().endswith(ext.lower()):
+                title = f"{title}{ext}"
+                logger.info(f"Appended extension to title: {title}")
+        
+        doc_id_for_ragflow = title
         logger.info(
             f"Using title as doc_id: {doc_id_for_ragflow}, "
             f"original_document_id={request.documentId}, trace_id={request.traceId}"
@@ -597,6 +637,7 @@ async def ingest_rag_document(
                 trace_id=request.traceId,
                 request_id=request.requestId,
                 department=request.department,
+                spring_document_id=request.documentId,  # 백엔드 원본 문서 ID 전달
             )
             logger.info(
                 f"RAGFlow ingest request sent: doc_id={doc_id_for_ragflow}, "
@@ -805,10 +846,12 @@ async def ingest_callback(
             backend_client = get_backend_client()
             # UUID 형식 변환 (하이픈 없는 형식을 하이픈 있는 형식으로)
             formatted_rag_document_pk = format_uuid(request.meta.ragDocumentPk)
+            # spring_document_id가 있으면 사용 (사규 플로우), 없으면 docId 사용 (하위 호환)
+            backend_document_id = request.meta.spring_document_id or request.docId
             await backend_client.update_rag_document_status(
                 rag_document_pk=formatted_rag_document_pk,
                 status=request.status,
-                document_id=request.docId,
+                document_id=backend_document_id,
                 version=request.version,
                 processed_at=request.processedAt,
                 fail_reason=request.failReason,
