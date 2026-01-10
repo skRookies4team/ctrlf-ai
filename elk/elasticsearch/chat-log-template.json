@@ -1,0 +1,213 @@
+{
+  "index_patterns": ["chat_log*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.mapping.total_fields.limit": 2000
+    },
+    "mappings": {
+      "dynamic": "true",
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date",
+          "format": "strict_date_optional_time||epoch_millis"
+        },
+        "createdAt": {
+          "type": "date",
+          "format": "strict_date_optional_time||epoch_millis"
+        },
+        "role": {
+          "type": "keyword"
+        },
+        "content": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "questionMasked": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "question_masked": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "answerMasked": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "answer_masked": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "domain": {
+          "type": "keyword"
+        },
+        "intent": {
+          "type": "keyword"
+        },
+        "route": {
+          "type": "keyword"
+        },
+        "userId": {
+          "type": "keyword"
+        },
+        "user_id": {
+          "type": "keyword"
+        },
+        "sessionId": {
+          "type": "keyword"
+        },
+        "session_id": {
+          "type": "keyword"
+        },
+        "userRole": {
+          "type": "keyword"
+        },
+        "user_role": {
+          "type": "keyword"
+        },
+        "department": {
+          "type": "keyword"
+        },
+        "turn_index": {
+          "type": "integer"
+        },
+        "modelName": {
+          "type": "keyword"
+        },
+        "model_name": {
+          "type": "keyword"
+        },
+        "latencyMs": {
+          "type": "integer"
+        },
+        "latency_ms": {
+          "type": "integer"
+        },
+        "ragUsed": {
+          "type": "boolean"
+        },
+        "rag_used": {
+          "type": "boolean"
+        },
+        "ragSourceCount": {
+          "type": "integer"
+        },
+        "rag_source_count": {
+          "type": "integer"
+        },
+        "ragGapCandidate": {
+          "type": "boolean"
+        },
+        "rag_gap_candidate": {
+          "type": "boolean"
+        },
+        "usedDocIds": {
+          "type": "keyword"
+        },
+        "used_doc_ids": {
+          "type": "keyword"
+        },
+        "errorCode": {
+          "type": "keyword"
+        },
+        "error_code": {
+          "type": "keyword"
+        },
+        "errorMessage": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "error_message": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "hasPiiInput": {
+          "type": "boolean"
+        },
+        "has_pii_input": {
+          "type": "boolean"
+        },
+        "hasPiiOutput": {
+          "type": "boolean"
+        },
+        "has_pii_output": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "keyword"
+        },
+        "traceId": {
+          "type": "keyword"
+        },
+        "trace_id": {
+          "type": "keyword"
+        },
+        "channel": {
+          "type": "keyword"
+        },
+        "ab_model": {
+          "type": "keyword"
+        },
+        "ab_embedding_model": {
+          "type": "keyword"
+        },
+        "ab_collection_name": {
+          "type": "keyword"
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "chat_log index template for admin dashboard and FAQ auto-generation",
+    "version": "1.0.0"
+  }
+}
