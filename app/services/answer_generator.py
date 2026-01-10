@@ -12,7 +12,7 @@ LLM을 사용하여 facts에 있는 값만 사용해 답변을 구성합니다.
 
 import re
 from typing import Optional
-from app.schemas.enums import PersonalizationErrorType
+from app.models.personalization import PersonalizationErrorType
 from app.clients.llm_client import LLMClient
 from app.core.logging import get_logger
 from app.models.personalization import (
