@@ -5,12 +5,18 @@
 # 사용법:
 #   docker compose up -d
 #
-# 필수 환경변수 설정:
-#   export RAGFLOW_BASE_URL_REAL=http://ragflow-server:8080
-#   export LLM_BASE_URL_REAL=http://llm-server:8001
-#   export BACKEND_BASE_URL_REAL=http://backend-server:8080
-#   export RAGFLOW_API_KEY=your-api-key
-#   export OPENAI_API_KEY=your-openai-key
+# 필수 환경변수 설정 (.env 파일 또는 export):
+#   RAGFLOW_BASE_URL_REAL=http://ragflow-server:8080
+#   LLM_BASE_URL_REAL=http://llm-server:8001
+#   BACKEND_BASE_URL_REAL=http://backend-server:8080
+#   RAGFLOW_API_KEY=your-api-key
+#   OPENAI_API_KEY=your-openai-key
+#
+# 보안 토큰 (프로덕션 필수):
+#   BACKEND_INTERNAL_TOKEN=your-internal-token
+#   AI_CALLBACK_TOKEN=your-callback-token
+#   BACKEND_SERVICE_TOKEN=your-service-token
+#   BACKEND_API_TOKEN=your-api-token
 #
 # =============================================================================
 
@@ -26,44 +32,128 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # -----------------------------------------------------------------
+      # 앱 기본 설정
+      # -----------------------------------------------------------------
       - APP_NAME=ctrlf-ai-gateway
       - APP_ENV=docker
-      - LOG_LEVEL=DEBUG
+      - APP_VERSION=${APP_VERSION:-0.1.0}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+
+      # -----------------------------------------------------------------
+      # Elasticsearch 설정
+      # -----------------------------------------------------------------
       - ELASTICSEARCH_URL=http://elasticsearch:9200
-      # Milvus 설정
+      - ELASTICSEARCH_INDEX=${ELASTICSEARCH_INDEX:-ctrlf-chat-log-*}
+
+      # -----------------------------------------------------------------
+      # Milvus 벡터 DB 설정
+      # -----------------------------------------------------------------
       - MILVUS_ENABLED=${MILVUS_ENABLED:-true}
       - MILVUS_HOST=${MILVUS_HOST:-58.127.241.84}
       - MILVUS_PORT=${MILVUS_PORT:-19540}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME:-ragflow_chunks_openai}
       - MILVUS_SEARCH_PARAMS={"metric_type":"L2","params":{"nprobe":10}}
+      - MILVUS_TOP_K=${MILVUS_TOP_K:-5}
+
+      # -----------------------------------------------------------------
+      # RAG 검색 설정
+      # -----------------------------------------------------------------
+      - RETRIEVAL_BACKEND=${RETRIEVAL_BACKEND:-milvus}
+      - RAG_DATASET_FILTER_ENABLED=${RAG_DATASET_FILTER_ENABLED:-true}
+      - RAG_EDUCATION_DATASET_IDS=${RAG_EDUCATION_DATASET_IDS:-직무교육,장애인인식개선교육,직장내괴롭힘교육,직장내성희롱교육,정보보안교육,사내규정}
+      - RAG_DEPARTMENT_FILTER_ENABLED=${RAG_DEPARTMENT_FILTER_ENABLED:-false}
+
+      # -----------------------------------------------------------------
+      # LLM 모델 설정
+      # -----------------------------------------------------------------
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct}
+      - SCRIPT_LLM_MODEL=${SCRIPT_LLM_MODEL:-LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct}
+
+      # -----------------------------------------------------------------
+      # 임베딩 설정
+      # -----------------------------------------------------------------
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-BAAI/bge-m3}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
+
+      # -----------------------------------------------------------------
       # OpenAI 임베딩 설정 (text-embedding-3-large, 3072차원)
+      # -----------------------------------------------------------------
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_EMBED_MODEL=${OPENAI_EMBED_MODEL:-text-embedding-3-large}
       - OPENAI_EMBED_DIM=${OPENAI_EMBED_DIM:-3072}
-      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-3072}
+
+      # -----------------------------------------------------------------
       # 외부 서비스 URL
+      # -----------------------------------------------------------------
       - RAGFLOW_BASE_URL_REAL=${RAGFLOW_BASE_URL_REAL}
       - LLM_BASE_URL_REAL=${LLM_BASE_URL_REAL}
       - BACKEND_BASE_URL_REAL=${BACKEND_BASE_URL_REAL}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1237}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
       - RAGFLOW_API_KEY=${RAGFLOW_API_KEY}
-      # 인증 토큰
+
+      # -----------------------------------------------------------------
+      # 인증 토큰 (보안: 기본값 없음, 반드시 .env에서 설정)
+      # -----------------------------------------------------------------
       - BACKEND_INTERNAL_TOKEN=${BACKEND_INTERNAL_TOKEN:-}
-      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-ctrlf-r2a-w3e5t7y9u2i4}
-      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-ctrlf-a2b-z6x8c1v3b5n7}
-      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-ctrlf-a2b-h4j6k8l0m2n4}
-      # PII 설정
+      - AI_CALLBACK_TOKEN=${AI_CALLBACK_TOKEN:-}
+      - BACKEND_SERVICE_TOKEN=${BACKEND_SERVICE_TOKEN:-}
+      - BACKEND_API_TOKEN=${BACKEND_API_TOKEN:-}
+
+      # -----------------------------------------------------------------
+      # PII 마스킹 설정
+      # -----------------------------------------------------------------
       - PII_BASE_URL=
-      - PII_ENABLED=true
-      # RouterOrchestrator 활성화
-      - ROUTER_ORCHESTRATOR_ENABLED=true
+      - PII_ENABLED=${PII_ENABLED:-true}
+
+      # -----------------------------------------------------------------
+      # Router 설정
+      # -----------------------------------------------------------------
+      - ROUTER_ORCHESTRATOR_ENABLED=${ROUTER_ORCHESTRATOR_ENABLED:-false}
+
+      # -----------------------------------------------------------------
       # 개인화 모드: auto (백엔드 시도 후 실패시 fallback), real (백엔드 필수)
+      # -----------------------------------------------------------------
       - PERSONALIZATION_MODE=${PERSONALIZATION_MODE:-auto}
+
+      # -----------------------------------------------------------------
       # Quality Gate 설정
-      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-false}
+      # -----------------------------------------------------------------
+      - RAG_QUALITY_HARD_DROP_ENABLED=${RAG_QUALITY_HARD_DROP_ENABLED:-true}
       - RAG_QUALITY_DISTANCE_GATE_ENABLED=${RAG_QUALITY_DISTANCE_GATE_ENABLED:-true}
       - RAG_QUALITY_L2_WARN=${RAG_QUALITY_L2_WARN:-1.4}
       - RAG_QUALITY_L2_REJECT=${RAG_QUALITY_L2_REJECT:-1.6}
+
+      # -----------------------------------------------------------------
+      # HeyGen 영상 생성 설정
+      # -----------------------------------------------------------------
+      - VIDEO_RENDER_ENGINE=${VIDEO_RENDER_ENGINE:-heygen_pip}
+      - HEYGEN_API_KEY=${HEYGEN_API_KEY:-}
+      - HEYGEN_AVATAR_ID=${HEYGEN_AVATAR_ID:-}
+      - HEYGEN_VOICE_ID=${HEYGEN_VOICE_ID:-}
+      - HEYGEN_BG_TYPE=${HEYGEN_BG_TYPE:-color}
+      - HEYGEN_BG_VALUE=${HEYGEN_BG_VALUE:-#FFFFFF}
+      - HEYGEN_VIDEO_WIDTH=${HEYGEN_VIDEO_WIDTH:-1280}
+      - HEYGEN_VIDEO_HEIGHT=${HEYGEN_VIDEO_HEIGHT:-720}
+
+      # -----------------------------------------------------------------
+      # Storage/S3 설정 (영상 업로드)
+      # -----------------------------------------------------------------
+      - STORAGE_PROVIDER=${STORAGE_PROVIDER:-s3}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-ctrl-s3}
+      - AWS_S3_REGION=${AWS_S3_REGION:-ap-northeast-2}
+      - AWS_PROFILE=${AWS_PROFILE:-}
+
+      # -----------------------------------------------------------------
+      # FAQ 자동 생성 설정
+      # -----------------------------------------------------------------
+      - FAQ_DOMAIN=${FAQ_DOMAIN:-POLICY}
+      - FAQ_INTENT=${FAQ_INTENT:-POLICY_QA}
+      - FAQ_LOG_FETCH_LIMIT=${FAQ_LOG_FETCH_LIMIT:-500}
+      - FAQ_LOOKBACK=${FAQ_LOOKBACK:-now-7d}
+
     networks:
       - ctrlf-net
     depends_on:
@@ -77,7 +167,7 @@ services:
       start_period: 10s
 
   # =============================================================================
-  # Elasticsearch - 로그 저장소
+  # Elasticsearch
   # =============================================================================
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
@@ -96,16 +186,15 @@ services:
       timeout: 5s
       retries: 5
 
+
   # =============================================================================
-  # Kibana - 로그 시각화
+  # Kibana
   # =============================================================================
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.3
     container_name: ctrlf-kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://ctrlf-elasticsearch:9200
-      - SERVER_NAME=ctrlf-kibana
-      - SERVER_HOST=0.0.0.0
     ports:
       - "5601:5601"
     networks:
@@ -115,7 +204,7 @@ services:
         condition: service_healthy
 
   # =============================================================================
-  # Prometheus - 메트릭 수집
+  # Prometheus
   # =============================================================================
   prometheus:
     image: prom/prometheus:latest
@@ -128,22 +217,35 @@ services:
       - ctrlf-net
 
   # =============================================================================
-  # Grafana - 메트릭 시각화
+  # Grafana  ✅ (여기로 와야 함)
   # =============================================================================
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.2.3
     container_name: ctrlf-grafana
     ports:
       - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
     networks:
       - ctrlf-net
     depends_on:
       - prometheus
 
 # =============================================================================
-# 네트워크 설정
+# 네트워크
 # =============================================================================
 networks:
   ctrlf-net:
     driver: bridge
     name: ctrlf-network
+
+# =============================================================================
+# 볼륨 (맨 아래)
+# =============================================================================
+volumes:
+  grafana-data:

@@ -292,8 +292,17 @@ class TestStreamingExceptionHandling:
                 async for chunk in service.stream_chat(request):
                     chunks.append(chunk)
 
-            # Then: CHAT_TURN 1회 발행
-            assert mock_publisher.enqueue.call_count == 1, "CHAT_TURN should be emitted exactly once"
+            # Then: CHAT_TURN 이벤트만 필터링하여 1회 발행 검증
+            # Note: SECURITY 이벤트 등 다른 이벤트도 enqueue될 수 있으므로 타입으로 필터링
+            chat_turn_calls = [
+                call for call in mock_publisher.enqueue.call_args_list
+                if hasattr(call[0][0], 'event_type') and call[0][0].event_type == "CHAT_TURN"
+            ]
+            assert len(chat_turn_calls) == 1, (
+                f"CHAT_TURN should be emitted exactly once, "
+                f"but got {len(chat_turn_calls)} CHAT_TURN events "
+                f"(total enqueue calls: {mock_publisher.enqueue.call_count})"
+            )
 
         # Cleanup
         reset_request_context()

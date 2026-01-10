@@ -355,6 +355,28 @@ class ChatAnswerMeta(BaseModel):
         description="Frontend action to execute (e.g., PLAY_VIDEO for auto-playing education video)",
     )
 
+    # Phase 59: RAG Quality Gate (frontend banner/telemetry)
+    rag_quality_grade: Optional[str] = Field(
+        default=None,
+        description="RAG quality grade: OK (good), LOW (warning), INSUFFICIENT (reject)",
+    )
+    rag_quality_action: Optional[str] = Field(
+        default=None,
+        description="RAG quality action: PROCEED, PROCEED_WITH_WARNING, REJECT",
+    )
+    rag_quality_min_l2: Optional[float] = Field(
+        default=None,
+        description="Minimum L2 distance of retrieved sources (lower is better)",
+    )
+    rag_quality_warning: Optional[str] = Field(
+        default=None,
+        description="Warning message for LOW quality (for frontend banner display)",
+    )
+    rag_quality_insufficient: Optional[bool] = Field(
+        default=None,
+        description="True if evidence is insufficient and LLM generation was skipped",
+    )
+
 
 class ChatResponse(BaseModel):
     """

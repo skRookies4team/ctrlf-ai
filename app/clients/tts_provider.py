@@ -18,6 +18,7 @@ Text-to-Speech 서비스 어댑터 인터페이스 및 구현체.
 import asyncio
 import io
 import os
+import subprocess
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -127,7 +128,35 @@ class BaseTTSProvider(ABC):
             float: 오디오 길이 (초)
         """
         result = await self.synthesize(text, voice, speed, language)
-        Path(output_path).write_bytes(result.audio_bytes)
+        out = Path(output_path)
+        out.write_bytes(result.audio_bytes)
+
+        # 가능하면 ffprobe로 실제 duration을 측정 (gTTS 등은 추정치만 제공)
+        try:
+            ffprobe = os.getenv("FFPROBE_PATH", "ffprobe")
+            proc = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "quiet",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=nw=1:nk=1",
+                    str(out),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if proc.returncode == 0:
+                actual = float(proc.stdout.strip())
+                if actual > 0:
+                    return actual
+        except Exception:
+            # ffprobe 미설치/파일 포맷 미지원 등은 추정치로 폴백
+            pass
+
         return result.duration_sec
 
 
@@ -449,7 +478,11 @@ def get_tts_provider(provider: Optional[TTSProvider] = None) -> BaseTTSProvider:
         TTS_PROVIDER: mock | polly | gcp | gtts
     """
     if provider is None:
-        provider_str = os.getenv("TTS_PROVIDER", "mock").lower()
+        # app.core.config 의 기본값(TTS_PROVIDER)을 따르되, 환경변수가 있으면 그 값을 우선합니다.
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        provider_str = os.getenv("TTS_PROVIDER", getattr(settings, "TTS_PROVIDER", "mock")).lower()
         try:
             provider = TTSProvider(provider_str)
         except ValueError:

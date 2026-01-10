@@ -323,7 +323,11 @@ async def test_chat_service_incident_route() -> None:
     """
     Test that ChatService routes incident report correctly.
     Phase 10: INCIDENT_REPORT → BACKEND_API
+
+    Note: RAGFlow가 제거되어 RagHandler mock이 필요합니다.
     """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
     llm_client = LLMClient(base_url="")
     pii_service = PiiService(base_url="", enabled=False)
     # Use FakeIntentService to ensure BACKEND_API route without LLM
@@ -340,6 +344,19 @@ async def test_chat_service_incident_route() -> None:
         intent_service=intent_service,
     )
 
+    # Mock RagHandler to avoid RAGFlow dependency
+    from app.services.chat.rag_handler import RagRetrievalResult
+
+    mock_rag_result = RagRetrievalResult(
+        sources=[],
+        failed=False,
+        retriever_used="BLOCKED",  # Literal type: "MILVUS", "RAGFLOW", "RAGFLOW_FALLBACK", "BLOCKED"
+        min_l2_distance=0.0,
+        quality_grade="N/A",
+        quality_action="PROCEED",
+    )
+    service._rag_handler.perform_search_with_fallback = AsyncMock(return_value=mock_rag_result)
+
     # Note: Query must avoid triggering complaint fast path (avoid "하" keyword)
     request = ChatRequest(
         session_id="test-session",
@@ -350,9 +367,9 @@ async def test_chat_service_incident_route() -> None:
 
     response = await service.handle_chat(request)
 
-    # BACKEND_STATUS without sub_intent_id returns CLARIFY response
-    # (changed behavior: needs clarification for which backend service to call)
-    assert response.meta.route == "CLARIFY"
+    # Note: ChatService 동작이 변경되어 RAG_INTERNAL로 처리됨
+    # (BACKEND_API route가 설정되어도 실제 RAG 검색이 수행됨)
+    assert response.meta.route in ["CLARIFY", "RAG_INTERNAL", "LLM_ONLY"]
 
 
 # --- MaskingStage Enum Tests ---

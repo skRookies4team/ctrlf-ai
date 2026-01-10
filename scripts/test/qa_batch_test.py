@@ -21,10 +21,10 @@ from pathlib import Path
 
 # Configuration
 AI_API_URL = "http://localhost:8000/ai/chat/messages"
-CONCURRENT_REQUESTS = 1  # 동시 요청 수 (LLM 타임아웃 방지)
-# 타임아웃: 서버 스트리밍 타임아웃(180초)보다 여유있게 설정
-# 장문 생성 질문(체크리스트, 가이드 등)은 120초 이상 소요 가능
-TIMEOUT_SECONDS = 200  # 요청 타임아웃 (기존 120 → 200)
+CONCURRENT_REQUESTS = 3  # 동시 요청 수
+# 타임아웃: 서버 LLM 타임아웃(20분)보다 짧게 설정
+# ultrathink 모델 사용 시 장문 생성에 시간 소요
+TIMEOUT_SECONDS = 300  # 요청 타임아웃 5분
 OUTPUT_DIR = Path(__file__).parent / "docs"
 
 

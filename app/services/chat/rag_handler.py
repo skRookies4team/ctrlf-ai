@@ -423,6 +423,7 @@ def apply_low_relevance_gate(
     sources: List["ChatSource"],
     query: str,
     domain: str,
+    faq_mode: bool = False,
 ) -> Tuple[List["ChatSource"], Optional[str]]:
     """
     Phase 48/50/52.1: 저관련 검색 결과를 필터링합니다. (L2 거리 기준)
@@ -441,6 +442,10 @@ def apply_low_relevance_gate(
       - Gate B: 앵커 키워드 미매칭 → HARD_DROP (sources=[])
     - RAG가 억지로 근거 없는 정책 안내를 하는 것 방지
 
+    FAQ 모드 (faq_mode=True):
+    - FAQ 초안 생성 시 더 관대한 필터링 적용
+    - anchor_gate HARD_DROP 대신 최소 1개 소스 유지 (관리자가 검토 가능하도록)
+
     두 가지 게이트를 적용:
     A. L2 거리 게이트: min_score > threshold → soft/hard 강등
     B. 앵커 키워드 게이트: 핵심어 미매칭 → soft/hard 강등
@@ -449,6 +454,7 @@ def apply_low_relevance_gate(
         sources: RAG 검색 결과
         query: 원본 쿼리
         domain: 검색 도메인
+        faq_mode: FAQ 생성 모드 (True면 더 관대한 필터링)
 
     Returns:
         Tuple[List[ChatSource], Optional[str]]:
@@ -509,6 +515,20 @@ def apply_low_relevance_gate(
     has_anchor_match = check_anchor_keywords_in_sources(anchor_keywords, sources)
 
     if not has_anchor_match:
+        # FAQ 모드: 관리자가 검토할 수 있도록 최소 1개는 유지
+        if faq_mode:
+            kept_sources = sources[:1]  # 최소 1개는 유지
+            query_safe = ascii_safe_preview(query, 50)
+            keywords_safe = {ascii_safe_preview(kw, 20) for kw in anchor_keywords}
+            logger.info(
+                f"[LowRelevanceGate] FAQ_MODE: Keeping min 1 source despite anchor mismatch | "
+                f"anchor_keywords={keywords_safe} not found in sources | "
+                f"query='{query_safe}' | domain={domain} | "
+                f"min_score={min_score:.3f} | avg_score={avg_score:.3f} | "
+                f"top_k={len(sources)} | kept_count={len(kept_sources)}"
+            )
+            return kept_sources, "no_anchor_term_match_faq_mode"
+        
         # Phase 52.1: hard_drop_enabled면 완전 drop
         if hard_drop_enabled:
             query_safe = ascii_safe_preview(query, 50)
@@ -717,11 +737,14 @@ class RagHandler:
 
         # Phase 48: Low-relevance Gate 적용
         # 저관련 검색 결과를 sources=[]로 강등
+        # FAQ 모드 감지: req가 None이고 특정 패턴이면 FAQ 생성 모드로 간주
+        faq_mode = req is None  # FAQ 생성 시 req=None이므로 이를 감지
         if sources and not failed:
             sources, gate_reason = apply_low_relevance_gate(
                 sources=sources,
                 query=query,  # 원본 쿼리 사용 (마스킹 토큰 포함)
                 domain=domain,
+                faq_mode=faq_mode,
             )
             # gate_reason은 로깅용으로만 사용 (함수 내에서 이미 로깅됨)
 

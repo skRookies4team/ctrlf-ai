@@ -1550,7 +1550,8 @@ class SourceSetOrchestrator:
 JSON 스크립트:"""
 
         # 3. LLM 호출
-        llm_client = LLMClient()
+        # 스크립트 생성은 장문 생성(스크립트/아웃라인)에 해당하므로 장문 타임아웃(기본 120초) 적용
+        llm_client = LLMClient(timeout=settings.TIMEOUT_LLM_LONGFORM_SEC)
         model = job.llm_model_hint or "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct"
 
         try:
@@ -1570,6 +1571,21 @@ JSON 스크립트:"""
             if not script_json:
                 logger.warning("Failed to parse LLM response, using fallback")
                 return self._generate_fallback_script(job, document_chunks)
+
+            # HeyGen 180초 제한 대응: 챕터/씬 수 제한 (기본: 챕터 1개, 챕터당 씬 4개)
+            try:
+                max_chapters = int(getattr(settings, "SCRIPT_MAX_CHAPTERS", 0) or 0)
+                max_scenes_per_chapter = int(getattr(settings, "SCRIPT_MAX_SCENES_PER_CHAPTER", 0) or 0)
+                if isinstance(script_json, dict) and isinstance(script_json.get("chapters"), list):
+                    if max_chapters > 0:
+                        script_json["chapters"] = script_json["chapters"][:max_chapters]
+                    if max_scenes_per_chapter > 0:
+                        for ch in script_json["chapters"]:
+                            if isinstance(ch, dict) and isinstance(ch.get("scenes"), list):
+                                ch["scenes"] = ch["scenes"][:max_scenes_per_chapter]
+            except Exception:
+                # 제한 적용 실패 시에도 생성 흐름은 유지
+                pass
 
             # 5. GeneratedScript 모델로 변환 (sourceRefs 후처리)
             chapters = []

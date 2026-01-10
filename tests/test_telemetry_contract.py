@@ -145,6 +145,7 @@ def test_chat_turn_event_serialization():
                         ],
                         "contextExcerpt": "연차는 입사일 기준으로 1년 근무 시 15일이 부여됩니다.",
                     },
+                    "usedDocIds": [],
                 },
             }
         ],

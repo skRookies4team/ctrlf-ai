@@ -1,0 +1,96 @@
+{
+  "index_patterns": ["ctrlf-faq-log-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.mapping.total_fields.limit": 1000
+    },
+    "mappings": {
+      "dynamic": "true",
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date",
+          "format": "strict_date_optional_time||epoch_millis"
+        },
+        "createdAt": {
+          "type": "date",
+          "format": "strict_date_optional_time||epoch_millis"
+        },
+        "log_type": {
+          "type": "keyword"
+        },
+        "domain": {
+          "type": "keyword"
+        },
+        "intent": {
+          "type": "keyword"
+        },
+        "question_masked": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "questionMasked": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 512
+            }
+          }
+        },
+        "user_id": {
+          "type": "keyword"
+        },
+        "userId": {
+          "type": "keyword"
+        },
+        "session_id": {
+          "type": "keyword"
+        },
+        "sessionId": {
+          "type": "keyword"
+        },
+        "role": {
+          "type": "keyword"
+        },
+        "source": {
+          "type": "keyword"
+        },
+        "channel": {
+          "type": "keyword"
+        },
+        "department": {
+          "type": "keyword"
+        },
+        "user_role": {
+          "type": "keyword"
+        },
+        "userRole": {
+          "type": "keyword"
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "ctrlf-faq-log index template for FAQ auto-generation (daily rolling index)",
+    "version": "1.0.0"
+  }
+}

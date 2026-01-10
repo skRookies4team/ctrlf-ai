@@ -308,21 +308,43 @@ class TestQuizGenerateService:
         sample_llm_response: str,
     ) -> None:
         """기본 퀴즈 생성 테스트 (간소화된 API)."""
+        # 서비스가 N개 보장 루프로 동작하므로 각 호출마다 다른 응답 필요
+        responses = [
+            json.dumps({
+                "questions": [{
+                    "stem": f"USB 메모리 반출 시 필요한 조치는? (문항 {i})",
+                    "options": [
+                        {"text": "정보보호팀의 사전 승인", "is_correct": True},
+                        {"text": "팀장에게 구두 보고만 한다", "is_correct": False},
+                        {"text": "개인 판단에 따라 자유롭게 반출한다", "is_correct": False},
+                        {"text": "사후에만 보고하면 된다", "is_correct": False},
+                    ],
+                    "difficulty": "EASY",
+                    "explanation": f"USB 반출 시에는 반드시 정보보호팀의 사전 승인을 받아야 합니다. (문항 {i})",
+                }]
+            }) for i in range(10)
+        ]
+
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.return_value = sample_llm_response
+        mock_llm.generate_chat_completion.side_effect = responses
 
         # Phase 16 테스트에서는 QC 비활성화 (Phase 17에서 별도 테스트)
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        # 의미적 중복 검사도 비활성화 (테스트 단순화)
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            enable_semantic_dedup=False,
+        )
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            num_questions=5,
+            num_questions=2,  # 2개만 요청
             quiz_candidate_blocks=blocks,
         )
 
         response = await service.generate_quiz(request)
 
-        assert response.generated_count == 2  # LLM 응답에 2개 문항
+        assert response.generated_count == 2
         assert len(response.questions) == 2
 
         # 첫 번째 문항 검증
@@ -386,11 +408,17 @@ class TestQuizGenerateService:
         mock_llm = AsyncMock()
         mock_llm.generate_chat_completion.side_effect = Exception("LLM Error")
 
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        # max_attempts를 줄여서 테스트 속도 향상
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            max_attempts_per_question=1,
+            max_total_attempts=2,
+        )
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            num_questions=5,
+            num_questions=1,
             quiz_candidate_blocks=blocks,
         )
 
@@ -496,11 +524,13 @@ class TestDuplicatePrevention:
         sample_quiz_candidate_blocks: List[Dict[str, Any]],
     ) -> None:
         """완전 일치 중복 필터링 테스트."""
-        # LLM이 기존 문항과 동일한 stem을 생성
-        llm_response = json.dumps({
-            "questions": [
-                {
-                    "stem": "USB 메모리를 사외로 반출할 때 필요한 조치는?",  # 기존과 동일
+        # 서비스가 N개 보장 루프로 동작하므로 각 호출마다 다른 응답 필요
+        # 첫 번째 응답은 기존 문항과 동일 (필터링될 것)
+        # 두 번째 응답은 새로운 문항
+        responses = [
+            json.dumps({
+                "questions": [{
+                    "stem": "USB 메모리를 사외로 반출할 때 필요한 조치는?",  # 기존과 동일 (필터링됨)
                     "options": [
                         {"text": "승인", "is_correct": True},
                         {"text": "무시", "is_correct": False},
@@ -508,8 +538,10 @@ class TestDuplicatePrevention:
                         {"text": "확인", "is_correct": False},
                     ],
                     "difficulty": "EASY",
-                },
-                {
+                }]
+            }),
+            json.dumps({
+                "questions": [{
                     "stem": "클라우드 업로드 금지 대상은?",  # 새로운 문항
                     "options": [
                         {"text": "개인정보", "is_correct": True},
@@ -518,18 +550,23 @@ class TestDuplicatePrevention:
                         {"text": "일반 문서", "is_correct": False},
                     ],
                     "difficulty": "NORMAL",
-                },
-            ]
-        })
+                }]
+            }),
+        ]
 
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.return_value = llm_response
+        mock_llm.generate_chat_completion.side_effect = responses
 
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            enable_semantic_dedup=False,
+            max_attempts_per_question=2,
+        )
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            num_questions=5,
+            num_questions=1,  # 1개만 요청
             quiz_candidate_blocks=blocks,
             exclude_previous_questions=[
                 ExcludePreviousQuestion(
@@ -541,7 +578,7 @@ class TestDuplicatePrevention:
 
         response = await service.generate_quiz(request)
 
-        # 중복 문항이 필터링되어 1개만 남아야 함
+        # 중복 문항이 필터링되고 새로운 문항이 생성됨
         assert response.generated_count == 1
         assert "클라우드" in response.questions[0].stem
 
@@ -570,9 +607,11 @@ class TestQuestionValidation:
         sample_quiz_candidate_blocks: List[Dict[str, Any]],
     ) -> None:
         """정답이 없는 문항 필터링 테스트."""
-        llm_response = json.dumps({
-            "questions": [
-                {
+        # 첫 번째 응답: 정답이 없는 문항 (필터링됨)
+        # 두 번째 응답: 정상 문항
+        responses = [
+            json.dumps({
+                "questions": [{
                     "stem": "정답이 없는 문항",
                     "options": [
                         {"text": "오답1", "is_correct": False},
@@ -581,32 +620,41 @@ class TestQuestionValidation:
                         {"text": "오답4", "is_correct": False},
                     ],
                     "difficulty": "EASY",
-                },
-                {
+                }]
+            }),
+            json.dumps({
+                "questions": [{
                     "stem": "정상 문항",
                     "options": [
                         {"text": "정답", "is_correct": True},
-                        {"text": "오답", "is_correct": False},
+                        {"text": "오답1", "is_correct": False},
+                        {"text": "오답2", "is_correct": False},
+                        {"text": "오답3", "is_correct": False},
                     ],
                     "difficulty": "NORMAL",
-                },
-            ]
-        })
+                }]
+            }),
+        ]
 
         mock_llm = AsyncMock()
-        mock_llm.generate_chat_completion.return_value = llm_response
+        mock_llm.generate_chat_completion.side_effect = responses
 
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            enable_semantic_dedup=False,
+            max_attempts_per_question=2,
+        )
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            num_questions=5,
+            num_questions=1,
             quiz_candidate_blocks=blocks,
         )
 
         response = await service.generate_quiz(request)
 
-        # 정답이 없는 문항은 필터링됨
+        # 정답이 없는 문항은 필터링되고 정상 문항이 생성됨
         assert response.generated_count == 1
         assert response.questions[0].stem == "정상 문항"
 
@@ -846,11 +894,17 @@ class TestQuizGenerateErrorCases:
         mock_llm = AsyncMock()
         mock_llm.generate_chat_completion.side_effect = ConnectionError("Connection failed")
 
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        # max_attempts를 줄여서 테스트 속도 향상
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            max_attempts_per_question=1,
+            max_total_attempts=2,
+        )
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            num_questions=5,
+            num_questions=1,
             quiz_candidate_blocks=blocks,
         )
 
@@ -869,11 +923,17 @@ class TestQuizGenerateErrorCases:
         mock_llm = AsyncMock()
         mock_llm.generate_chat_completion.side_effect = TimeoutError("Request timed out")
 
-        service = QuizGenerateService(llm_client=mock_llm, qc_enabled=False)
+        # max_attempts를 줄여서 테스트 속도 향상
+        service = QuizGenerateService(
+            llm_client=mock_llm,
+            qc_enabled=False,
+            max_attempts_per_question=1,
+            max_total_attempts=2,
+        )
 
         blocks = [QuizCandidateBlock(**b) for b in sample_quiz_candidate_blocks]
         request = QuizGenerateRequest(
-            num_questions=5,
+            num_questions=1,
             quiz_candidate_blocks=blocks,
         )
 

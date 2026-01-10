@@ -77,14 +77,14 @@ def mask_phone_partially(phone: str) -> str:
     
     예시:
     - 010-1234-5678 → 010-****-5678
-    - 01012345678 → 010****5678
+    - 01012345678 → 010-****-5678
     - 02-1234-5678 → 02-****-5678
     
     Args:
         phone: 원본 전화번호
     
     Returns:
-        부분 마스킹된 전화번호
+        부분 마스킹된 전화번호 (앞 3자리와 뒤 4자리 표시, 가운데 4자리 마스킹)
     """
     if not phone:
         return phone
@@ -98,17 +98,23 @@ def mask_phone_partially(phone: str) -> str:
     
     # 한국 전화번호 형식: 010-1234-5678 (3-4-4) 또는 02-1234-5678 (2-4-4)
     if len(digits) == 11:
-        # 휴대폰: 010-1234-5678
+        # 휴대폰: 010-1234-5678 → 010-****-5678
         return f"{digits[:3]}-****-{digits[7:]}"
     elif len(digits) == 10:
-        # 지역번호: 02-1234-5678
+        # 지역번호: 02-1234-5678 → 02-****-5678
         if digits.startswith("02"):
             return f"{digits[:2]}-****-{digits[6:]}"
         else:
-            return f"{digits[:3]}-***-{digits[6:]}"
+            return f"{digits[:3]}-****-{digits[6:]}"
+    elif len(digits) == 8:
+        # 8자리 전화번호 (예: 1588-1234)
+        return f"{digits[:4]}-****"
     else:
-        # 기타 형식: 앞 3자리만 보여주고 나머지 마스킹
-        return f"{digits[:3]}{'*' * (len(digits) - 3)}"
+        # 기타 형식: 앞 3자리와 뒤 4자리만 표시
+        if len(digits) >= 7:
+            return f"{digits[:3]}-****-{digits[-4:]}"
+        else:
+            return f"{digits[:3]}-****"
 
 
 def mask_emails_in_text(text: str) -> str:
@@ -239,13 +245,39 @@ class AnswerGenerator:
         # 에러가 있으면 에러 템플릿 반환
         if facts.error:
             error_type = facts.error.type
-            return ERROR_RESPONSE_TEMPLATES.get(
-                error_type,
-                "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
+            error_message = facts.error.message or ""
+            logger.warning(
+                f"Personalization facts has error: sub_intent_id={context.sub_intent_id}, "
+                f"error_type={error_type}, error_message={error_message}"
             )
+            
+            # Q17 (부서 정보)의 경우 특별 처리: 기간과 무관한 정보이므로 더 적절한 메시지 사용
+            if context.sub_intent_id == "Q17" and error_type == PersonalizationErrorType.NOT_FOUND.value:
+                # 백엔드에서 보낸 메시지가 있으면 사용, 없으면 기본 메시지
+                if error_message and "부서" in error_message:
+                    user_message = error_message
+                else:
+                    user_message = "소속 부서 정보를 찾을 수 없어요. 인사팀에 문의해 주세요."
+            else:
+                # 에러 타입별 사용자 메시지
+                user_message = ERROR_RESPONSE_TEMPLATES.get(
+                    error_type,
+                    "조회 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요.",
+                )
+            
+            logger.info(
+                f"Returning error response: sub_intent_id={context.sub_intent_id}, "
+                f"error_type={error_type}, user_message_length={len(user_message)}"
+            )
+            return user_message
 
         # facts가 비어있으면 기본 메시지
         if not facts.metrics and not facts.items:
+            logger.warning(
+                f"Personalization facts is empty: sub_intent_id={context.sub_intent_id}, "
+                f"metrics_keys={list(facts.metrics.keys()) if facts.metrics else []}, "
+                f"items_count={len(facts.items) if facts.items else 0}"
+            )
             return "조회된 데이터가 없어요."
 
         # Q16 (인사 정보 조회)는 LLM을 건너뛰고 바로 fallback 사용
@@ -368,6 +400,9 @@ class AnswerGenerator:
 
         formatter = fallback_templates.get(sub_intent_id)
         if formatter:
+            # Q16은 user_question을 전달하여 질문에 맞는 답변만 반환
+            if sub_intent_id == "Q16":
+                return formatter(facts, user_question)
             return formatter(facts)
 
         # 기본 폴백
@@ -601,6 +636,8 @@ class AnswerGenerator:
                     lines.append(f"- [{type_label}] {title}")
             return "\n".join(lines)
 
+        if employee_name:
+            return f"{employee_name}님은 이번 주 할 일이 {count}건 있습니다."
         return f"이번 주 할 일이 {count}건 있어요."
 
     def _format_q10_fallback(self, facts: PersonalizationFacts) -> str:
@@ -744,7 +781,10 @@ class AnswerGenerator:
             else:
                 lines.append(f"- [{leave_type}] {date_str} ({days_str})")
 
-        lines.append(f"\n잔여 연차: {remaining}일")
+        if employee_name:
+            lines.append(f"\n{employee_name}님의 잔여 연차: {remaining}일")
+        else:
+            lines.append(f"\n잔여 연차: {remaining}일")
         return "\n".join(lines)
 
     def _format_q14_fallback(self, facts: PersonalizationFacts) -> str:
@@ -829,7 +869,10 @@ class AnswerGenerator:
             else:
                 lines.append(f"- {date_str} {merchant}: {amount:,}원")
 
-        lines.append(f"\n잔여 포인트: {remaining:,}원")
+        if employee_name:
+            lines.append(f"\n{employee_name}님의 잔여 포인트: {remaining:,}원")
+        else:
+            lines.append(f"\n잔여 포인트: {remaining:,}원")
         return "\n".join(lines)
 
     def _format_q16_fallback(self, facts: PersonalizationFacts, user_question: str = "") -> str:
@@ -909,19 +952,32 @@ class AnswerGenerator:
         years_of_service = metrics.get("years_of_service", 0)
         months_of_service = metrics.get("months_of_service", 0)
         
+        # 사용자 이름 가져오기
+        employee_name = extra.get("employee_name") or metrics.get("name", "")
+        
         lines = []
         
+        # 질문에 맞는 답변만 반환 (이름은 항상 포함)
         # 직급/직책 정보 (요청되었거나 모든 정보 표시 시)
         if (show_all or 'position' in requested_fields):
             if position and not is_empty_value(position):
-                lines.append(f"직급: {position}")
-            if job_title and not is_empty_value(job_title):
-                lines.append(f"직책: {job_title}")
+                if employee_name:
+                    lines.append(f"{employee_name}님의 직급은 {position}입니다.")
+                else:
+                    lines.append(f"직급: {position}")
+            elif job_title and not is_empty_value(job_title):
+                if employee_name:
+                    lines.append(f"{employee_name}님의 직책은 {job_title}입니다.")
+                else:
+                    lines.append(f"직책: {job_title}")
         
         # 부서 정보 (요청되었거나 모든 정보 표시 시)
         if (show_all or 'department' in requested_fields):
             if department and not is_empty_value(department):
-                lines.append(f"부서: {department}")
+                if employee_name:
+                    lines.append(f"{employee_name}님의 부서는 {department}입니다.")
+                else:
+                    lines.append(f"부서: {department}")
         
         # 입사일 정보 (요청되었거나 모든 정보 표시 시)
         if (show_all or 'hire_date' in requested_fields):
@@ -960,7 +1016,10 @@ class AnswerGenerator:
             
             if email and not is_empty_value(email):
                 masked_email = mask_email_partially(str(email))
-                lines.append(f"이메일: {masked_email}")
+                if employee_name:
+                    lines.append(f"{employee_name}님의 이메일은 {masked_email}입니다.")
+                else:
+                    lines.append(f"이메일: {masked_email}")
                 email_found = True
             elif 'email' in requested_fields:
                 # metrics와 extra에 없으면 items에서 찾기
@@ -970,7 +1029,10 @@ class AnswerGenerator:
                         value = item.get("value", "")
                         if ('이메일' in label.lower() or 'email' in label.lower()) and value and not is_empty_value(value):
                             masked_email = mask_email_partially(str(value))
-                            lines.append(f"이메일: {masked_email}")
+                            if employee_name:
+                                lines.append(f"{employee_name}님의 이메일은 {masked_email}입니다.")
+                            else:
+                                lines.append(f"이메일: {masked_email}")
                             email_found = True
                             break
                 if not email_found:
@@ -986,7 +1048,10 @@ class AnswerGenerator:
             
             if phone and not is_empty_value(phone):
                 masked_phone = mask_phone_partially(str(phone))
-                lines.append(f"전화번호: {masked_phone}")
+                if employee_name:
+                    lines.append(f"{employee_name}님의 전화번호는 {masked_phone}입니다.")
+                else:
+                    lines.append(f"전화번호: {masked_phone}")
                 phone_found = True
             elif 'phone' in requested_fields:
                 # metrics와 extra에 없으면 items에서 찾기
@@ -996,7 +1061,10 @@ class AnswerGenerator:
                         value = item.get("value", "")
                         if ('전화' in label.lower() or 'phone' in label.lower() or '연락처' in label.lower() or '휴대폰' in label.lower()) and value and not is_empty_value(value):
                             masked_phone = mask_phone_partially(str(value))
-                            lines.append(f"전화번호: {masked_phone}")
+                            if employee_name:
+                                lines.append(f"{employee_name}님의 전화번호는 {masked_phone}입니다.")
+                            else:
+                                lines.append(f"전화번호: {masked_phone}")
                             phone_found = True
                             break
                 if not phone_found:
@@ -1056,10 +1124,16 @@ class AnswerGenerator:
                 # 이메일/전화번호인 경우 부분 마스킹
                 if '이메일' in label.lower() or 'email' in label.lower():
                     masked_value = mask_email_partially(str(value))
-                    lines.append(f"{label}: {masked_value}")
+                    if employee_name:
+                        lines.append(f"{employee_name}님의 이메일은 {masked_value}입니다.")
+                    else:
+                        lines.append(f"{label}: {masked_value}")
                 elif '전화' in label.lower() or 'phone' in label.lower() or '연락처' in label.lower() or '휴대폰' in label.lower():
                     masked_value = mask_phone_partially(str(value))
-                    lines.append(f"{label}: {masked_value}")
+                    if employee_name:
+                        lines.append(f"{employee_name}님의 전화번호는 {masked_value}입니다.")
+                    else:
+                        lines.append(f"{label}: {masked_value}")
                 elif label and value:
                     lines.append(f"{label}: {value}")
         
@@ -1074,32 +1148,100 @@ class AnswerGenerator:
         metrics = facts.metrics
         items = facts.items
         
-        team_name = metrics.get("team_name", "")
-        department = metrics.get("department", "")
-        team_leader = metrics.get("team_leader", "")
-        team_size = metrics.get("team_size", 0)
-        department_size = metrics.get("department_size", 0)
+        # 백엔드 응답 필드명에 맞춰서 가져오기 (여러 가능한 필드명 지원)
+        department = (
+            metrics.get("department") or 
+            metrics.get("department_name") or 
+            metrics.get("dept_name") or 
+            ""
+        )
+        team_name = (
+            metrics.get("team_name") or 
+            metrics.get("team") or 
+            department or  # 부서명을 팀명으로도 사용
+            ""
+        )
+        team_leader = (
+            metrics.get("team_leader") or 
+            metrics.get("team_lead") or 
+            metrics.get("leader") or 
+            ""
+        )
+        team_leader_position = metrics.get("team_lead_position") or metrics.get("leader_position") or ""
+        team_size = (
+            metrics.get("team_size") or 
+            metrics.get("total_members") or 
+            metrics.get("member_count") or 
+            0
+        )
+        department_size = (
+            metrics.get("department_size") or 
+            metrics.get("dept_size") or 
+            team_size or  # 부서 인원이 없으면 팀 인원 사용
+            0
+        )
+        parent_department = metrics.get("parent_department") or metrics.get("parent_dept") or ""
+        department_code = metrics.get("department_code") or metrics.get("dept_code") or ""
         
         lines = []
         
-        if team_name:
-            lines.append(f"팀명: {team_name}")
+        # 부서 정보 (가장 중요)
         if department:
             lines.append(f"부서: {department}")
+            if department_code:
+                lines[-1] += f" ({department_code})"
+        
+        # 상위 부서 정보
+        if parent_department:
+            lines.append(f"상위 부서: {parent_department}")
+        
+        # 팀장 정보
         if team_leader:
-            lines.append(f"팀장: {team_leader}")
+            leader_info = f"팀장: {team_leader}"
+            if team_leader_position:
+                leader_info += f" ({team_leader_position})"
+            lines.append(leader_info)
+        
+        # 인원 정보
         if team_size > 0:
             lines.append(f"팀 인원: {team_size}명")
-        if department_size > 0:
+            if metrics.get("full_time") or metrics.get("contract"):
+                full_time = metrics.get("full_time", 0)
+                contract = metrics.get("contract", 0)
+                if full_time > 0 or contract > 0:
+                    lines[-1] += f" (정규직 {full_time}명, 계약직 {contract}명)"
+        
+        if department_size > 0 and department_size != team_size:
             lines.append(f"부서 인원: {department_size}명")
         
-        # items에서 추가 정보 추출
+        # items에서 추가 정보 추출 (팀원 목록 등)
         if items:
-            for item in items:
-                label = item.get("label", "")
-                value = item.get("value", "")
-                if label and value:
-                    lines.append(f"{label}: {value}")
+            # 팀원 목록이 있는 경우
+            if items and isinstance(items[0], dict) and "name" in items[0]:
+                lines.append("")
+                lines.append("팀원 목록:")
+                for item in items[:10]:  # 최대 10명만 표시
+                    name = item.get("name", "")
+                    position = item.get("position", "")
+                    job_title = item.get("job_title", "")
+                    is_leader = item.get("is_leader", False)
+                    
+                    if name:
+                        member_info = f"- {name}"
+                        if position:
+                            member_info += f" ({position})"
+                        if job_title and job_title != position:
+                            member_info += f" - {job_title}"
+                        if is_leader:
+                            member_info += " [팀장]"
+                        lines.append(member_info)
+            else:
+                # 일반 items (label-value 형식)
+                for item in items:
+                    label = item.get("label", "")
+                    value = item.get("value", "")
+                    if label and value:
+                        lines.append(f"{label}: {value}")
         
         if lines:
             return "\n".join(lines)
@@ -1270,34 +1412,6 @@ class AnswerGenerator:
 
         return "\n".join(lines)
 
-    def _format_q16_fallback(self, facts: PersonalizationFacts) -> str:
-        """Q16 (내 인사 정보 조회) 폴백."""
-        employee_name = facts.extra.get("employee_name")
-        department = facts.metrics.get("department", "")
-        position = facts.metrics.get("position", "")
-        join_date = facts.metrics.get("join_date", "")
-        employee_id = facts.metrics.get("employee_id", "")
-
-        if employee_name:
-            lines = [f"{employee_name}님의 인사 정보입니다."]
-        else:
-            lines = ["인사 정보:"]
-
-        if employee_id:
-            lines.append(f"- 사번: {employee_id}")
-        if department:
-            lines.append(f"- 부서: {department}")
-        if position:
-            lines.append(f"- 직급: {position}")
-        if join_date:
-            lines.append(f"- 입사일: {join_date}")
-
-        if len(lines) == 1:
-            if employee_name:
-                return f"{employee_name}님의 인사 정보를 조회할 수 없습니다."
-            return "인사 정보를 조회할 수 없어요."
-
-        return "\n".join(lines)
 
     def _format_q17_fallback(self, facts: PersonalizationFacts) -> str:
         """Q17 (내 팀/부서 정보 조회) 폴백."""

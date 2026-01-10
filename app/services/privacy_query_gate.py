@@ -90,8 +90,27 @@ LIST_ACTION_TERMS: Set[str] = {
     "어느", "어디", "뭐야", "뭔지", "무엇",
 }
 
-# 민감 속성 (교육/점수/평가/징계 등 인사성 정보)
-SENSITIVE_ATTRIBUTE_TERMS: Set[str] = {
+# =============================================================================
+# Phase 60: 민감 속성 레벨 분리
+# =============================================================================
+
+# 레벨 1: 직접적 개인정보 (이름만 있어도 차단)
+# - "홍길동 이메일" → Action 없이도 명백한 개인정보 요청
+DIRECT_PII_TERMS: Set[str] = {
+    # 연락처 정보
+    "이메일", "전화번호", "연락처", "휴대폰", "핸드폰", "폰번호",
+    # 주소/위치 정보
+    "주소", "거주지", "집주소", "자택",
+    # 급여/금전 정보
+    "급여", "연봉", "월급", "보너스", "인센티브", "수당",
+    # 식별 정보
+    "주민번호", "주민등록번호", "사번", "사원번호",
+}
+
+# 레벨 2: 상태/성과 정보 (이름 + Action 있을 때만 차단)
+# - "홍길동 담당 교육 뭐야?" → 허용 (업무 질문)
+# - "홍길동 교육 이수 현황 알려줘" → 차단 (개인정보 요청)
+STATUS_INFO_TERMS: Set[str] = {
     # 교육 관련
     "교육", "이수", "미이수", "수료", "미수료", "진도", "수강",
     "시청률", "영상", "강의", "학습", "훈련",
@@ -99,14 +118,22 @@ SENSITIVE_ATTRIBUTE_TERMS: Set[str] = {
     "퀴즈", "점수", "성적", "오답", "정답", "테스트", "시험",
     "평가", "결과", "합격", "불합격", "탈락",
     # 성과/인사 관련
-    "성과", "실적", "평가", "등급", "고과", "KPI",
+    "성과", "실적", "등급", "고과", "KPI",
     "징계", "경고", "주의", "불이익",
-    # 기타 민감 정보
-    "급여", "연봉", "보너스", "인센티브",
-    # 개인 식별 정보
-    "id", "아이디", "이름", "성명", "주소", "주민번호",
-    "이메일", "전화번호", "연락처", "휴대폰",
+    # 기본 인사 정보
     "직급", "직책", "부서", "입사일", "근속",
+    "id", "아이디", "이름", "성명",
+}
+
+# 전체 민감 속성 (기존 호환성 유지)
+SENSITIVE_ATTRIBUTE_TERMS: Set[str] = DIRECT_PII_TERMS | STATUS_INFO_TERMS
+
+# 업무 맥락 키워드 (이 키워드가 있으면 개인정보 요청이 아닌 업무 질문으로 간주)
+# "홍길동 팀장님 담당 교육이 뭐야?" → 업무 질문, 허용
+WORK_CONTEXT_TERMS: Set[str] = {
+    "담당", "진행", "맡은", "책임", "관리",
+    "주관", "주최", "기획", "운영", "개설",
+    "만든", "작성", "올린", "등록",
 }
 
 # 1인칭 표현 (본인 요청은 허용)
@@ -118,6 +145,60 @@ FIRST_PERSON_TERMS: Set[str] = {
 THIRD_PERSON_TERMS: Set[str] = {
     "다른", "타", "그", "저", "해당", "특정",
     "전체", "모든", "각", "개별",
+}
+
+# 한국 성씨 목록 (한글 이름 감지용)
+# 이름 감지는 성씨로 시작하는 패턴만 이름으로 인식
+KOREAN_SURNAMES: Set[str] = {
+    "김", "이", "박", "최", "정", "강", "조", "윤", "장", "임",
+    "한", "오", "서", "신", "권", "황", "안", "송", "류", "전",
+    "홍", "고", "문", "양", "손", "배", "백", "허", "유", "남",
+    "심", "노", "하", "곽", "성", "차", "주", "우", "구", "민",
+    "진", "나", "원", "천", "방", "공", "현", "함", "변", "염",
+}
+
+# 성씨로 시작하지만 이름이 아닌 흔한 단어들
+# 이 단어들은 성씨 검사에서 제외됨
+NON_NAME_WORDS: Set[str] = {
+    # 교육/업무 관련
+    "교육", "현황", "정보", "성과", "문서", "문제", "방법", "방침",
+    "고객", "고과", "배포", "배치", "원본", "원칙", "공개", "공유",
+    "심사", "심각", "변경", "변수", "함수", "함께", "진행", "진도",
+    "정책", "정리", "정답", "정보보안", "정보보호", "개인정보", "개인정보보호",
+    # 이수/수료 관련 (이(성씨)+수 조합)
+    "이수", "미이수", "이수자", "미이수자", "이메일",
+    # 기술 관련
+    "서버", "서비스", "문의", "조회", "조치", "진단", "손실",
+    # 상태/수치 관련
+    "최고", "최저", "최신", "최근", "고성과", "저성과", "하위", "상위",
+    # 기타 자주 사용되는 단어
+    "전체", "전화", "전문", "전략", "백업", "백서", "유지", "유출",
+    "남은", "남용", "차단", "주요", "주의", "우선", "구현", "구성",
+    "민감", "민원", "양식", "양성", "황폐", "황당",
+    # 기타 복합어
+    "내용", "내역", "나의", "나열",
+    # Phase 60: 한(韓) 성씨로 시작하는 흔한 단어들 (이름 오인식 방지)
+    "한번", "한달", "한해", "한시간", "한주", "한쪽", "한국", "한글",
+    "한계", "한도", "한정", "한마디", "한눈", "한편", "한동안",
+    # Phase 60: 이(李) 성씨로 시작하는 흔한 단어들
+    "이번", "이번주", "이번달", "이후", "이전", "이상", "이하", "이유",
+    "이용", "이론", "이해", "이력", "이날", "이때", "이렇게", "이런",
+    # Phase 60: 오(吳) 성씨로 시작하는 흔한 단어들
+    "오전", "오후", "오늘", "오류", "오랜", "오래", "오히려",
+    # Phase 60: 강(姜) 성씨로 시작하는 흔한 단어들
+    "강의", "강좌", "강화", "강조", "강력", "강제",
+    # Phase 60: 성(成) 성씨로 시작하는 흔한 단어들
+    "성희롱", "성과", "성적", "성공", "성능", "성립",
+    # Phase 60: 장(張) 성씨로 시작하는 흔한 단어들
+    "장애인", "장애", "장기", "장비", "장점", "장소", "장치",
+    # Phase 60: 기타 성씨로 시작하는 흔한 단어들
+    "고용", "고객", "고려", "고장", "고정",
+    "임원", "임시", "임금", "임대",
+    "권한", "권리", "권고",
+    "황당", "황폐",
+    "안내", "안전", "안정",
+    "유형", "유지", "유출", "유효",
+    "배포", "배경", "배치", "배워",
 }
 
 
@@ -171,6 +252,10 @@ class PrivacyQueryGate:
         self._sensitive_pattern = self._build_pattern(SENSITIVE_ATTRIBUTE_TERMS)
         self._first_person_pattern = self._build_pattern(FIRST_PERSON_TERMS)
         self._third_person_pattern = self._build_pattern(THIRD_PERSON_TERMS)
+        # Phase 60: 민감도 레벨별 패턴
+        self._direct_pii_pattern = self._build_pattern(DIRECT_PII_TERMS)
+        self._status_info_pattern = self._build_pattern(STATUS_INFO_TERMS)
+        self._work_context_pattern = self._build_pattern(WORK_CONTEXT_TERMS)
 
     def _build_pattern(self, terms: Set[str]) -> re.Pattern:
         """키워드 집합을 정규식 패턴으로 컴파일"""
@@ -184,6 +269,50 @@ class PrivacyQueryGate:
         """쿼리에서 패턴에 매칭되는 모든 키워드 반환"""
         matches = pattern.findall(query)
         return [m.lower() for m in matches]
+
+    def _filter_korean_names(self, korean_matches: List[str]) -> List[str]:
+        """
+        Phase 60: 한글 매칭 결과에서 실제 이름만 필터링.
+
+        조사가 붙은 형태("한달에", "한번도" 등)도 처리하기 위해
+        조사를 제거한 원형과 NON_NAME_WORDS를 비교합니다.
+
+        Args:
+            korean_matches: 정규식으로 매칭된 한글 단어 목록
+
+        Returns:
+            List[str]: 실제 이름으로 판단된 단어 목록
+        """
+        # 한글 조사 목록 (긴 것부터 제거해야 함)
+        particles = ['에서', '으로', '부터', '까지', '에게', '한테',
+                     '은', '는', '이', '가', '을', '를', '의', '에',
+                     '로', '와', '과', '도', '만', '요']
+
+        actual_names = []
+        for m in korean_matches:
+            # 성씨로 시작하지 않으면 이름 아님
+            if m[0] not in KOREAN_SURNAMES:
+                continue
+
+            # 원형 그대로 NON_NAME_WORDS에 있으면 이름 아님
+            if m in NON_NAME_WORDS:
+                continue
+
+            # 조사 제거 후 원형 추출
+            base_word = m
+            for particle in sorted(particles, key=len, reverse=True):
+                if m.endswith(particle) and len(m) > len(particle):
+                    base_word = m[:-len(particle)]
+                    break
+
+            # 원형이 NON_NAME_WORDS에 있으면 이름 아님
+            if base_word in NON_NAME_WORDS:
+                continue
+
+            # 위 조건을 모두 통과하면 이름으로 판단
+            actual_names.append(m)
+
+        return actual_names
 
     def _is_first_person_query(self, query: str) -> bool:
         """1인칭 개인화 요청인지 판단"""
@@ -226,18 +355,21 @@ class PrivacyQueryGate:
                         logger.info(f"[PrivacyGate] 1인칭 개인정보 패턴 매칭 (정규식): pattern={pattern}, query={query[:80]}")
                         return True
         
-        # 한글 이름 패턴 감지 (2-4글자 한글 이름)
+        # 한글 이름 패턴 감지 (성씨로 시작하는 2-4글자)
         # 예: "최기민", "홍길동", "김철수" 등
-        # 주의: "부서", "직급" 같은 단어는 위에서 이미 처리되었으므로 여기서는 실제 이름만 감지
+        # 성씨로 시작하지 않거나 NON_NAME_WORDS에 포함된 단어는 이름으로 간주하지 않음
         korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
-        has_korean_name = bool(re.search(korean_name_pattern, query))
-        
+        korean_matches = re.findall(korean_name_pattern, query)
+        # Phase 60: 조사가 붙은 형태도 처리 ("한달에" → "한달"로 비교)
+        actual_korean_names = self._filter_korean_names(korean_matches)
+        has_korean_name = len(actual_korean_names) > 0
+
         # 영문 이름 패턴 감지 (대문자로 시작하는 2-3단어)
         # 예: "John Smith", "Kim", "Lee" 등
         english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
         has_english_name = bool(re.search(english_name_pattern, query))
-        
-        # 이름이 있으면 1인칭이 아님 (다른 사람 질문)
+
+        # 실제 이름이 있으면 1인칭이 아님 (다른 사람 질문)
         if has_korean_name or has_english_name:
             return False
 
@@ -292,30 +424,76 @@ class PrivacyQueryGate:
         
         # 이름이 포함된 질문은 무조건 차단 (다른 사람의 개인정보 요청)
         # "한규화의", "최기민의" 같은 소유격 표현도 감지
+        # 성씨로 시작하지 않거나 NON_NAME_WORDS에 포함된 단어는 이름으로 간주하지 않음
         korean_name_pattern = r'[가-힣]{2,4}(?=\s|$|[은는이가을를의])'
-        korean_name_with_possessive = r'[가-힣]{2,4}의'  # "한규화의", "최기민의" 등
+        korean_name_with_possessive = r'([가-힣]{2,4})의'  # "한규화의", "최기민의" 등
         english_name_pattern = r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b'
-        has_korean_name = bool(re.search(korean_name_pattern, query)) or bool(re.search(korean_name_with_possessive, query))
+
+        # Phase 60: 조사 붙은 형태도 처리하는 필터링 적용
+        korean_matches = re.findall(korean_name_pattern, query)
+        possessive_matches = re.findall(korean_name_with_possessive, query)
+        all_korean_matches = korean_matches + possessive_matches
+        actual_korean_names = self._filter_korean_names(all_korean_matches)
+        has_korean_name = len(actual_korean_names) > 0
         has_english_name = bool(re.search(english_name_pattern, query))
-        
+
         if (has_korean_name or has_english_name) and not result.is_first_person:
-            # 이름이 있고 1인칭이 아니면 다른 사람의 개인정보 요청
-            # 민감 속성(이메일, 부서, 직급 등)이 포함되어 있는지 확인
-            matched_sensitive = self._find_matches(normalized_query, self._sensitive_pattern)
-            if matched_sensitive:
+            # Phase 60: 민감도 레벨별 차단 로직
+            # 이름이 있고 1인칭이 아닌 경우, 민감도에 따라 차단 여부 결정
+
+            # 레벨 1: 직접적 PII (이메일, 전화번호, 급여 등) → Action 없이도 차단
+            matched_direct_pii = self._find_matches(normalized_query, self._direct_pii_pattern)
+            if matched_direct_pii:
                 result.decision = PrivacyGateDecision.BLOCK_PII_LIST
                 result.blocked = True
                 result.reason = (
-                    f"다른 사람의 개인정보 요청 감지: "
-                    f"이름={has_korean_name or has_english_name}, "
-                    f"민감속성={matched_sensitive}"
+                    f"다른 사람의 직접적 개인정보 요청 감지: "
+                    f"이름={actual_korean_names or 'English'}, "
+                    f"직접PII={matched_direct_pii}"
                 )
                 result.block_response = PRIVACY_BLOCK_RESPONSE
                 logger.warning(
-                    f"[PrivacyGate] BLOCKED - 다른 사람의 개인정보 요청: "
-                    f"query_preview={query[:80]}..."
+                    f"[PrivacyGate] BLOCKED (DIRECT_PII) - "
+                    f"pii={matched_direct_pii}, query_preview={query[:80]}..."
                 )
                 return result
+
+            # 레벨 2: 상태/성과 정보 (교육, 점수 등) → Action 있을 때만 차단
+            # 단, 업무 맥락 키워드("담당", "진행" 등)가 있으면 업무 질문으로 간주하여 허용
+            matched_status = self._find_matches(normalized_query, self._status_info_pattern)
+            matched_action = self._find_matches(normalized_query, self._action_pattern)
+            matched_work_context = self._find_matches(normalized_query, self._work_context_pattern)
+
+            if matched_status and matched_action:
+                # 업무 맥락이 있으면 허용
+                if matched_work_context:
+                    logger.debug(
+                        f"[PrivacyGate] ALLOW (work context) - "
+                        f"work_context={matched_work_context}, "
+                        f"query_preview={query[:80]}..."
+                    )
+                else:
+                    result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                    result.blocked = True
+                    result.reason = (
+                        f"다른 사람의 상태정보 요청 감지: "
+                        f"이름={actual_korean_names or 'English'}, "
+                        f"상태정보={matched_status}, 행위={matched_action}"
+                    )
+                    result.block_response = PRIVACY_BLOCK_RESPONSE
+                    logger.warning(
+                        f"[PrivacyGate] BLOCKED (STATUS_INFO+ACTION) - "
+                        f"status={matched_status}, action={matched_action}, "
+                        f"query_preview={query[:80]}..."
+                    )
+                    return result
+
+            # 이름 + 상태정보만 있고 Action 없으면 허용 (업무 질문일 수 있음)
+            if matched_status and not matched_action:
+                logger.debug(
+                    f"[PrivacyGate] ALLOW (name+status but no action) - "
+                    f"status={matched_status}, query_preview={query[:80]}..."
+                )
         
         if result.is_first_person:
             logger.info(f"[PrivacyGate] 1인칭 개인화 요청으로 허용: query={query[:80]}, is_first_person={result.is_first_person}")
@@ -366,23 +544,33 @@ class PrivacyQueryGate:
             )
         elif result.score_total >= self.block_threshold and has_target and has_action and has_sensitive:
             # 3개 조건 모두 성립 시 차단
-            result.decision = PrivacyGateDecision.BLOCK_PII_LIST
-            result.blocked = True
-            result.reason = (
-                f"개인정보성 명단 요청 감지: "
-                f"대상={result.matched_target_terms}, "
-                f"행위={result.matched_action_terms}, "
-                f"속성={result.matched_sensitive_terms}"
-            )
-            result.block_response = PRIVACY_BLOCK_RESPONSE
+            # Phase 60: 업무 맥락이 있으면 허용
+            matched_work_context = self._find_matches(normalized_query, self._work_context_pattern)
+            if matched_work_context:
+                result.decision = PrivacyGateDecision.ALLOW
+                logger.debug(
+                    f"[PrivacyGate] ALLOW (work context in score-based) - "
+                    f"work_context={matched_work_context}, score={result.score_total}, "
+                    f"query_preview={query[:80]}..."
+                )
+            else:
+                result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                result.blocked = True
+                result.reason = (
+                    f"개인정보성 명단 요청 감지: "
+                    f"대상={result.matched_target_terms}, "
+                    f"행위={result.matched_action_terms}, "
+                    f"속성={result.matched_sensitive_terms}"
+                )
+                result.block_response = PRIVACY_BLOCK_RESPONSE
 
-            logger.warning(
-                f"[PrivacyGate] BLOCKED - score={result.score_total}, "
-                f"target={result.matched_target_terms}, "
-                f"action={result.matched_action_terms}, "
-                f"sensitive={result.matched_sensitive_terms}, "
-                f"query_preview={query[:80]}..."
-            )
+                logger.warning(
+                    f"[PrivacyGate] BLOCKED - score={result.score_total}, "
+                    f"target={result.matched_target_terms}, "
+                    f"action={result.matched_action_terms}, "
+                    f"sensitive={result.matched_sensitive_terms}, "
+                    f"query_preview={query[:80]}..."
+                )
         else:
             result.decision = PrivacyGateDecision.ALLOW
             logger.debug(
