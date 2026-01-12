@@ -120,6 +120,49 @@ class TestPrivacyQueryGate:
         assert result.is_first_person is True
 
     # =========================================================================
+    # Phase 62: 마스킹된 타인(000/OOO/XX/**) + '의' + 인사/개인화 속성
+    # =========================================================================
+
+    def test_block_masked_third_party_rank_possessive(self, gate: PrivacyQueryGate):
+        """'000의 직급' → 차단 (타인 인사정보)"""
+        query = "000의 직급을 알려줘"
+        result = gate.check(query)
+
+        assert result.blocked is True
+        assert result.decision == PrivacyGateDecision.BLOCK_PII_LIST
+        assert result.block_response is not None
+
+    def test_block_masked_third_party_department_possessive(self, gate: PrivacyQueryGate):
+        """'OOO의 부서' → 차단 (타인 인사정보)"""
+        query = "OOO의 부서는 뭐야?"
+        result = gate.check(query)
+
+        assert result.blocked is True
+        assert result.decision == PrivacyGateDecision.BLOCK_PII_LIST
+
+    def test_allow_org_possessive_rank_system(self, gate: PrivacyQueryGate):
+        """'보안팀의 직급 체계' → 허용 (조직/제도 질문, 특정 개인 아님)"""
+        query = "보안팀의 직급 체계가 어떻게 돼?"
+        result = gate.check(query)
+
+        assert result.blocked is False
+
+    def test_block_real_name_rank_question_without_action(self, gate: PrivacyQueryGate):
+        """'임성현의 직급은?' → 차단 (Action 키워드 없이도 타인 인사정보)"""
+        query = "임성현의 직급은?"
+        result = gate.check(query)
+
+        assert result.blocked is True
+        assert result.decision == PrivacyGateDecision.BLOCK_PII_LIST
+
+    def test_allow_work_context_about_named_person(self, gate: PrivacyQueryGate):
+        """업무 맥락(담당)이 있으면 이름+교육 키워드도 업무질문으로 허용"""
+        query = "홍길동 담당 교육이 뭐야?"
+        result = gate.check(query)
+
+        assert result.blocked is False
+
+    # =========================================================================
     # 허용 케이스: 일반 질문 (민감속성 없음)
     # =========================================================================
 
