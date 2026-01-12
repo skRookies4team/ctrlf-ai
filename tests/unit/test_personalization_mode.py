@@ -38,14 +38,15 @@ class TestPersonalizationModeMock:
 
 
 class TestPersonalizationModeAuto:
-    """auto 모드 테스트: 네트워크 예외일 때만 mock fallback"""
+    """auto 모드 테스트: 네트워크/타임아웃 시 기본은 error 반환 (mock 금지)"""
 
     @pytest.mark.asyncio
-    async def test_auto_mode_network_error_fallback_to_mock(self):
-        """auto 모드에서 ConnectError 발생 시 mock fallback"""
+    async def test_auto_mode_network_error_returns_error_by_default(self):
+        """auto 모드에서 ConnectError 발생 시 기본은 에러 반환 (mock 금지)"""
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.PERSONALIZATION_MODE = "auto"
             mock_settings.backend_base_url = "http://localhost:8085"
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = False
 
             with patch("app.clients.personalization_client.get_async_http_client") as mock_client:
                 mock_client.return_value.post = AsyncMock(
@@ -55,16 +56,18 @@ class TestPersonalizationModeAuto:
                 client = PersonalizationClient()
                 facts = await client.resolve_facts("Q4", "test-user")
 
-                # auto 모드에서 네트워크 에러 시 mock fallback
-                assert facts.error is None
-                assert facts.items is not None
+                assert facts.error is not None
+                assert facts.error.type == PersonalizationErrorType.NETWORK_ERROR.value
+                assert facts.items == []
+                assert facts.metrics == {}
 
     @pytest.mark.asyncio
-    async def test_auto_mode_timeout_fallback_to_mock(self):
-        """auto 모드에서 ReadTimeout 발생 시 mock fallback"""
+    async def test_auto_mode_timeout_returns_error_by_default(self):
+        """auto 모드에서 ReadTimeout 발생 시 기본은 TIMEOUT 에러 반환 (mock 금지)"""
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.PERSONALIZATION_MODE = "auto"
             mock_settings.backend_base_url = "http://localhost:8085"
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = False
 
             with patch("app.clients.personalization_client.get_async_http_client") as mock_client:
                 mock_client.return_value.post = AsyncMock(
@@ -74,16 +77,18 @@ class TestPersonalizationModeAuto:
                 client = PersonalizationClient()
                 facts = await client.resolve_facts("Q4", "test-user")
 
-                # auto 모드에서 타임아웃 시 mock fallback
-                assert facts.error is None
-                assert facts.items is not None
+                assert facts.error is not None
+                assert facts.error.type == PersonalizationErrorType.TIMEOUT.value
+                assert facts.items == []
+                assert facts.metrics == {}
 
     @pytest.mark.asyncio
-    async def test_auto_mode_write_timeout_fallback_to_mock(self):
-        """auto 모드에서 WriteTimeout 발생 시 mock fallback (httpx.TimeoutException 커버리지)"""
+    async def test_auto_mode_write_timeout_returns_error_by_default(self):
+        """auto 모드에서 WriteTimeout 발생 시 TIMEOUT 에러 반환 (httpx.TimeoutException 커버리지)"""
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.PERSONALIZATION_MODE = "auto"
             mock_settings.backend_base_url = "http://localhost:8085"
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = False
 
             with patch("app.clients.personalization_client.get_async_http_client") as mock_client:
                 mock_client.return_value.post = AsyncMock(
@@ -93,16 +98,18 @@ class TestPersonalizationModeAuto:
                 client = PersonalizationClient()
                 facts = await client.resolve_facts("Q4", "test-user")
 
-                # WriteTimeout도 TimeoutException 하위이므로 mock fallback
-                assert facts.error is None
-                assert facts.items is not None
+                assert facts.error is not None
+                assert facts.error.type == PersonalizationErrorType.TIMEOUT.value
+                assert facts.items == []
+                assert facts.metrics == {}
 
     @pytest.mark.asyncio
-    async def test_auto_mode_pool_timeout_fallback_to_mock(self):
-        """auto 모드에서 PoolTimeout 발생 시 mock fallback (httpx.TimeoutException 커버리지)"""
+    async def test_auto_mode_pool_timeout_returns_error_by_default(self):
+        """auto 모드에서 PoolTimeout 발생 시 TIMEOUT 에러 반환 (httpx.TimeoutException 커버리지)"""
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.PERSONALIZATION_MODE = "auto"
             mock_settings.backend_base_url = "http://localhost:8085"
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = False
 
             with patch("app.clients.personalization_client.get_async_http_client") as mock_client:
                 mock_client.return_value.post = AsyncMock(
@@ -112,9 +119,10 @@ class TestPersonalizationModeAuto:
                 client = PersonalizationClient()
                 facts = await client.resolve_facts("Q4", "test-user")
 
-                # PoolTimeout도 TimeoutException 하위이므로 mock fallback
-                assert facts.error is None
-                assert facts.items is not None
+                assert facts.error is not None
+                assert facts.error.type == PersonalizationErrorType.TIMEOUT.value
+                assert facts.items == []
+                assert facts.metrics == {}
 
     @pytest.mark.asyncio
     async def test_auto_mode_unexpected_error_returns_error(self):
@@ -122,6 +130,7 @@ class TestPersonalizationModeAuto:
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.PERSONALIZATION_MODE = "auto"
             mock_settings.backend_base_url = "http://localhost:8085"
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = False
 
             with patch("app.clients.personalization_client.get_async_http_client") as mock_client:
                 mock_client.return_value.post = AsyncMock(
@@ -138,17 +147,40 @@ class TestPersonalizationModeAuto:
                 assert facts.metrics == {}
 
     @pytest.mark.asyncio
-    async def test_auto_mode_no_base_url_returns_mock(self):
-        """auto 모드에서 base_url 없으면 mock 반환"""
+    async def test_auto_mode_no_base_url_returns_config_error_by_default(self):
+        """auto 모드에서 base_url 없으면 기본은 CONFIG_ERROR 반환 (mock 금지)"""
         with patch("app.clients.personalization_client.settings") as mock_settings:
             mock_settings.PERSONALIZATION_MODE = "auto"
             mock_settings.backend_base_url = None
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = False
 
             client = PersonalizationClient(base_url=None)
             facts = await client.resolve_facts("Q4", "test-user")
 
-            assert facts.error is None
-            assert facts.items is not None
+            assert facts.error is not None
+            assert facts.error.type == PersonalizationErrorType.CONFIG_ERROR.value
+            assert "BACKEND_BASE_URL" in facts.error.message
+            assert facts.items == []
+            assert facts.metrics == {}
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_network_error_fallback_to_mock_when_enabled(self):
+        """auto 모드에서 mock fallback 옵션을 켜면 ConnectError 시 mock 반환 (개발/데모용)"""
+        with patch("app.clients.personalization_client.settings") as mock_settings:
+            mock_settings.PERSONALIZATION_MODE = "auto"
+            mock_settings.backend_base_url = "http://localhost:8085"
+            mock_settings.PERSONALIZATION_ALLOW_MOCK_FALLBACK = True
+
+            with patch("app.clients.personalization_client.get_async_http_client") as mock_client:
+                mock_client.return_value.post = AsyncMock(
+                    side_effect=httpx.ConnectError("Connection refused")
+                )
+
+                client = PersonalizationClient()
+                facts = await client.resolve_facts("Q4", "test-user")
+
+                assert facts.error is None
+                assert facts.items is not None
 
 
 class TestPersonalizationModeReal:

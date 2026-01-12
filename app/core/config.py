@@ -226,8 +226,13 @@ class Settings(BaseSettings):
     # =========================================================================
     # - mock: 무조건 mock 데이터 사용 (개발/데모용)
     # - real: 무조건 실 백엔드 호출 (실패 시 에러 반환)
-    # - auto: 실 백엔드 호출, 네트워크 실패 시 mock fallback (기본값)
-    PERSONALIZATION_MODE: Literal["mock", "real", "auto"] = "auto"
+    # - auto: 실 백엔드 호출 (기본). 장애 시 mock fallback은 기본 비활성화 (보안/오답 방지)
+    PERSONALIZATION_MODE: Literal["mock", "real", "auto"] = "real"
+
+    # auto 모드에서 네트워크/타임아웃 시 mock facts로 fallback 할지 여부
+    # - False(기본): mock으로 답하지 않고 error facts 반환 (다른 사람 정보처럼 보이는 사고 방지)
+    # - True: 개발/데모 편의용으로만 사용 권장
+    PERSONALIZATION_ALLOW_MOCK_FALLBACK: bool = False
 
     # 임베딩 계약 검증 (앱 시작 시 dim 불일치 감지)
     # True: dim 불일치 시 서버 기동 실패 (Fail-fast)
@@ -794,9 +799,33 @@ class Settings(BaseSettings):
         Returns:
             str: Backend 서비스 URL, 미설정 시 None
         """
+        # 1) 문자열 URL 우선 (실 운영/도커 환경 등)
         if self.BACKEND_BASE_URL_REAL:
-            return self.BACKEND_BASE_URL_REAL.rstrip("/")
-        
+            raw = self.BACKEND_BASE_URL_REAL.rstrip("/")
+
+            # 로컬(Python/uvicorn) 실행에서 host.docker.internal이 종종 해석되지 않아
+            # 불필요한 ConnectTimeout이 발생할 수 있음.
+            # - docker 환경이면 그대로 사용
+            # - 그 외(local/dev 등)면 localhost로 자동 보정
+            try:
+                from urllib.parse import urlparse, urlunparse
+
+                p = urlparse(raw)
+                if p.hostname == "host.docker.internal" and (self.APP_ENV or "").lower() != "docker":
+                    netloc = "localhost"
+                    if p.port:
+                        netloc = f"{netloc}:{p.port}"
+                    return urlunparse((p.scheme, netloc, p.path, p.params, p.query, p.fragment)).rstrip("/")
+            except Exception:
+                # URL 파싱 실패 시에도 원본을 그대로 사용 (설정값 우선)
+                pass
+
+            return raw
+
+        # 2) HttpUrl 타입 (직접 설정)
+        if self.BACKEND_BASE_URL:
+            return str(self.BACKEND_BASE_URL).rstrip("/")
+
         return None
 
     @property

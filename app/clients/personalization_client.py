@@ -157,9 +157,10 @@ class PersonalizationClient:
         # PERSONALIZATION_MODE 분기
         # - mock: 무조건 mock 데이터 반환
         # - real: 실 백엔드만, 실패 시 에러 반환 (base_url 없으면 CONFIG_ERROR)
-        # - auto: 실 백엔드 시도, 네트워크 실패 시 mock fallback
+        # - auto: 실 백엔드 시도. 네트워크/타임아웃 시 mock fallback은 기본 비활성화
         # =========================================================================
         mode = settings.PERSONALIZATION_MODE
+        allow_mock_fallback = bool(getattr(settings, "PERSONALIZATION_ALLOW_MOCK_FALLBACK", False))
 
         # mock 모드: 무조건 mock 반환
         if mode == "mock":
@@ -171,17 +172,19 @@ class PersonalizationClient:
 
         # 백엔드 URL 미설정 시: 모드에 따라 분기
         if not self._base_url:
-            if mode == "auto":
-                # auto 모드: URL 없으면 mock fallback
+            if mode == "auto" and allow_mock_fallback:
+                # auto+allow_mock_fallback: URL 없으면 mock fallback (개발/데모용)
                 logger.warning(
-                    f"Backend URL not configured (auto mode), returning mock facts. "
+                    f"Backend URL not configured (auto mode, mock fallback enabled), returning mock facts. "
                     f"sub_intent_id={sub_intent_id}, user_id={user_id}. "
                     f"실제 백엔드 데이터를 사용하려면 BACKEND_BASE_URL 환경변수를 설정하세요."
                 )
                 return self._get_mock_facts(sub_intent_id, period)
+
+            # auto(기본) / real: URL 없으면 에러 반환 (mock 금지)
             # real 모드: URL 없으면 에러 반환
             logger.error(
-                f"Backend URL not configured (real mode). "
+                f"Backend URL not configured (mode={mode}). "
                 f"sub_intent_id={sub_intent_id}, user_id={user_id}. "
                 f"BACKEND_BASE_URL 환경변수를 설정하거나 PERSONALIZATION_MODE=auto로 변경하세요."
             )
@@ -191,7 +194,7 @@ class PersonalizationClient:
                 metrics={},
                 error=PersonalizationError(
                     type=PersonalizationErrorType.CONFIG_ERROR.value,
-                    message="BACKEND_BASE_URL is not set (PERSONALIZATION_MODE=real)",
+                    message=f"BACKEND_BASE_URL is not set (PERSONALIZATION_MODE={mode})",
                 ),
             )
 
@@ -286,9 +289,9 @@ class PersonalizationClient:
         # httpx.TimeoutException은 ConnectTimeout, ReadTimeout, WriteTimeout, PoolTimeout의 부모 클래스
         except httpx.TimeoutException as e:
             timeout_type = type(e).__name__  # 로그에서 구체적 타입 구분
-            if mode == "auto":
+            if mode == "auto" and allow_mock_fallback:
                 logger.warning(
-                    f"Personalization timeout ({timeout_type}, auto fallback to mock): "
+                    f"Personalization timeout ({timeout_type}, auto fallback to mock enabled): "
                     f"sub_intent_id={sub_intent_id}, user_id={user_id}, endpoint={endpoint}, error={e}"
                 )
                 return self._get_mock_facts(sub_intent_id, period)
@@ -307,9 +310,9 @@ class PersonalizationClient:
         # 연결 에러 계열 예외: auto fallback 대상
         except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
             error_type = type(e).__name__  # 로그에서 구체적 타입 구분
-            if mode == "auto":
+            if mode == "auto" and allow_mock_fallback:
                 logger.warning(
-                    f"Personalization network error ({error_type}, auto fallback to mock): "
+                    f"Personalization network error ({error_type}, auto fallback to mock enabled): "
                     f"sub_intent_id={sub_intent_id}, user_id={user_id}, endpoint={endpoint}, error={e}. "
                     f"백엔드 서버가 실행 중인지 확인하세요."
                 )

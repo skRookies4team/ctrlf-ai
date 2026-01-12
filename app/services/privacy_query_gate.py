@@ -257,6 +257,17 @@ class PrivacyQueryGate:
         self._status_info_pattern = self._build_pattern(STATUS_INFO_TERMS)
         self._work_context_pattern = self._build_pattern(WORK_CONTEXT_TERMS)
 
+        # Phase 62: "000의 직급"처럼 마스킹된 특정인 + 소유격(의) + 인사/개인정보 요청 감지
+        # - 기존 이름 감지는 성씨 기반이라 "000/OOO/XX/**" 같은 마스킹 토큰을 놓칠 수 있음
+        self._masked_possessive_subject_pattern = re.compile(
+            r"(?P<subject>(?:0{2,}|o{2,}|x{2,}|\*{2,}|[○●□■]{2,}|\d{2,}))\s*의",
+            re.IGNORECASE,
+        )
+        # 조직/제도 표현(보안팀의/인사부의 등)은 사람으로 오인하지 않도록 제외
+        self._non_person_possessive_pattern = re.compile(
+            r"(?:[가-힣A-Za-z0-9]{1,20})(?:팀|부서|파트|본부|센터|그룹|조직|회사|프로젝트|인사부|재무부|총무부)\s*의"
+        )
+
     def _build_pattern(self, terms: Set[str]) -> re.Pattern:
         """키워드 집합을 정규식 패턴으로 컴파일"""
         # 긴 패턴부터 매칭 (예: "미이수자" > "이수")
@@ -269,6 +280,17 @@ class PrivacyQueryGate:
         """쿼리에서 패턴에 매칭되는 모든 키워드 반환"""
         matches = pattern.findall(query)
         return [m.lower() for m in matches]
+
+    def _has_masked_third_party_subject(self, query: str) -> bool:
+        """
+        Phase 62: '000의/OOO의/XX의/**의' 형태로 특정 개인을 지칭하는 마스킹 토큰 감지.
+        단, '보안팀의/인사부의' 같은 조직 표현은 제외합니다.
+        """
+        if not query:
+            return False
+        if self._non_person_possessive_pattern.search(query):
+            return False
+        return bool(self._masked_possessive_subject_pattern.search(query))
 
     def _filter_korean_names(self, korean_matches: List[str]) -> List[str]:
         """
@@ -421,6 +443,42 @@ class PrivacyQueryGate:
             f"original_result={self._is_first_person_query(query)}, "
             f"normalized_result={self._is_first_person_query(normalized_query)}"
         )
+
+        # ---------------------------------------------------------------------
+        # Phase 62: 마스킹된 타인(000/OOO/XX/**) + 소유격(의) + 인사/개인화 속성 요청 차단
+        # - 예: "000의 직급을 알려줘" 가 통과하면, 파이프라인이 로그인 사용자 facts로 답해버리는 사고가 발생함
+        # - 여기서 조기에 차단해 프라이버시 정책 응답을 반환한다
+        # ---------------------------------------------------------------------
+        if not result.is_first_person and self._has_masked_third_party_subject(normalized_query):
+            matched_direct_pii = self._find_matches(normalized_query, self._direct_pii_pattern)
+            matched_status = self._find_matches(normalized_query, self._status_info_pattern)
+            matched_work_context = self._find_matches(normalized_query, self._work_context_pattern)
+
+            # 직접적 PII는 즉시 차단
+            if matched_direct_pii:
+                result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                result.blocked = True
+                result.reason = f"masked third-party possessive direct pii: {matched_direct_pii}"
+                result.block_response = PRIVACY_BLOCK_RESPONSE
+                result.matched_sensitive_terms = matched_direct_pii
+                logger.warning(
+                    f"[PrivacyGate] BLOCKED (MASKED_POSSESSIVE + DIRECT_PII) - "
+                    f"pii={matched_direct_pii}, query_preview={query[:80]}..."
+                )
+                return result
+
+            # 상태/인사 정보는 기본 차단, 단 업무 맥락(담당/진행 등)이 있으면 업무 질문으로 허용
+            if matched_status and not matched_work_context:
+                result.decision = PrivacyGateDecision.BLOCK_PII_LIST
+                result.blocked = True
+                result.reason = f"masked third-party possessive status info: {matched_status}"
+                result.block_response = PRIVACY_BLOCK_RESPONSE
+                result.matched_sensitive_terms = matched_status
+                logger.warning(
+                    f"[PrivacyGate] BLOCKED (MASKED_POSSESSIVE + STATUS_INFO) - "
+                    f"status={matched_status}, query_preview={query[:80]}..."
+                )
+                return result
         
         # 이름이 포함된 질문은 무조건 차단 (다른 사람의 개인정보 요청)
         # "한규화의", "최기민의" 같은 소유격 표현도 감지
@@ -458,13 +516,14 @@ class PrivacyQueryGate:
                 )
                 return result
 
-            # 레벨 2: 상태/성과 정보 (교육, 점수 등) → Action 있을 때만 차단
-            # 단, 업무 맥락 키워드("담당", "진행" 등)가 있으면 업무 질문으로 간주하여 허용
+            # 레벨 2: 상태/성과/인사 정보 (교육, 점수, 직급/부서 등)
+            # Phase 62: "임성현의 직급은?" 처럼 Action 키워드 없이 묻는 타인 인사정보 질문도
+            # 개인식별 가능한 정보 요청으로 간주하여 차단해야 함.
+            # 단, 업무 맥락 키워드("담당", "진행" 등)가 있으면 업무 질문으로 간주하여 허용.
             matched_status = self._find_matches(normalized_query, self._status_info_pattern)
-            matched_action = self._find_matches(normalized_query, self._action_pattern)
             matched_work_context = self._find_matches(normalized_query, self._work_context_pattern)
 
-            if matched_status and matched_action:
+            if matched_status:
                 # 업무 맥락이 있으면 허용
                 if matched_work_context:
                     logger.debug(
@@ -476,24 +535,16 @@ class PrivacyQueryGate:
                     result.decision = PrivacyGateDecision.BLOCK_PII_LIST
                     result.blocked = True
                     result.reason = (
-                        f"다른 사람의 상태정보 요청 감지: "
+                        f"다른 사람의 상태/인사정보 요청 감지: "
                         f"이름={actual_korean_names or 'English'}, "
-                        f"상태정보={matched_status}, 행위={matched_action}"
+                        f"상태정보={matched_status}"
                     )
                     result.block_response = PRIVACY_BLOCK_RESPONSE
                     logger.warning(
-                        f"[PrivacyGate] BLOCKED (STATUS_INFO+ACTION) - "
-                        f"status={matched_status}, action={matched_action}, "
-                        f"query_preview={query[:80]}..."
+                        f"[PrivacyGate] BLOCKED (STATUS_INFO) - "
+                        f"status={matched_status}, query_preview={query[:80]}..."
                     )
                     return result
-
-            # 이름 + 상태정보만 있고 Action 없으면 허용 (업무 질문일 수 있음)
-            if matched_status and not matched_action:
-                logger.debug(
-                    f"[PrivacyGate] ALLOW (name+status but no action) - "
-                    f"status={matched_status}, query_preview={query[:80]}..."
-                )
         
         if result.is_first_person:
             logger.info(f"[PrivacyGate] 1인칭 개인화 요청으로 허용: query={query[:80]}, is_first_person={result.is_first_person}")
